@@ -13,21 +13,26 @@ import type { Account, Pool } from '../../src/protocol.ts';
 import { nullLogger } from '../../src/log.ts';
 import { ProcessRegistry } from '../../src/proc.ts';
 import { FakeClock } from '../../src/clock.ts';
+import { PATIENCE_MS } from '../helpers/patience.ts';
 
 const FAKE = path.join(import.meta.dirname, '..', 'helpers', 'fake-acp-agent.mjs');
 const account: Account = { id: 'opencode-main', provider: 'opencode', title: 'OpenCode', configDir: '/x' };
+// An ask's limit covers starting the pretend agent, a node child that took
+// over 8 s to start on a loaded Mac (11 Nov). It ends with the answer, so a
+// long one costs a passing test nothing.
+const LIMIT = PATIENCE_MS;
 
 function rig(agent: AcpAgent = ACP_AGENTS.opencode, env: Record<string, string> = {}, binary = FAKE) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tb-oneshot-')));
   const logFile = path.join(root, 'log');
-  const ask = acpAsker({ agent, binary: () => binary, on: () => true, registry: new ProcessRegistry(path.join(root, 'run'), nullLogger), log: nullLogger, env: { PATH: process.env.PATH, FAKE_ACP_LOG: logFile, ...env }, timings: { closeWaitMs: 200 } });
+  const ask = acpAsker({ agent, binary: () => binary, on: () => true, registry: new ProcessRegistry(path.join(root, 'run'), nullLogger), log: nullLogger, env: { PATH: process.env.PATH, FAKE_ACP_LOG: logFile, ...env }, timings: { closeWaitMs: 200, requestMs: LIMIT } });
   const log = (): Record<string, unknown>[] => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
   return { root, ask, log };
 }
 
 test('it answers, with no MCP servers, in the read-only mode', async () => {
   const r = rig();
-  const res = await r.ask({ account, user: 'hello', cwd: r.root, timeoutMs: 8000 });
+  const res = await r.ask({ account, user: 'hello', cwd: r.root, timeoutMs: LIMIT });
   assert.deepEqual(res, { ok: true, text: 'all done' });
   assert.deepEqual((r.log().find((l) => l.newSession) as { newSession: { mcpServers: unknown[] } }).newSession.mcpServers, []);
   assert.ok(r.log().some((l) => (l.set as { mode?: string } | undefined)?.mode === 'plan'));
@@ -41,7 +46,7 @@ test('the prompt never goes in the arguments or the environment', async () => {
   // Quoted: the runner's release builds run from under "Application Support".
   fs.writeFileSync(wrap, `#!/bin/sh\necho "$@" > "${seen}"\nenv >> "${seen}"\nexec "${FAKE}" "$@"\n`, { mode: 0o755 });
   const r = rig(ACP_AGENTS.opencode, {}, wrap);
-  const res = await r.ask({ account, user: 'SECRET-THREAD-TEXT', system: 'SECRET-SYSTEM', cwd: r.root, timeoutMs: 8000 });
+  const res = await r.ask({ account, user: 'SECRET-THREAD-TEXT', system: 'SECRET-SYSTEM', cwd: r.root, timeoutMs: LIMIT });
   assert.equal(res.ok, true);
   const started = fs.readFileSync(seen, 'utf8');
   assert.doesNotMatch(started, /SECRET/);
@@ -51,7 +56,7 @@ test('the prompt never goes in the arguments or the environment', async () => {
 test('every tool the agent tries is refused', async () => {
   const r = rig();
   const file = path.join(r.root, 'a.txt');
-  const res = await r.ask({ account, user: `write ${file} hi`, cwd: r.root, timeoutMs: 8000 });
+  const res = await r.ask({ account, user: `write ${file} hi`, cwd: r.root, timeoutMs: LIMIT });
   assert.equal(res.ok, true);
   assert.equal(fs.existsSync(file), false);
 });
@@ -66,8 +71,9 @@ test('small jobs get an agent told to deny every tool', () => {
 
 test('the wrong program gets no text', async () => {
   const r = rig(ACP_AGENTS.cursor, { FAKE_ACP_NAME: 'Grok' });
-  const res = await r.ask({ account, user: 'SECRET', cwd: r.root, timeoutMs: 8000 });
+  const res = await r.ask({ account, user: 'SECRET', cwd: r.root, timeoutMs: LIMIT });
   assert.equal(res.ok, false);
+  assert.equal((res as { timedOut: boolean }).timedOut, false, 'refused for its name, not timed out');
   assert.ok(!r.log().some((l) => l.prompt), 'never sent');
 });
 
@@ -159,7 +165,7 @@ test('Cursor takes no small jobs, as its read tools cannot be turned off', async
   // Daybreak, 10 Nov (finding 68): an asker for it, however made, never
   // starts it or sends it the text.
   const r = rig(ACP_AGENTS.cursor);
-  const res = await r.ask({ account: { id: 'cursor-main', provider: 'cursor', title: 'Cursor', configDir: '/x' }, user: 'SECRET', cwd: r.root, timeoutMs: 8000 });
+  const res = await r.ask({ account: { id: 'cursor-main', provider: 'cursor', title: 'Cursor', configDir: '/x' }, user: 'SECRET', cwd: r.root, timeoutMs: LIMIT });
   assert.equal(res.ok, false);
   assert.match((res as { message: string }).message, /can't take small jobs/);
   assert.deepEqual(r.log(), [], 'never started');
@@ -167,13 +173,14 @@ test('Cursor takes no small jobs, as its read tools cannot be turned off', async
 
 test('a read-only mode the agent did not confirm means no text is sent', async () => {
   const r = rig(ACP_AGENTS.opencode, { FAKE_ACP_IGNORE_MODE: '1' });
-  const res = await r.ask({ account, user: 'SECRET', cwd: r.root, timeoutMs: 8000 });
+  const res = await r.ask({ account, user: 'SECRET', cwd: r.root, timeoutMs: LIMIT });
   assert.equal(res.ok, false);
+  assert.equal((res as { timedOut: boolean }).timedOut, false, 'refused for the mode, not timed out');
   assert.ok(!r.log().some((l) => l.prompt));
 });
 
 test('the folder it runs in is made if it is not there', async () => {
   const r = rig();
-  const res = await r.ask({ account, user: 'hello', cwd: path.join(r.root, 'not', 'yet'), timeoutMs: 8000 });
+  const res = await r.ask({ account, user: 'hello', cwd: path.join(r.root, 'not', 'yet'), timeoutMs: LIMIT });
   assert.equal(res.ok, true);
 });

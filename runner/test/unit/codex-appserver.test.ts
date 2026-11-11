@@ -47,6 +47,7 @@ function fake(): Promise<FakeCodex> {
 }
 
 function proc(bin: string, extra: Partial<ConstructorParameters<typeof AppServerProcess>[0]> = {}): AppServerProcess {
+  const { timings, ...rest } = extra;
   return new AppServerProcess({
     binary: bin,
     account,
@@ -57,8 +58,11 @@ function proc(bin: string, extra: Partial<ConstructorParameters<typeof AppServer
     env: { THREADBEAR_THREAD_ID: 'tb-thread-1' },
     // The retry window runs from the first spawn, so a slow first start used
     // to use it all up and the retry a test waited for never came.
-    timings: { spawnRetryMs: 100, spawnRetryForMs: PATIENCE_MS, closeWaitMs: 2000 },
-    ...extra,
+    // initialize is sent at spawn, so its 30 s limit includes the fake's
+    // node start, which took longer than that on a loaded Mac (11 Nov).
+    // A reply ends the wait, so a long limit costs a passing test nothing.
+    timings: { spawnRetryMs: 100, spawnRetryForMs: PATIENCE_MS, closeWaitMs: 2000, requestMs: PATIENCE_MS, ...timings },
+    ...rest,
   });
 }
 

@@ -49,7 +49,7 @@ echo "fake 0 0 $f 0% /"
   fs.writeFileSync(path.join(bin, 'du'), '#!/bin/bash\nif [ -f "$2/debug/out" ]; then echo "6000000 $2"; else echo "100 $2"; fi\n', { mode: 0o755 });
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: path.join(root, 'home') };
   const left = () => fs.readdirSync(base).filter((n) => /^target(-|$)/.test(n)).sort();
-  const trim = (own = 'aaa') => spawnSync('/bin/bash', [TRIM, own], { cwd: base, env, encoding: 'utf8', timeout: 20_000 });
+  const trim = (own = 'aaa') => spawnSync('/bin/bash', [TRIM, own], { cwd: base, env, encoding: 'utf8', timeout: 120_000 });
   return { root, bin, base, env, left, trim };
 }
 
@@ -138,7 +138,7 @@ test('remote.sh stops before copying anything when the host refuses, and marks i
   // An ssh that runs the command here, stdin and all.
   fs.writeFileSync(path.join(h.bin, 'ssh'), `#!/bin/bash\nshift\ncd "$HOME" && eval "$*"\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(h.bin, 'rsync'), `#!/bin/bash\ntouch ${JSON.stringify(log)}\n`, { mode: 0o755 });
-  const r = spawnSync('/bin/bash', [path.join(SCRIPTS, 'remote.sh'), 'somehost', '--', 'true'], { env: h.env, encoding: 'utf8', timeout: 20_000 });
+  const r = spawnSync('/bin/bash', [path.join(SCRIPTS, 'remote.sh'), 'somehost', '--', 'true'], { env: h.env, encoding: 'utf8', timeout: 120_000 });
   assert.equal(r.status, 3, r.stderr);
   assert.equal(fs.existsSync(log), false, 'nothing copied to a full disk');
   assert.equal(fs.readdirSync(h.base).filter((n) => n.startsWith('target-')).length, 1, 'its target folder exists, so the age limit sees it used');
@@ -150,6 +150,14 @@ test('a run marks its target in use and its copy as used, and ssh does not wait 
   const h = host(t, 40, {});
   fs.writeFileSync(path.join(h.bin, 'ssh'), `#!/bin/bash\nshift\ncd "$HOME" && eval "$*"\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(h.bin, 'npm'), '#!/bin/bash\nexit 0\n', { mode: 0o755 });
+  // The marker loop's `sleep 60` lasts an hour here, so output it held open
+  // would hold ssh past any timeout, not just for a minute. A 30 s timeout
+  // against the real minute ran out on a loaded Mac (11 Nov) with nothing
+  // wrong. Those sleeps are this test's, so it ends them.
+  const sleeps = path.join(h.root, 'sleeps');
+  fs.writeFileSync(path.join(h.bin, 'sleep'), `#!/bin/bash\nif [ "$1" = 60 ]; then echo $$ >>${JSON.stringify(sleeps)}; exec /bin/sleep 3600; fi\nexec /bin/sleep "$@"\n`, { mode: 0o755 });
+  let pids: string[] = [];
+  t.after(() => { for (const pid of pids) { try { process.kill(Number(pid)); } catch { /* gone already */ } } });
   // The real rsync sets the copy's time to the Mac's, which is the point here.
   const findNode = path.join(import.meta.dirname, '..', '..', 'scripts', 'find-node.sh');
   fs.writeFileSync(path.join(h.bin, 'rsync'), `#!/bin/bash
@@ -160,12 +168,14 @@ touch -t 202601010000 "$dest"
 # The host was too full for the first mkdir, and the trim then made room.
 rm -rf "$HOME"/.cache/threadbear-check/gpui/target-*
 `, { mode: 0o755 });
-  const r = spawnSync('/bin/bash', [path.join(SCRIPTS, 'remote.sh'), 'somehost', '--', 'true'], { env: h.env, encoding: 'utf8', timeout: 30_000 });
+  const r = spawnSync('/bin/bash', [path.join(SCRIPTS, 'remote.sh'), 'somehost', '--', 'true'], { env: h.env, encoding: 'utf8', timeout: 120_000 });
+  pids = fs.existsSync(sleeps) ? fs.readFileSync(sleeps, 'utf8').split('\n').filter(Boolean) : [];
   assert.equal(r.error, undefined, 'it returned rather than waiting for the marker loop');
   assert.equal(r.status, 0, r.stderr);
   const names = fs.readdirSync(h.base);
   const target = names.find((n) => n.startsWith('target-'))!;
   const src = names.find((n) => n.startsWith('src-'))!;
   assert.ok(fs.existsSync(path.join(h.base, target, '.in-use')));
+  assert.equal(pids.length, 1, 'the marker loop ran, and slept on the fake sleep');
   assert.ok(Date.now() - fs.statSync(path.join(h.base, src)).mtimeMs < HOUR, 'the copy looks used, whatever rsync set');
 });

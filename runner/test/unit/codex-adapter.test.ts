@@ -121,6 +121,14 @@ function recorder() {
 
 type Harness = Awaited<ReturnType<typeof open>>;
 
+// The adapter's limits for these tests. Waits that end when the test answers
+// (a request's reply, "is closing" retries, backgroundTerminals) get
+// PATIENCE_MS: the fake codex is a node child, and on a loaded Mac its
+// replies can be seconds late, which the 30 s initialize limit and 0.5 to
+// 1 s retry windows took for Codex not answering (11 Nov). Tests that time
+// out on purpose set their own.
+const TIMINGS = { requestMs: PATIENCE_MS, turnStartMs: PATIENCE_MS, reinterruptMs: 100, finishWaitMs: PATIENCE_MS, closingRetryStartMs: 20, closingRetryForMs: PATIENCE_MS, terminateMs: PATIENCE_MS, spawnRetryForMs: PATIENCE_MS, closeWaitMs: 2000 };
+
 async function open(o: Partial<StartSessionOptions> & { deps?: Partial<CodexAdapterDeps>; adapter?: CodexAdapter } = {}) {
   const f = await fake();
   const { spy: norm, factory } = spyNormalizer();
@@ -133,7 +141,7 @@ async function open(o: Partial<StartSessionOptions> & { deps?: Partial<CodexAdap
       registry: new ProcessRegistry(home, nullLogger),
       log: nullLogger,
       normalizer: factory,
-      timings: { reinterruptMs: 100, finishWaitMs: 500, closingRetryStartMs: 20, closingRetryForMs: 1000, terminateMs: 500, spawnRetryForMs: PATIENCE_MS, closeWaitMs: 2000 },
+      timings: TIMINGS,
       ...o.deps,
     });
   const { deps: _d, adapter: _a, ...rest } = o;
@@ -573,7 +581,7 @@ test('a message behind an interrupted turn that hasn\'t finished waits, re-inter
   await stopping;
   // The runner gave up waiting and sends the next message.
   h.session.send({ id: 'm2', text: 'next', images: [] });
-  const again = await h.conn.request('turn/interrupt', 1000);
+  const again = await h.conn.request('turn/interrupt');
   assert.deepEqual(again.params, { threadId: 'th-1', turnId: 'u1' });
   h.conn.respond(again.id, {});
   assert.equal(h.conn.sent('turn/start').length, 1, 'no turn/start while the old turn runs (it would steer it)');
@@ -587,7 +595,7 @@ test('a message behind an interrupted turn that hasn\'t finished waits, re-inter
 });
 
 test('a message behind an interrupted turn fails after the wait', async () => {
-  const h = await open();
+  const h = await open({ deps: { timings: { ...TIMINGS, finishWaitMs: 500 } } });
   await started(h);
   h.session.send({ id: 'm1', text: 'long', images: [] });
   await turnStarts(h, 'u1');
@@ -1062,7 +1070,7 @@ test('end() while the process is still being retried leaves nothing running', as
     codexBinary: () => f.bin,
     registry: new ProcessRegistry(home, nullLogger),
     log: nullLogger,
-    timings: { spawnRetryMs: 300, spawnRetryForMs: PATIENCE_MS, closeWaitMs: 2000 },
+    timings: { spawnRetryMs: 300, spawnRetryForMs: PATIENCE_MS, closeWaitMs: 2000, requestMs: PATIENCE_MS },
   });
   const session = adapter.start(
     { threadId: 'tb-r', cwd: home, account, permissionMode: 'full', sessionId: 'x', resume: false, mediaDir: home, blobsDir: home, tmpDir: home },

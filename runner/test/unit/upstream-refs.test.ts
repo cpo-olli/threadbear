@@ -183,34 +183,69 @@ test('tb updates: what to bring in, or that there is nothing', async () => {
   assert.equal(formatUpstream({ state: 'off', reason: 'upstream is this repo', published: { tag: 'release/2026-10-30', at: checkedAt } }, now), "Mike's releases: off (upstream is this repo)\nLast release tagged here: release/2026-10-30");
 });
 
+// Refs written straight into a repo's packed-refs, one file however many:
+// as loose refs (update-ref, then a push of them all) the setup made some
+// 8000 files and took 7 seconds of this test's 10, and 464 under a loaded
+// suite (11 Nov). update-ref --stdin is the fallback for a git that keeps
+// refs some other way.
+function packRefs(repo: string, refs: [ref: string, id: string][]): void {
+  const format = spawnSync('git', ['-C', repo, 'rev-parse', '--show-ref-format'], { encoding: 'utf8' }).stdout.trim();
+  if (format !== 'files') {
+    assert.equal(spawnSync('git', ['-C', repo, 'update-ref', '--stdin'], { input: refs.map(([r, id]) => `create ${r} ${id}\n`).join('') }).status, 0);
+    return;
+  }
+  const file = path.join(repo, 'packed-refs');
+  const had = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter((l) => l && !l.startsWith('#')) : [];
+  assert.ok(!had.some((l) => l.startsWith('^')), 'no peeled lines to keep with their refs');
+  // Every ref here points at a commit, so there's nothing to peel.
+  const lines = [...had, ...refs.map(([r, id]) => `${id} ${r}`)].sort((a, b) => (a.slice(41) < b.slice(41) ? -1 : 1));
+  fs.writeFileSync(file, `# pack-refs with: peeled fully-peeled sorted \n${lines.join('\n')}\n`);
+}
+
 test('upstream with thousands of tags: only a bounded few are fetched, and none that fail to verify stay', async () => {
   const w = world();
   assert.equal((await upstreamFor(w.theirs, w.home).check()).release?.tag, 'release/2026-10-01');
-  const base = git(w.mike, 'rev-parse', 'HEAD');
-  const tree = git(w.mike, 'rev-parse', `${base}^{tree}`);
-  // Fakes with commits of their own, so any that came over would show.
-  const fakes: string[] = [];
+  const bare = path.join(w.root, 'mike.git');
+  const base = git(bare, 'rev-parse', 'main');
+  // Fakes with commits of their own, so any that came over would show, all
+  // made by one fast-import in Mike's repo on "GitHub".
+  const stream: string[] = [];
+  const fakeNames: string[] = [];
   const fake = (msg: string) => {
-    const c = spawnSync('git', ['-C', w.mike, 'commit-tree', tree, '-p', base, '-m', msg], { encoding: 'utf8', env: GIT_ENV }).stdout.trim();
-    fakes.push(c);
-    return c;
+    fakeNames.push(msg);
+    stream.push(`commit refs/heads/tb-fakes\nmark :${fakeNames.length}\ncommitter Mike <mike@example.com> 1700000000 +0000\ndata ${Buffer.byteLength(msg)}\n${msg}\nfrom ${base}\n`);
+    return `:${fakeNames.length}`;
   };
-  const lines: string[] = [];
+  const refs: [string, string][] = [];
   // Thousands of names, most not dates, and dates years ahead.
-  for (let i = 0; i < 3000; i++) lines.push(`create refs/tags/release/junk-${i} ${base}`);
-  for (let d = Date.parse('2027-01-10'); d < Date.parse('2030-01-01'); d += 86_400_000) lines.push(`create refs/tags/release/${new Date(d).toISOString().slice(0, 10)} ${base}`);
+  for (let i = 0; i < 3000; i++) refs.push([`refs/tags/release/junk-${i}`, base]);
+  for (let d = Date.parse('2027-01-10'); d < Date.parse('2030-01-01'); d += 86_400_000) refs.push([`refs/tags/release/${new Date(d).toISOString().slice(0, 10)}`, base]);
   // Every date after the last release that isn't the real one: a name
   // straight at a commit of its own (never fetched)...
+  const named: [string, string][] = [];
   for (let d = Date.parse('2026-10-02'); d <= Date.parse('2026-12-06'); d += 86_400_000) {
     const name = new Date(d).toISOString().slice(0, 10);
-    if (name !== '2026-11-06') lines.push(`create refs/tags/release/${name} ${fake(name)}`);
+    if (name !== '2026-11-06') named.push([`refs/tags/release/${name}`, fake(name)]);
   }
-  assert.equal(spawnSync('git', ['-C', w.mike, 'update-ref', '--stdin'], { input: lines.join('\n') + '\n' }).status, 0);
   // ...or an unsigned tag, newer than the real one, on a commit of its own.
-  for (let i = 7; i <= 31; i++) git(w.mike, 'tag', '-a', '-m', 'unsigned', `release/2026-12-${String(i).padStart(2, '0')}`, fake(`tag ${i}`));
+  for (let i = 7; i <= 31; i++) {
+    const msg = 'unsigned\n';
+    stream.push(`tag release/2026-12-${String(i).padStart(2, '0')}\nfrom ${fake(`tag ${i}`)}\ntagger Mike <mike@example.com> 1700000000 +0000\ndata ${msg.length}\n${msg}`);
+  }
+  const marks = path.join(w.root, 'fake-marks');
+  const imported = spawnSync('git', ['-C', bare, 'fast-import', '--quiet', `--export-marks=${marks}`], { input: stream.join('\n') + '\n', encoding: 'utf8', env: GIT_ENV });
+  assert.equal(imported.status, 0, imported.stderr);
+  const byMark = new Map(fs.readFileSync(marks, 'utf8').trim().split('\n').map((l) => l.split(' ') as [string, string]));
+  const fakes = fakeNames.map((_, i) => byMark.get(`:${i + 1}`)!);
+  assert.equal(new Set(fakes).size, fakeNames.length);
+  git(bare, 'update-ref', '-d', 'refs/heads/tb-fakes');
+  packRefs(bare, [...refs, ...named.map(([r, m]) => [r, byMark.get(m)!] as [string, string])]);
+  assert.equal(git(bare, 'for-each-ref', '--count=1', 'refs/tags/release/junk-2999'), `${base} commit\trefs/tags/release/junk-2999`);
+  assert.equal(git(bare, 'cat-file', '-t', 'refs/tags/release/2026-12-31'), 'tag');
   const real = commit(w.mike, 'b.txt', 'Real');
   signedTag(w.mike, 'release/2026-11-06', w.mikeKey.priv);
-  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
+  git(w.mike, 'push', '-q', 'origin', 'main', 'refs/tags/release/2026-11-06');
+  assert.ok(git(bare, 'for-each-ref', '--format=x', 'refs/tags/release/').split('\n').length > 4000);
   const before = objectsIn(w.theirs);
   const up = upstreamFor(w.theirs, w.home);
   // 25 unsigned tags newer than it: 20 a check, then the real one.

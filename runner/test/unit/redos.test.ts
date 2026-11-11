@@ -456,11 +456,16 @@ test('a Notion page of unclosed database tags is read in linear time', async () 
   assert.ok(best < 100, `findSource took ${Math.round(best)} ms`);
 });
 
+// CPU time against `cheap`'s second, as a 100 ms clock limit failed on a
+// loaded Mac (107 ms, 11 Nov). The runs are four times the length the old
+// regexes took a second on, so being quadratic they'd take about 15 and 45
+// seconds; the new code takes under 20 ms. The old schema regex took 4
+// seconds on 2000 spaces.
 test('a Notion database with long runs reads in linear time', () => {
   const open = '<view url="{{view://a1}}">{';
-  assert.equal(fast('pickView', () => pickView(open.repeat(17_000))), undefined);
-  assert.equal(fast('pickView', () => pickView(`<view url="{{view://a1}}">{"a": "${'{{x://'.repeat(18_000)}"}</view>`)), 'view://a1');
-  assert.throws(() => fast('readSchema', () => readSchema(JSON.stringify({ text: `<data-source-state>${' '.repeat(2000)}x` }))), /columns/);
+  assert.equal(cheap('pickView', () => pickView(open.repeat(68_000))), undefined);
+  assert.equal(cheap('pickView', () => pickView(`<view url="{{view://a1}}">{"a": "${'{{x://'.repeat(72_000)}"}</view>`)), 'view://a1');
+  assert.throws(() => cheap('readSchema', () => readSchema(JSON.stringify({ text: `<data-source-state>${' '.repeat(2000)}x` }))), /columns/);
 });
 
 // The helpers against the regexes they stand for, on short random text made

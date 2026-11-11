@@ -16,6 +16,7 @@ import type { AdapterOutput, SessionSink, StartSessionOptions, ToolApprovalAnswe
 import type { Account, PermissionMode } from '../../src/protocol.ts';
 import { nullLogger } from '../../src/log.ts';
 import { ProcessRegistry } from '../../src/proc.ts';
+import { PATIENCE_MS } from '../helpers/patience.ts';
 import { z } from 'zod';
 
 const FAKE = path.join(import.meta.dirname, '..', 'helpers', 'fake-acp-agent.mjs');
@@ -69,7 +70,9 @@ function rig(o: { mode?: PermissionMode; agent?: AcpAgent; env?: Record<string, 
     registry: new ProcessRegistry(path.join(root, 'run'), nullLogger),
     log: nullLogger,
     env: { PATH: process.env.PATH, FAKE_ACP_LOG: logFile, ...o.env },
-    timings: { closeWaitMs: 300 },
+    // initialize is timed from the spawn, so its limit covers the pretend
+    // agent's node start, which can take tens of seconds on a loaded Mac.
+    timings: { closeWaitMs: 300, requestMs: PATIENCE_MS },
   });
   const start = (): AcpSession => {
     const s = adapter.start(
@@ -85,7 +88,10 @@ function rig(o: { mode?: PermissionMode; agent?: AcpAgent; env?: Record<string, 
   return { root, cwd, adapter, start, cards, outputs, nextResult, exited, log, account, exitError: () => exitedWith };
 }
 
-async function until(cond: () => boolean, ms = 3000): Promise<void> {
+// Every wait here ends when its condition holds, so the limit is PATIENCE_MS:
+// 3 s timed out on a loaded Mac while the pretend agent was still starting
+// (11 Nov).
+async function until(cond: () => boolean, ms = PATIENCE_MS): Promise<void> {
   const end = Date.now() + ms;
   while (!cond()) {
     if (Date.now() > end) throw new Error('timed out waiting');

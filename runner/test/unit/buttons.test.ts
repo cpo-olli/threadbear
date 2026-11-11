@@ -5,9 +5,13 @@ import path from 'node:path';
 import { makeHarness } from '../helpers/fakes.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { AGENT_MESSAGE_PREFIX } from '../../src/protocol.ts';
+import { patiently } from '../helpers/patience.ts';
 
+// A card's command runs in /bin/sh, not the login zsh the runner uses: that
+// reads the user's profile, which took over a second with the Mac idle, and
+// the 10 s wait ran out on a loaded one (11 Nov). The shell isn't what's tested.
 function fixture(mode?: 'ask' | 'full') {
-  const h = makeHarness();
+  const h = makeHarness(undefined, {}, { actionShell: ['/bin/sh', '-c'] });
   const { thread } = h.runner.create({ text: 'Daily brief', accountId: 'claude-3', ...(mode ? { permissionMode: mode } : {}) });
   h.adapter.last.init();
   const folder = path.join(h.home, 'work');
@@ -131,7 +135,7 @@ function arm(h: any, st: any, command: string) {
   return asks[0].run;
 }
 async function until(check: () => boolean) {
-  for (let i = 0; i < 400 && !check(); i++) await new Promise((r) => setTimeout(r, 25));
+  await patiently(check, 25);
   assert.ok(check(), 'timed out waiting');
 }
 const told = (h: any, id: string) => [...h.runner.events(id).events.filter((e: any) => e.type === 'user.message').map((e: any) => e.text), ...h.store.load(id)!.queue.map((q: any) => q.text)];

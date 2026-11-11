@@ -7,6 +7,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { GiB, SCRIPT, macDf, setup, shortHome } from '../helpers/check-remote-harness.ts';
 
+// How long a hung step sleeps: the fake ssh's hang and stubborn hosts
+// (helpers/check-remote-harness.ts, sleep 300) and onHost's check.sh. A run
+// that waited one out takes longer than this, so "took less" is the whole
+// proof that it didn't. A shorter bound failed on a loaded Mac (11 Nov): runs
+// that take 5 to 13 s alone took 54 to 103 s with the whole suite running.
+const HANG_MS = 300_000;
+
 // THREADBEAR_NODE: find-node.sh finds the Node nvm installed in its home.
 function onHost(checkExit: number, df: string, opts: { hang?: boolean; env?: Record<string, string> } = {}) {
   const home = shortHome();
@@ -17,7 +24,7 @@ function onHost(checkExit: number, df: string, opts: { hang?: boolean; env?: Rec
   fs.copyFileSync(path.join(path.dirname(SCRIPT), 'limit-step.mjs'), path.join(copy, 'scripts', 'limit-step.mjs'));
   fs.mkdirSync(path.join(copy, 'runner', 'scripts'), { recursive: true });
   fs.copyFileSync(path.join(path.dirname(SCRIPT), '..', 'runner', 'scripts', 'find-node.sh'), path.join(copy, 'runner', 'scripts', 'find-node.sh'));
-  fs.writeFileSync(path.join(copy, 'check.sh'), `#!/bin/bash\necho made >"$TMPDIR/big"\n${opts.hang ? 'sleep 60\n' : ''}exit ${checkExit}\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(copy, 'check.sh'), `#!/bin/bash\necho made >"$TMPDIR/big"\n${opts.hang ? `sleep ${HANG_MS / 1000}\n` : ''}exit ${checkExit}\n`, { mode: 0o755 });
   const nodeBin = path.join(home, '.nvm', 'versions', 'node', 'v24.0.0', 'bin');
   fs.mkdirSync(nodeBin, { recursive: true });
   fs.symlinkSync(process.execPath, path.join(nodeBin, 'node'));
@@ -54,7 +61,7 @@ test('a host that stops answering during the check is dropped, and the next one 
   const started = Date.now();
   const r = s.run('h1,h2', 3600, '', quickPing);
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.ok(Date.now() - started < 60_000, 'not left to wait out the hang');
+  assert.ok(Date.now() - started < HANG_MS, 'not left to wait out the hang');
   assert.match(r.stderr, /h1 stopped answering over ssh \(2 tries in a row, 1 s apart, couldn't log in\); trying the others\./);
   assert.match(r.stdout, /ran on h2 now/);
   assert.match(r.ssh, /^-O exit h1$/m, "h1's shared connection is closed");
@@ -87,7 +94,7 @@ test('a host that is slow but still answers its pings is left to finish', () => 
 
 test('a run past the overall limit is stopped, and not as unreachable', () => {
   const s = setup({ h1: { state: 'free' } });
-  const r = s.run('h1', 3600, 'sleep 30', { THREADBEAR_CHECK_PING_SECS: '1', THREADBEAR_CHECK_MAX_SECS: '3' });
+  const r = s.run('h1', 3600, `sleep ${HANG_MS / 1000}`, { THREADBEAR_CHECK_PING_SECS: '1', THREADBEAR_CHECK_MAX_SECS: '3' });
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stderr, /This check has been going for 0 minutes, waiting in line included, so it was stopped\./);
 });
@@ -107,7 +114,7 @@ test('--on-host stops a run past its own limit, so a host this Mac gave up on fr
   const { r } = onHost(0, macDf(100 * GiB), { hang: true, env: { THREADBEAR_CHECK_HOST_MAX_SECS: '2' } });
   // Not 124, which this Mac takes for a host that dropped out.
   assert.equal(r.status, 1, r.stdout + r.stderr);
-  assert.ok(Date.now() - started < 40_000);
+  assert.ok(Date.now() - started < HANG_MS, `took ${Date.now() - started} ms`);
   assert.match(r.stdout, /limit-step: error: still going after 2 s/);
 });
 
@@ -116,6 +123,6 @@ test('a hung check that ignores SIGTERM is still killed, and the next host runs 
   const started = Date.now();
   const r = s.run('h1,h2', 3600, '', quickPing);
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.ok(Date.now() - started < 60_000, `took ${Date.now() - started} ms`);
+  assert.ok(Date.now() - started < HANG_MS, `took ${Date.now() - started} ms`);
   assert.match(r.stdout, /ran on h2 now/);
 });

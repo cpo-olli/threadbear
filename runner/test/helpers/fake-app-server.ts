@@ -121,8 +121,11 @@ export class FakeConn {
     }
   }
 
-  // The next message (not answered automatically) matching pred.
-  next(pred: (m: Msg) => boolean = () => true, ms = 5000): Promise<Msg> {
+  // The next message (not answered automatically) matching pred. The wait
+  // ends when it arrives, so the limit is PATIENCE_MS: under load the
+  // adapter's next line can be seconds behind, and 5 s failed tests that
+  // were fine (11 Nov).
+  next(pred: (m: Msg) => boolean = () => true, ms = PATIENCE_MS): Promise<Msg> {
     const i = this.unclaimed.findIndex(pred);
     if (i >= 0) return Promise.resolve(this.unclaimed.splice(i, 1)[0]);
     return new Promise((resolve, reject) => {

@@ -373,24 +373,22 @@ test("tb land counts a git that times out reading what's to land as a failure, n
 test('git gives up after its time limit, and that counts as a failure', async () => {
   const { main } = makeRepo();
   const t = makeBranch(main);
-  const realGit = sh('/', 'command -v git');
-  const bin = tmpDir('tb-hang-git-');
-  fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\ncase " $* " in *" status "*) exec sleep 30 ;; esac\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
-  const before = process.env.PATH;
-  const limit = gitLimits.timeoutMs;
-  process.env.PATH = `${bin}${path.delimiter}${before}`;
-  gitLimits.timeoutMs = 300;
+  const restore = wrapGit('status', 'exec sleep 30');
+  // The short limit on the hung status only: on a loaded Mac a limit for
+  // every git call ran out first on the cleanup's earlier ones (11 Nov).
+  gitLimits.timeoutFor = (args) => (args.includes('status') ? 300 : undefined);
   try {
     const started = Date.now();
     const r = await git(t.path, ['status', '--porcelain']);
     assert.equal(r.ok, false);
+    assert.equal(r.code, -1, 'killed, not an answer from git');
     assert.ok(Date.now() - started < 10_000);
     const rec = { repo: 'proj', mainCheckout: main, path: t.path, branch: t.branch, base: sh(main, 'git rev-parse main') };
     assert.deepEqual(await cleanUpWorktree(rec), { removed: false, reason: `git couldn't read ${t.path}` });
     assert.ok(fs.existsSync(t.path));
   } finally {
-    process.env.PATH = before;
-    gitLimits.timeoutMs = limit;
+    gitLimits.timeoutFor = undefined;
+    restore();
   }
 });
 

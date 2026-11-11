@@ -55,8 +55,9 @@ type GitResult = { ok: boolean; code: number; stdout: string; stderr: string };
 // as a land's merge can run the repo's hooks; past it, git has hung (a .git
 // swapped for a fifo, say: Codex's review, 9 Nov), and an archive's cleanup
 // waiting on it held up messages, actions and handovers for ever. Tests
-// shorten it.
-export const gitLimits = { timeoutMs: 5 * 60_000 };
+// shorten it. `timeoutFor` lets a test shorten it for one command only, so
+// the others can't time out first on a busy machine; nothing else sets it.
+export const gitLimits: { timeoutMs: number; timeoutFor?: (args: string[]) => number | undefined } = { timeoutMs: 5 * 60_000 };
 
 // git in `cwd`. Variables that point git at some other repo (set when this
 // runs from inside a git hook) are dropped, so -C always wins, and the
@@ -66,7 +67,7 @@ export function git(cwd: string, args: string[]): Promise<GitResult> {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_PREFIX']) delete env[k];
   return new Promise((resolve) => {
-    execFile('git', untrustedGitArgs(cwd, args), { env, maxBuffer: 16 * 1024 * 1024, timeout: gitLimits.timeoutMs, killSignal: 'SIGKILL' }, (err, stdout, stderr) => {
+    execFile('git', untrustedGitArgs(cwd, args), { env, maxBuffer: 16 * 1024 * 1024, timeout: gitLimits.timeoutFor?.(args) ?? gitLimits.timeoutMs, killSignal: 'SIGKILL' }, (err, stdout, stderr) => {
       // Killed (past the limit) is -1, never 1: callers read git's own 1 as
       // an answer ("no such ref", "not an ancestor").
       const e = err as { code?: unknown; signal?: unknown } | null;
