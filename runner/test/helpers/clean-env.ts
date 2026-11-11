@@ -15,6 +15,10 @@ for (const [name, value] of Object.entries(process.env)) {
   delete process.env[name];
 }
 
+// A tb a test spawns gives the test's runner a minute to prove itself, not
+// 5 s: that runner shares the busy test process (tb-connect.ts).
+process.env.THREADBEAR_TB_AUTH_MS ??= '60000';
+
 process.on('exit', () => {
   for (const [name, value] of Object.entries(saved)) process.env[name] = value;
 });

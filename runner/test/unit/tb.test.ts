@@ -16,7 +16,7 @@ const TB = path.join(import.meta.dirname, '..', '..', 'bin', 'tb');
 
 async function serve() {
   const h = makeHarness();
-  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: readToken(h.home), runner: h.runner, log: nullLogger });
+  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: readToken(h.home), runner: h.runner, log: nullLogger, authTimeoutMs: 60_000 });
   const { port } = await server.listen();
   return { h, server, url: `ws://127.0.0.1:${port}/rpc` };
 }
@@ -182,7 +182,7 @@ test('tb list says what a thread is still running in the background', () => {
 
 test('tb new on codex-main with a model and effort, tb accounts with and without an account', async () => {
   const h = makeHarness(undefined, {}, { accounts: new FakeAccounts(withCodex().map((a) => (a.id === 'claude-3' ? { ...a, note: 'Convex work only' } : a))) });
-  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: readToken(h.home), runner: h.runner, log: nullLogger });
+  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: readToken(h.home), runner: h.runner, log: nullLogger, authTimeoutMs: 60_000 });
   const { port } = await server.listen();
   const url = `ws://127.0.0.1:${port}/rpc`;
   try {
@@ -225,7 +225,7 @@ test('tb new on codex-main with a model and effort, tb accounts with and without
 
 test('tb pools lists the pools with their logins, and tb new --pool starts a thread on one', async () => {
   const h = makeHarness(undefined, {}, { accounts: new FakeAccounts(withCodex()) });
-  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: readToken(h.home), runner: h.runner, log: nullLogger });
+  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: readToken(h.home), runner: h.runner, log: nullLogger, authTimeoutMs: 60_000 });
   const { port } = await server.listen();
   const url = `ws://127.0.0.1:${port}/rpc`;
   try {
@@ -252,7 +252,7 @@ test('tb pools lists the pools with their logins, and tb new --pool starts a thr
 test('tb new starts on the runner\'s default mode; --full, --ask and --auto pick one', async () => {
   const h = makeHarness(undefined, { defaults: { cwd: '', permissionMode: 'auto' } });
   h.cfg.defaults.cwd = path.join(h.home, 'work');
-  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: readToken(h.home), runner: h.runner, log: nullLogger });
+  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: readToken(h.home), runner: h.runner, log: nullLogger, authTimeoutMs: 60_000 });
   const { port } = await server.listen();
   const url = `ws://127.0.0.1:${port}/rpc`;
   try {
