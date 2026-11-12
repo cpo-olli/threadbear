@@ -600,20 +600,20 @@ test("Muse's review: where a hook's script is, and what node_modules/.bin/convex
   const run = 'npx convex run --prod stats:overview';
   for (const target of [path.join(root, 'payload'), '../../evil.sh', '../nowhere']) {
     fs.writeFileSync(path.join(root, 'payload'), '#!/bin/sh\n');
-    fs.rmSync(bin);
+    fs.unlinkSync(bin);
     fs.symlinkSync(target, bin);
     assert.match(live(repo, run).problem ?? '', /not the convex package/, target);
   }
-  fs.rmSync(bin);
+  fs.unlinkSync(bin);
   fs.symlinkSync('../convex/bin/main.js', bin);
   assert.equal(live(repo, run).problem, undefined);
   // pnpm's layout is fine.
   write(repo, { 'node_modules/.pnpm/convex@1/node_modules/convex/bin/main.js': 'console.log(1);\n' });
-  fs.rmSync(bin);
+  fs.unlinkSync(bin);
   fs.symlinkSync('../.pnpm/convex@1/node_modules/convex/bin/main.js', bin);
   assert.equal(live(repo, run).problem, undefined);
   // As is a shim, a plain file there.
-  fs.rmSync(bin);
+  fs.unlinkSync(bin);
   fs.writeFileSync(bin, '#!/bin/sh\nexec node ../convex/bin/main.js "$@"\n');
   assert.equal(live(repo, run).problem, undefined);
   // A file that's run is held to the hash, whatever it's called.
