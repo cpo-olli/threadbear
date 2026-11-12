@@ -97,8 +97,11 @@ import Testing
         }
         var h = MessageHistory()
         let pages = (0...1250).map { big((1 + $0 * 8)...(80 + $0 * 8)) }
-        let clock = ContinuousClock()
-        let took = clock.measure { for p in pages { h.takeLive(p) } }
+        // This thread's CPU time, not the wall clock: a check on a loaded Mac
+        // took 3.1 s of waiting for a core (11 Nov).
+        let cpuStart = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+        for p in pages { h.takeLive(p) }
+        let took = Duration.nanoseconds(Int64(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpuStart))
         let bytes = h.older.reduce(0) { $0 + MessageHistory.bytes(of: $1) }
         #expect(bytes <= MessageHistory.olderMaxBytes)
         #expect(h.older.count < 1100)
