@@ -15,9 +15,17 @@ for (const [name, value] of Object.entries(process.env)) {
   delete process.env[name];
 }
 
-// A tb a test spawns gives the test's runner a minute to prove itself, not
-// 5 s: that runner shares the busy test process (tb-connect.ts).
-process.env.THREADBEAR_TB_AUTH_MS ??= '60000';
+// A thread's own key (THREADBEAR_THREAD_KEY, docs/protocol.md) is the live
+// runner's: a tb a test spawns would offer it to the test's runner, which
+// refuses it, once check.sh has unset THREADBEAR_RUNNER_HOME (tb-connect.ts
+// then takes the test's data dir for the thread's). tb land from a thread
+// failed two tb tests that way (11 Nov). Like the others, it goes back on exit.
+for (const name of ['THREADBEAR_THREAD_KEY']) {
+  const value = process.env[name];
+  if (value === undefined) continue;
+  saved[name] = value;
+  delete process.env[name];
+}
 
 process.on('exit', () => {
   for (const [name, value] of Object.entries(saved)) process.env[name] = value;

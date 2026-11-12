@@ -497,7 +497,7 @@ test("tb land in a thread refuses another thread's thread/<id8> branch, but take
 test('tb land inside a thread asks the runner where its worktree is, wherever it runs', async () => {
   const { main } = makeRepo(PATCH(`{ check: "test -f runner/b.ts" }`));
   const h = harness();
-  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: readToken(h.home), runner: h.runner, log: nullLogger, authTimeoutMs: 60_000 });
+  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: readToken(h.home), runner: h.runner, log: nullLogger });
   const { port } = await server.listen();
   try {
     const { thread } = h.runner.create({ text: 'Go', accountId: 'claude-3', cwd: main });

@@ -53,11 +53,7 @@ function processEnv(pid: number): string {
   }
 }
 
-// THREADBEAR_TB_AUTH_MS lengthens how long the runner has to prove itself
-// (client.ts's 5 s): tests set it, as their runner shares a process with the
-// test, which on a loaded Mac can't answer in 5 s (11 Nov).
-const authMs = Number(process.env.THREADBEAR_TB_AUTH_MS) || undefined;
-const options = (c: TbCredential, opts: RunnerClientOptions): RunnerClientOptions => ({ ...(authMs ? { authTimeoutMs: authMs } : {}), ...opts, ...(c.threadId ? { threadId: c.threadId } : {}) });
+const options = (c: TbCredential, opts: RunnerClientOptions): RunnerClientOptions => ({ ...opts, ...(c.threadId ? { threadId: c.threadId } : {}) });
 
 export function connectTb(cfg: Config, url: string = runnerUrl(cfg), opts: RunnerClientOptions = {}): Promise<RunnerClient> {
   const c = tbCredential(cfg.home);
