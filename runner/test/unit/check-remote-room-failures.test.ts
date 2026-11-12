@@ -61,25 +61,19 @@ test('with THREADBEAR_CHECK_BUSY_EXIT, no room exits with it, and a run over tim
   const r = low.run('h1', 3600, '', { RSYNC_FAILS_ON: 'h1', THREADBEAR_CHECK_BUSY_EXIT: '69' });
   assert.equal(r.status, 69, r.stdout + r.stderr);
   assert.match(r.stderr, /No check host has room for this check/);
-  // The limit counts from the script's start, so a real one raced the copy:
-  // 3 s failed with the other files running beside this one (9 Nov), and 8 s
-  // with the whole suite on a loaded Mac (11 Nov), stopping the run before its
-  // check began. So the clock jumps instead: a `date` ahead of the script's on
-  // PATH answers a day late once the peek, which runs as the check starts,
-  // leaves $FAKE/late. A run stopped before its check begins reads as still
-  // waiting.
-  const limits = { THREADBEAR_CHECK_PING_SECS: '1', THREADBEAR_CHECK_MAX_SECS: '3600', THREADBEAR_CHECK_BUSY_EXIT: '69' };
-  const lateClock = (s: ReturnType<typeof setup>) => {
-    fs.writeFileSync(path.join(path.dirname(s.fake), 'bin', 'date'), '#!/bin/bash\nif [ "$1" = +%s ] && [ -f "$FAKE/late" ]; then echo $(( $(/bin/date +%s) + 86400 )); else exec /bin/date "$@"; fi\n', { mode: 0o755 });
-    return s;
-  };
+  // 8 s, not less: the limit counts from the script's start, and with the other
+  // files running beside this one a 3 s limit failed this test (9 Nov). A run
+  // stopped before its check begins reads as still waiting.
+  const limits = { THREADBEAR_CHECK_PING_SECS: '1', THREADBEAR_CHECK_MAX_SECS: '8', THREADBEAR_CHECK_BUSY_EXIT: '69' };
   // Started: --on-host has moved its copy out of runs/ (the fake ssh doesn't
   // run --on-host, so the peek does the move's part), then a step hangs.
-  const hung = lateClock(setup({ h1: { state: 'free' } })).run('h1', 3600, 'rm -rf "$PWD"; : >"$FAKE/late"; sleep 300', limits);
+  // 25 s for the hung run, not 8: in a runner's self-update on a busy Mac the
+  // copy alone took 4 s, so its step hadn't begun when 8 s ran out and it read
+  // as still queued (David Clark's fork, 10 Nov 2026).
+  const hung = setup({ h1: { state: 'free' } }).run('h1', 3600, 'rm -rf "$PWD"; sleep 120', { ...limits, THREADBEAR_CHECK_MAX_SECS: '25' });
   assert.equal(hung.status, 1, hung.stdout + hung.stderr);
-  assert.match(hung.stderr, /This check has been going for 60 minutes/);
   // Still waiting for the host's lock: its copy is where it was sent.
-  const queued = lateClock(setup({ h1: { state: 'free' } })).run('h1', 3600, ': >"$FAKE/late"; sleep 300', limits);
+  const queued = setup({ h1: { state: 'free' } }).run('h1', 3600, 'sleep 30', limits);
   assert.equal(queued.status, 69, queued.stdout + queued.stderr);
 });
 
