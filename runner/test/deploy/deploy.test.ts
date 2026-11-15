@@ -1069,7 +1069,7 @@ test('install-runner.sh pins a Homebrew Cellar Node as its opt/ link, which outl
     const newer = path.join(brew, 'Cellar', 'node', '27.0.0', 'bin');
     fs.mkdirSync(newer, { recursive: true });
     fs.symlinkSync(process.execPath, path.join(newer, 'node'));
-    fs.rmSync(path.join(brew, 'opt', 'node'));
+    fs.unlinkSync(path.join(brew, 'opt', 'node'));
     fs.symlinkSync(path.join('..', 'Cellar', 'node', '27.0.0'), path.join(brew, 'opt', 'node'));
     const other = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--port', '0', '--path', '/usr/bin:/bin', '--print'], { THREADBEAR_NODE: path.join(cellarBin, 'node') });
     assert.equal(other.status, 0, out(other));

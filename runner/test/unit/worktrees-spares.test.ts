@@ -443,7 +443,7 @@ test('clearBuildCaches leaves a cache folder reached through a link, and a folde
   assert.ok(fs.lstatSync(path.join(t.path, 'app/.build')).isSymbolicLink(), 'the link stays too');
 
   // The folder switched to another branch: someone else's now.
-  fs.rmSync(path.join(t.path, 'app/.build'));
+  fs.unlinkSync(path.join(t.path, 'app/.build'));
   write(t.path, { 'app/.build/theirs.o': 'in use\n' });
   sh(t.path, 'git checkout -q -b someone-else');
   assert.deepEqual(await clearBuildCaches(rec), []);
