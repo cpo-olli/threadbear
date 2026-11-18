@@ -478,7 +478,14 @@ fn open_the_file(look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut
         }
         // Shown selected in Finder: a window rooted at it, or Finder asked
         // to open it, launched an app swapped in there; revealing didn't.
-        policy::Opener::FileViewer => ws.activateFileViewerSelectingURLs(&files),
+        //
+        // Asked from a task of its own, once the click has finished: macOS
+        // waits for Finder to answer and runs the app's other tasks while it
+        // does, and a spinner's frame borrowing the app the click still
+        // held aborted Threadbear (crash report, 18 Nov 2026). GPUI's own
+        // reveal_path is never called from inside the click for the same
+        // reason.
+        policy::Opener::FileViewer => cx.spawn(async move |_| ws.activateFileViewerSelectingURLs(&files)).detach(),
         // What was said yes to (an app opening as itself), by its reference.
         policy::Opener::System => {
             ws.openURL(&files.objectAtIndex(0));
