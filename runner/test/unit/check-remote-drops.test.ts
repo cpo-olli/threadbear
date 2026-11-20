@@ -1,11 +1,10 @@
 // scripts/check-remote.sh against fake hosts (helpers/check-remote-harness.ts
 // says how, and why it's several files): hosts that stop answering, connections lost, and runs past their limits.
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { GiB, SCRIPT, macDf, setup, shortHome } from '../helpers/check-remote-harness.ts';
+import { GiB, SCRIPT, macDf, setup, shortHome, test } from '../helpers/check-remote-harness.ts';
 
 // How long a hung step sleeps: the fake ssh's hang and stubborn hosts
 // (helpers/check-remote-harness.ts, sleep 300) and onHost's check.sh. A run
