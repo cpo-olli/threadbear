@@ -209,7 +209,9 @@ before(() => {
   agents = path.join(root, 'LaunchAgents');
   for (const d of ['scripts', 'src', 'bin']) fs.mkdirSync(path.join(rdir, d), { recursive: true });
   // The real scripts and launch.mjs, around a fake runner with no packages.
-  for (const f of ['deploy-runner.sh', 'find-node.sh', 'deploy.mjs', 'deploy-steps.mjs', 'rpc-client.mjs', 'install-runner.sh', 'deploy-backend.mjs']) {
+  // deploy.mjs imports windows-task.mjs and deploy-backend.mjs imports
+  // backend-stones.mjs: a script missing here fails every test after it.
+  for (const f of ['deploy-runner.sh', 'find-node.sh', 'deploy.mjs', 'deploy-steps.mjs', 'rpc-client.mjs', 'install-runner.sh', 'deploy-backend.mjs', 'backend-stones.mjs', 'windows-task.mjs']) {
     fs.copyFileSync(path.join(RUNNER, 'scripts', f), path.join(rdir, 'scripts', f));
   }
   fs.copyFileSync(path.join(RUNNER, 'launch.mjs'), path.join(rdir, 'launch.mjs'));
