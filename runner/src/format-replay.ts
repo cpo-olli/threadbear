@@ -352,7 +352,7 @@ export class TreeFormatter {
         const target = path.join(work, c);
         // Not under a link the tree has for a folder on the way, either.
         if (!realFoldersTo(work, c)) return { tree, failed: `${c} is under a link in this tree, so it wasn't formatted` };
-        fs.rmSync(target, { force: true, recursive: true });
+        removeEntry(target);
         const blob = await gitBuffer(this.cwd, `${f.commit}:${c}`);
         if (blob) {
           fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -361,7 +361,7 @@ export class TreeFormatter {
       }
       const ran = await runCommand(f.entry.command, work, this.limitMs);
       // Config files go back to the tree's own, so only formatting is read.
-      for (const c of f.entry.config) fs.rmSync(path.join(work, c), { force: true });
+      for (const c of f.entry.config) removeEntry(path.join(work, c));
       const back = f.entry.config.filter((c) => inTree.has(c));
       if (back.length) await stdinGit(this.cwd, [attr, 'checkout-index', '-f', '-u', '-z', '--stdin', `--prefix=${work}/`], back.join('\0'), env);
       if (f.entry.adds) {
@@ -415,6 +415,20 @@ function realFoldersTo(root: string, rel: string): boolean {
     }
   }
   return true;
+}
+
+// Whatever is at a path, a link included, gone. Node 24.12's fs.rmSync
+// returns without error and leaves a link whose target doesn't exist, so a
+// link is unlinked itself rather than handed to rmSync.
+function removeEntry(file: string): void {
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(file);
+  } catch {
+    return;
+  }
+  if (st.isDirectory()) fs.rmSync(file, { recursive: true, force: true });
+  else fs.unlinkSync(file);
 }
 
 function rmQuietly(dir: string): void {
