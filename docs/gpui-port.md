@@ -524,17 +524,16 @@ for real browsing. I'd skip it: two engines means two sandboxes to prove.
 
 ### Keeping Chromium current
 
-Checked on 13 Nov 2026 against [Spotify's CEF index](https://cef-builds.spotifycdn.com/index.json),
-[cef-rs releases](https://crates.io/crates/cef) and
-[Chrome's security releases](https://chromereleases.googleblog.com/search/label/Stable%20updates):
-the former CEF 156.0.15 used Chromium 156.0.8078.80 (31 Oct).
-CEF stable is 156.0.28, Chromium 156.0.8078.88 (11 Nov).
-The newest published Rust bindings are cef/cef-dll-sys 156.4.0+156.0.26,
-so Threadbear uses that exact CEF build (7 Nov), with the same Chromium
-156.0.8078.88. Compatibility with CEF 156.0.28 has not been proved.
-Chrome desktop is already 157.0.8103.78/.79 (11 Nov), with further security
-fixes. Updating CEF to the newest supported build doesn't close that upstream
-gap; no published cef-rs bindings for Chrome 157 were available at this check.
+Checked on 24 Nov 2026 against [Spotify's CEF index](https://cef-builds.spotifycdn.com/index.json)
+and [cef-rs releases](https://crates.io/crates/cef). CEF stable is 158.0.3,
+Chromium 158.0.8127.18 (20 Nov), and on the 156 branch 156.0.32, Chromium
+156.0.8078.109 (24 Nov). The newest published Rust bindings are
+cef/cef-dll-sys 156.7.0+156.0.31 (19 Nov), so Threadbear uses that exact CEF
+build (18 Nov), with Chromium 156.0.8078.100. It replaced 156.0.26 (Chromium
+156.0.8078.88); the C API didn't change between them (the regenerated
+`loader.rs` was identical). No published cef-rs bindings for CEF 157 or 158
+were available at this check, so the runner's warning comes back once 158.0.3
+has been out 14 days (4 Dec) unless they appear by then.
 
 The installed Mac runner checks the CDN index once a day while a web runtime
 is installed, starting a minute after launch. CEF-only patches count too;
