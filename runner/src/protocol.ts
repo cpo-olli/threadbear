@@ -1077,6 +1077,9 @@ export type Schedule = {
   model?: string;
   effort?: EffortLevel;
   permissionMode?: PermissionMode;
+  // Each thread it starts begins starred (the Starred section above the
+  // Inbox). Only for one that starts a new thread each time.
+  starThreads?: boolean;
   // Set by the runner when there's no permissionMode: the mode its runs start
   // with, this runner's default (runner.json's defaults.permissionMode, else
   // full). Absent for another runner's schedule, whose default isn't known

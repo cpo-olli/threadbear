@@ -173,7 +173,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 99;
+export const BACKEND_API_VERSION = 100;
 // From this one sync:removeThreads takes the runner's id and leaves a row
 // that's another runner's alone (a thread moved away), whatever the key.
 export const REMOVE_OWN_ROWS_API_VERSION = 92;
@@ -226,6 +226,8 @@ export const SCHEDULE_CHECK_API_VERSION = 51;
 export const SCHEDULE_CHECK_TIMEOUT_API_VERSION = 55;
 // From this one it can carry `provider`, the kind of login in its pool.
 export const SCHEDULE_PROVIDER_API_VERSION = 97;
+// From this one it can carry `starThreads`: each new thread starts starred.
+export const SCHEDULE_STAR_API_VERSION = 100;
 // Pools shared between runners: the pools table (shared-pools.ts).
 export const SHARED_POOLS_API_VERSION = 38;
 // From this one sync:pools gives other runners' keys a member that has an
@@ -1427,6 +1429,7 @@ export function toOwnedScheduleDoc(s: StoredSchedule, apiVersion = BACKEND_API_V
   if (s.check !== undefined && apiVersion >= SCHEDULE_CHECK_API_VERSION) out.check = s.check;
   if (s.checkTimeoutSecs !== undefined && apiVersion >= SCHEDULE_CHECK_TIMEOUT_API_VERSION) out.checkTimeoutSecs = s.checkTimeoutSecs;
   if (s.provider !== undefined && apiVersion >= SCHEDULE_PROVIDER_API_VERSION) out.provider = s.provider;
+  if (s.starThreads && apiVersion >= SCHEDULE_STAR_API_VERSION) out.starThreads = true;
   if (s.lastRun) {
     out.lastRun = { at: s.lastRun.at, outcome: s.lastRun.outcome, ...(s.lastRun.threadId ? { threadId: s.lastRun.threadId } : {}), ...(s.lastRun.note ? { note: s.lastRun.note } : {}) };
   }

@@ -1986,7 +1986,7 @@ async function dispatch(client, method, p) {
       const schedule = {
         id: 'sc_' + crypto.randomBytes(5).toString('hex'), title: p.title || p.text.split('\n')[0].slice(0, 60), text: p.text,
         ...(p.at ? { at: new Date(p.at).toISOString() } : { cron: p.cron }), whenText: when.whenText,
-        ...(p.threadId ? { threadId: p.threadId } : settings),
+        ...(p.threadId ? { threadId: p.threadId } : { ...settings, ...(p.starThreads ? { starThreads: true } : {}) }),
         paused: Boolean(p.paused), createdAt: now, updatedAt: now, ...(p.createdBy ? { createdBy: p.createdBy } : {}), runs: 0,
         runnerId: runner.id, runnerName: runner.name, runnerIcon: runner.icon,
       };
@@ -2001,6 +2001,7 @@ async function dispatch(client, method, p) {
       // Another runner's folder, emptied, is its default again.
       if (schedule.runnerId !== SELF_RUNNER.id && !schedule.cwd?.trim()) delete schedule.cwd;
       for (const key of ['model', 'effort', 'timezone', 'provider']) if (p[key] !== undefined) schedule[key] = p[key] ?? undefined;
+      if (p.starThreads !== undefined && !schedule.threadId) schedule.starThreads = p.starThreads || undefined;
       if (p.at || p.cron) {
         const when = readWhen(p);
         if (p.at) { schedule.at = new Date(p.at).toISOString(); delete schedule.cron; delete schedule.finishedAt; }
@@ -3782,7 +3783,7 @@ function runSchedule(schedule) {
       id: threadId, title: schedule.title, cwd: schedule.cwd ?? defaults.cwd, accountId: schedule.accountId ?? defaults.accountId,
       provider: 'claude', model: schedule.model, effort: schedule.effort, permissionMode: schedule.permissionMode ?? 'full',
       status: 'starting', live: true, needsYou: false, createdAt: now, updatedAt: now, lastActivityAt: now, preview: '', lastSeq: 0, lastSeenSeq: 0,
-      schedule: { id: schedule.id, title: schedule.title },
+      schedule: { id: schedule.id, title: schedule.title }, ...(schedule.starThreads ? { starredAt: now } : {}),
     }, events: [], inProgress: new Map(), timers: [] });
     broadcastSummary(threadId);
   }

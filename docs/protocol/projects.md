@@ -418,7 +418,9 @@ schedule keeps `poolId` (and `provider`), so the run still picks its login.
   or queued; one that needs Mike, fails or waits stays out. Mike writing to
   it, or archiving or unarchiving it himself, clears the mark.
 - **New threads** get the schedule's title and settings and are made the
-  way `threads.create` makes them. One with a `poolId` starts on that
+  way `threads.create` makes them; with `starThreads` each starts starred
+  (`starredAt`, the Starred section). The backend stores it from API 100,
+  and a runner sends it only to a backend that has it. One with a `poolId` starts on that
   pool's pick of its logins at the time (Which login), and stays in the pool.
   Unlike a thread Mike starts, it doesn't change the login or pool the
   next new thread starts on. Their summary's `schedule` says which

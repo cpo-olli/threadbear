@@ -49,6 +49,8 @@ export const newThreadsPart = {
     projectIds?: string[];
     // Box mode's one thread, made under the id the backend gave it (boxThread).
     id?: string;
+    // Starts starred, in the Starred section (a schedule's starThreads).
+    starred?: boolean;
     // The CLI the app had started ahead of it (threads.warm,
     // runner/warm-start.ts): the thread is made under its id.
     warmId?: string;
@@ -71,6 +73,7 @@ export const newThreadsPart = {
       throw e;
     }
     const { st, notes, loginNote } = made;
+    if (params.starred) st.rec.starredAt = this.isoNow();
     if (spare) this.cli(st, { kind: 'claim', spare });
     if (projectIds.length) this.projects!.changeMembership(st.rec.id, { add: projectIds, by: 'mike' });
     const turnId = this.sendTo(st, params.text ?? '', params.images ?? [], { origin: params.origin, wakeReason: params.wakeReason, scheduleId: params.scheduleId });

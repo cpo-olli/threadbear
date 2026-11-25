@@ -2629,6 +2629,7 @@ const ownedScheduleDoc = v.object({
   check: v.optional(v.string()),
   checkTimeoutSecs: v.optional(v.number()),
   provider: v.optional(v.string()),
+  starThreads: v.optional(v.boolean()),
 });
 
 const lastRunDoc = v.object({ at: v.string(), outcome: v.string(), threadId: v.optional(v.string()), note: v.optional(v.string()) });

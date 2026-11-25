@@ -488,4 +488,7 @@
 //    (onThreads, landing, appRestart) is in view "inbox" though hibernating.
 //    A runner sends it only to a backend of 99 or later. An older app ignores
 //    it, and leaves out those three, as it skips a hibernating inbox row.
-export const API_VERSION = 99;
+// 100: an owned schedule can carry `starThreads`: each thread it starts
+//    begins starred. A runner sends it only to a backend of 100 or later;
+//    an older runner starts them unstarred.
+export const API_VERSION = 100;

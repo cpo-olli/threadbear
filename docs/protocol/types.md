@@ -614,6 +614,8 @@ type Schedule = {
   effort?: EffortLevel
   permissionMode?: "full" | "ask" | "auto" // absent: the runner's
                         // defaults.permissionMode when it runs, else full
+  starThreads?: boolean // each thread it starts begins starred (Starred,
+                        // above the Inbox). New-thread ones only
   defaultMode?: "full" | "ask" | "auto" | "plan" // set by the runner on a
                         // new-thread one with no permissionMode that runs
                         // here: the mode it inherits. Absent for another

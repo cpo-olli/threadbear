@@ -782,7 +782,7 @@ export function buildThreadbearTools(
     const last = sc.lastRun && sc.lastRun.outcome !== 'sent' ? `; last run ${sc.lastRun.outcome}: ${sc.lastRun.note ?? ''}` : '';
     const checked = sc.check ? `; check: ${sc.check.length > 80 ? sc.check.slice(0, 80) + '…' : sc.check}${sc.checkTimeoutSecs ? ` (up to ${sc.checkTimeoutSecs} s)` : ''}` : '';
     const where = sc.runnerName ? ` on ${sc.runnerName}` : '';
-    return `${sc.id.slice(0, 8)}  ${sc.title}  [${sc.whenText}; ${state}${last}${checked}]  to ${target}${where}`;
+    return `${sc.id.slice(0, 8)}  ${sc.title}  [${sc.whenText}; ${state}${last}${checked}]  to ${target}${sc.starThreads ? ', starred' : ''}${where}`;
   };
 
   const mustSchedules = (): ScheduleControl => {
@@ -1037,17 +1037,18 @@ export function buildThreadbearTools(
         model: z.string().optional().describe("With new_thread: model id, one of the account's (list_accounts shows them)."),
         effort: effortEnum.optional().describe('With new_thread: reasoning effort (ultra is Codex only).'),
         permissionMode: z.enum(['full', 'ask', 'auto']).optional().describe('With new_thread: "full" (default), "ask" or "auto".'),
+        star: z.boolean().optional().describe('With new_thread: each thread starts starred, above the Inbox.'),
         runner: z
           .string()
           .optional()
           .describe("With new_thread: the runner (machine) it runs on, by name, e.g. studio-mac. Default: this thread's runner. Only when the user asks for another machine; the folder and account are then that machine's (a path there, or left out for its default)."),
         ...checkArg(false),
       },
-      handle(async ({ text, when, cron, timezone, title, threadId, id: alias, new_thread, folder: f, account: acc, pool: pl, model, effort, permissionMode, runner, ...rest }, extra) => {
+      handle(async ({ text, when, cron, timezone, title, threadId, id: alias, new_thread, folder: f, account: acc, pool: pl, model, effort, permissionMode, star, runner, ...rest }, extra) => {
         const { check, checkTimeoutSecs } = rest as { check?: string; checkTimeoutSecs?: number };
         if ((when === undefined) === (cron === undefined)) throw new Error('Give exactly one of when (once) and cron (repeating).');
         if (runner && !new_thread) throw new Error("runner is for new_thread schedules; one that sends to a thread runs on that thread's runner.");
-        if (!new_thread && (f || acc || pl || model || effort || permissionMode)) throw new Error('folder, account, pool, model, effort and permissionMode are for new_thread schedules; a thread keeps its own.');
+        if (!new_thread && (f || acc || pl || model || effort || permissionMode || star)) throw new Error('folder, account, pool, model, effort, permissionMode and star are for new_thread schedules; a thread keeps its own.');
         // From a thread not in full mode, new threads get its mode unless
         // the call says otherwise, and anything above it asks (raising access).
         const caller = await restricted();
@@ -1081,6 +1082,7 @@ export function buildThreadbearTools(
           ...(when !== undefined ? { at: parseWhen(when, now()) } : { cron }),
           timezone,
           ...target,
+          ...(new_thread && star ? { starThreads: true } : {}),
           ...(check?.trim() ? { check, ...card } : {}),
           ...(checkTimeoutSecs !== undefined ? { checkTimeoutSecs } : {}),
           createdBy: selfId,
@@ -1101,7 +1103,7 @@ export function buildThreadbearTools(
     ),
     tool(
       'update_schedule',
-      'Changes a schedule: its message, title or time, or pauses and resumes it. Setting when makes it a one-off, setting cron makes it repeat. A new_thread one also takes schedule_message\'s folder, account or pool, model, effort and permissionMode (null pool, model or effort: the default).',
+      'Changes a schedule: its message, title or time, or pauses and resumes it. Setting when makes it a one-off, setting cron makes it repeat. A new_thread one also takes schedule_message\'s folder, account or pool, model, effort, permissionMode and star (null pool, model or effort: the default).',
       {
         scheduleId: z.string().describe('Schedule id or a unique prefix (list_schedules shows them).'),
         text: z.string().optional(),
@@ -1116,9 +1118,10 @@ export function buildThreadbearTools(
         model: z.string().nullable().optional(),
         effort: effortEnum.nullable().optional(),
         permissionMode: z.enum(['full', 'ask', 'auto']).optional(),
+        star: z.boolean().optional(),
         ...checkArg(true),
       },
-      handle(async ({ scheduleId, text, title, when, cron, timezone, paused, folder: f, account: acc, pool: pl, model, effort, permissionMode, ...rest }, extra) => {
+      handle(async ({ scheduleId, text, title, when, cron, timezone, paused, folder: f, account: acc, pool: pl, model, effort, permissionMode, star, ...rest }, extra) => {
         const { check, checkTimeoutSecs } = rest as { check?: string | null; checkTimeoutSecs?: number | null };
         const s = mustSchedules();
         const current = await s.find(scheduleId);
@@ -1202,6 +1205,7 @@ export function buildThreadbearTools(
           model,
           effort,
           permissionMode,
+          ...(star !== undefined ? { starThreads: star } : {}),
           // Moving it to another folder takes its check along, approved
           // there as this call's card showed it (from a thread that asks
           // first) or as it is (Full): the Scheduler approves nothing for a
