@@ -1251,6 +1251,9 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
         }
         let input = PlatformInput::FileDrop(FileDropEvent::Exited);
         self.handle_drag_drop(input);
+        // OLE never arms the leave tracking, so no WM_MOUSELEAVE follows: the
+        // last spot the drag passed over would otherwise stay hovered.
+        self.0.dispatch_pointer_left(self.0.hwnd);
 
         Ok(())
     }

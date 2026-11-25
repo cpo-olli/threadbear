@@ -411,10 +411,17 @@ impl WindowsWindowInner {
 
     /// Windows sends no `WM_MOUSEMOVE` once the pointer is off the window, so
     /// GPUI kept the last position inside it: hover styles, `on_hover` and
-    /// tooltips all went on as if the pointer were still there. Tell it where
-    /// the pointer went with a move (which hit tests nothing outside), then
-    /// `MouseExited`, as the Mac and Linux platforms do.
-    fn dispatch_pointer_left(&self, handle: HWND) {
+    /// tooltips all went on as if the pointer were still there. Send
+    /// `MouseExited`, as the Mac and Linux platforms do, while GPUI still hit
+    /// tests the old position (an `on_mouse_exit` runs only for an element
+    /// still hovered), then a move to where the pointer went, which hit tests
+    /// nothing of this window. Also after a file drag leaves (`DragLeave`).
+    pub(crate) fn dispatch_pointer_left(&self, handle: HWND) {
+        // While this window holds the capture (a press here, dragged out) it
+        // goes on getting real `WM_MOUSEMOVE`s, with the button held.
+        if unsafe { GetCapture() } == handle {
+            return;
+        }
         let (mut screen, mut client) = (POINT::default(), RECT::default());
         let found = unsafe {
             GetCursorPos(&mut screen).is_ok() && GetClientRect(handle, &mut client).is_ok()
@@ -438,12 +445,12 @@ impl WindowsWindowInner {
             return;
         };
         let modifiers = current_modifiers();
-        func(PlatformInput::MouseMove(MouseMoveEvent {
+        func(PlatformInput::MouseExited(MouseExitEvent {
             position,
             pressed_button: None,
             modifiers,
         }));
-        func(PlatformInput::MouseExited(MouseExitEvent {
+        func(PlatformInput::MouseMove(MouseMoveEvent {
             position,
             pressed_button: None,
             modifiers,
