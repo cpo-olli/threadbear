@@ -47,7 +47,7 @@ import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
 import { IS_WINDOWS } from './platform.ts';
 import { killGroup } from './proc.ts';
-import { currentCert, delegatePaths, readDelegateState, REMIND_AHEAD_MS, RENEW_AHEAD_MS, renewDelegate, SIGN_MARGIN_MS, writeDelegateState } from './release-delegate.ts';
+import { delegatePaths, readDelegateState, usableCert, REMIND_AHEAD_MS, RENEW_AHEAD_MS, renewDelegate, SIGN_MARGIN_MS, writeDelegateState } from './release-delegate.ts';
 import { ADD_DELAY_MS, applyKeyChanges, certVerifyArgs, KeysBusy, keysIn, revokedPath, REVOKED_FILE, signatureCert, signedWithCert, signerKey, SIGNERS_FILE, withAuthorities } from './release-keys.ts';
 import { changelogFor, type ReleaseChangelog } from './changelog.ts';
 import { LISTING_GIT_CONFIG, parseConfigListBytes, repoProofConfig, settable, TRUSTED_SCOPES, untrustedGitEnv } from './safe-git.ts';
@@ -139,6 +139,9 @@ export type UpstreamStatus = {
   // Mike's runner: why main's tip isn't today's release yet, when it's
   // only GitHub's checks in the way (ciVerdict). Gone once it's tagged.
   held?: { commit: string; why: string; at: string };
+  // Mike's runner with releases.delegate: until when the weekly key signs
+  // (release-delegate.ts), and why the last try to renew it failed.
+  weeklyKey?: { until?: string; error?: string };
 };
 
 // One GitHub Actions run of a workflow on a commit, as ciVerdict needs it.
@@ -1071,7 +1074,7 @@ export class Upstream {
     const [announced, revoke] = await Promise.all([this.committedFile(checkout, signed.commit, SIGNERS_FILE), this.committedFile(checkout, signed.commit, REVOKED_FILE)]);
     let change;
     try {
-      change = applyKeyChanges({ home: this.deps.home, signers, signer, announced: keysIn(announced), revoke: keysIn(revoke), tag: signed.tag, now: this.deps.clock.now() });
+      change = applyKeyChanges({ home: this.deps.home, signers, signer, announced: keysIn(announced), revoke: keysIn(revoke), tag: signed.tag, now: this.deps.clock.now(), viaCert: signedWithCert(signed.signature) });
     } catch (e) {
       // Another runner is at it; the next check reads the release again.
       if (e instanceof KeysBusy) return false;
@@ -1277,6 +1280,7 @@ export class Upstream {
       this.deps.log.warn('releases.publish is on but releases.signingKey is missing', { signingKey: publish.signingKey });
       return undefined;
     }
+    this.renewMissed = false;
     if (publish.delegate && touchKey(publish.signingKey)) {
       await this.keepDelegate(checkout, asked).catch((e: unknown) => this.deps.log.warn('could not look after the weekly release key', { error: String(e).slice(0, 200) }));
     }
@@ -1363,10 +1367,16 @@ export class Upstream {
     // doesn't touch it. Nothing waits on it but this look.
     // Or the weekly key, when it has time left and the last release has
     // the check that takes it, so forks on that release already do.
-    const weekly = await this.weeklyKey(checkout, last, now);
+    const weekly = await this.weeklyKey(checkout, tip, last, now);
     const touch = !weekly && touchKey(publish.signingKey);
     if (touch && !asked && !(await (this.deps.atMac?.() ?? Promise.resolve(false)))) {
       this.hold({ commit: tip, why: 'waiting for you at the Mac to sign it with Touch ID', at: new Date(now).toISOString() });
+      return undefined;
+    }
+    // Touch ID was just asked for, to renew the weekly key, and not given:
+    // not straight away again for the release.
+    if (touch && this.renewMissed) {
+      this.hold({ commit: tip, why: "Touch ID wasn't given to renew the weekly key; it asks again next hour", at: new Date(now).toISOString() });
       return undefined;
     }
     try {
@@ -1408,23 +1418,34 @@ export class Upstream {
 
   // The weekly key's certificate file to sign with (release-delegate.ts),
   // or undefined to sign with the release key itself.
-  private async weeklyKey(checkout: string, last: string | undefined, now: number): Promise<string | undefined> {
-    if (!this.deps.publish?.delegate || !last) return undefined;
-    const cert = currentCert(this.deps.home);
+  // Not for a release that changes the keys (release-signers or
+  // release-keys-revoked differ from the last release's): forks take key
+  // changes only from a release the release key signed itself, bar
+  // revoking weekly keys (release-keys.ts applyKeyChanges).
+  private async weeklyKey(checkout: string, tip: string, last: string | undefined, now: number): Promise<string | undefined> {
+    const { publish, home } = this.deps;
+    if (!publish?.delegate || !publish.signingKey || !last) return undefined;
+    const read = (rev: string, file: string) => this.committedFile(checkout, rev, file).catch(() => undefined);
+    const [revoked, signersAt, signersWas, revokedWas, forks] = await Promise.all([read(tip, REVOKED_FILE), read(tip, SIGNERS_FILE), read(`refs/tags/${last}`, SIGNERS_FILE), read(`refs/tags/${last}`, REVOKED_FILE), read(`refs/tags/${last}`, 'runner/src/release-keys.ts')]);
+    if (revoked === undefined || signersAt !== signersWas || revoked !== revokedWas || !forks?.includes('cert-authority')) return undefined;
+    const cert = usableCert(home, publish.signingKey, revoked);
     if (!cert || cert.validAfter > now || cert.validBefore - now < SIGN_MARGIN_MS) return undefined;
-    const forks = await this.committedFile(checkout, `refs/tags/${last}`, 'runner/src/release-keys.ts').catch(() => '');
-    return forks.includes('cert-authority') ? delegatePaths(this.deps.home).cert : undefined;
+    return delegatePaths(home).cert;
   }
 
   // Renews the weekly key when it's near its end and Mike is at the Mac
   // (or asked, with tb updates publish), at most once an hour; and when
   // it's nearer still, starts a starred thread so he can't miss it.
   private lastRenewTry = 0;
+  private renewMissed = false;
   private async keepDelegate(checkout: string, asked: boolean): Promise<void> {
     const { publish, home, clock, log } = this.deps;
     if (!publish?.signingKey) return;
     const now = clock.now();
-    let left = (currentCert(home)?.validBefore ?? 0) - now;
+    const revoked = await this.committedFile(checkout, 'refs/heads/main', REVOKED_FILE);
+    const had = usableCert(home, publish.signingKey, revoked);
+    let left = (had?.validBefore ?? 0) - now;
+    let error: string | undefined;
     if (left < RENEW_AHEAD_MS && (asked || now - this.lastRenewTry >= 60 * 60_000) && (asked || (await (this.deps.atMac?.() ?? Promise.resolve(false))))) {
       this.lastRenewTry = now;
       const signers = await this.committedFile(checkout, 'refs/heads/main', SIGNERS_FILE);
@@ -1433,9 +1454,12 @@ export class Upstream {
         left = c.validBefore - now;
         log.info('renewed the weekly release key', { until: new Date(c.validBefore).toISOString() });
       } catch (e) {
-        log.info('the weekly release key was not renewed', { error: String((e as Error).message ?? e).slice(0, 200) });
+        error = String((e as Error).message ?? e).slice(0, 200);
+        this.renewMissed = true;
+        log.info('the weekly release key was not renewed', { error });
       }
     }
+    this.set({ ...this.st, weeklyKey: { ...(left > 0 ? { until: new Date(now + left).toISOString() } : {}), ...(error ? { error } : {}) } });
     if (left >= REMIND_AHEAD_MS || !this.deps.remind) return;
     const state = readDelegateState(home);
     if (state.remindThread && this.deps.isOpen?.(state.remindThread)) return;
@@ -1664,6 +1688,7 @@ Don't run anything yet: the renewal pops up a Touch ID prompt that only works wh
       ...(this.deps.checkout ? { checkout: this.deps.checkout } : {}),
       ...(this.st.published && !next.published ? { published: this.st.published } : {}),
       ...(this.st.held && !('held' in next) ? { held: this.st.held } : {}),
+      ...(this.st.weeklyKey && !('weeklyKey' in next) ? { weeklyKey: this.st.weeklyKey } : {}),
     };
     // A failed or in-progress check keeps the last release it knew of.
     const release = next.release ?? (next.state === 'checking' || next.state === 'failed' ? this.st.release : undefined);
@@ -1775,6 +1800,13 @@ async function sshVerified(signed: SignedTag, signers: string, revoked?: string)
       const args = certVerifyArgs(name, signed.date);
       if (!args) return false;
       when = args;
+      // Revoked weekly keys count against certificates only.
+      const weekly = revoked && fs.existsSync(`${revoked}-weekly`) ? fs.readFileSync(`${revoked}-weekly`, 'utf8') : '';
+      if (weekly.trim()) {
+        const both = path.join(dir, 'revoked');
+        fs.writeFileSync(both, (revoked && fs.existsSync(revoked) ? fs.readFileSync(revoked, 'utf8') : '') + '\n' + weekly, { mode: 0o600 });
+        revoked = both;
+      }
     }
     const allowed = path.join(dir, 'signers');
     fs.writeFileSync(allowed, withAuthorities(fs.readFileSync(signers, 'utf8')), { mode: 0o600 });

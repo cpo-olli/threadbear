@@ -149,10 +149,15 @@ whose OpenSSH certificate a pinned key made (Mike's, since 25 Nov 2026:
 release-keys.ts, "Releases signed by a weekly key"): each pinned key also
 counts as a `cert-authority` for its principal, for the git namespace, and
 such a signature is checked at the tag's own tagger time
-(`-O verify-time`), which must fall on the day the tag's name says (with
-the world's time zones' slack), so the certificate's week bounds the
-names it can sign. A key in `scripts/release-keys-revoked` that was never
-pinned (a weekly key) is revoked by any pinned key's release.
+(`-O verify-time`), which must fall on the real calendar day the tag's
+name says (with the world's time zones' slack) and be no more than an hour
+ahead of the fork's clock, so the certificate's week bounds the names it
+can sign. A certificate for any key type but ed25519 is refused. A
+release signed by a weekly key never announces a key or revokes a pinned
+one; any release may revoke a key that was never pinned (a weekly key),
+which goes in `<home>/upstream-revoked-weekly` and counts against
+certificate signatures only. So a key change goes out in a release the
+release key signs itself, and Mike's runner signs those with it.
 `release.commit` is the commit
 the verified tag names, and that is what a bring-in merges. It never
 changes main: bringing a release in is a thread (docs/bringing-in-updates.md).
@@ -244,8 +249,13 @@ verifies before putting it in place, and with 36 hours left and still not
 renewed starts a starred thread asking him to (its id in
 `release-delegate.json`, one at a time). The weekly key is used only once
 the last release's `runner/src/release-keys.ts` has the check that takes
-it, and with an hour or more left; otherwise the release key signs, as
-before.
+it, with an hour or more left, when its key file and the release key
+match its certificate, when it isn't in main's
+`scripts/release-keys-revoked`, and when the release doesn't change
+`scripts/release-signers` or `scripts/release-keys-revoked`; otherwise
+the release key signs, as before (and a key that doesn't fit is renewed
+next time). `tb updates publish` says until when the weekly key signs, or
+why renewing it failed.
 
 ### Your changes to the old app
 

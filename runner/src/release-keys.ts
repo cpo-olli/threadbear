@@ -42,6 +42,13 @@ export function revokedPath(home: string): string {
   return path.join(home, 'upstream-revoked');
 }
 
+// Weekly keys revoked (never pinned ones): checked only for signatures
+// made with a certificate, kept apart so a release can't block a key it
+// doesn't know yet from ever being pinned.
+export function weeklyRevokedPath(home: string): string {
+  return `${revokedPath(home)}-weekly`;
+}
+
 export function keyStatePath(home: string): string {
   return path.join(home, 'upstream-keys.json');
 }
@@ -195,11 +202,18 @@ export function withAuthorities(text: string): string {
 // tag `name` (release/YYYY-MM-DD) dated `date` (its tagger line): at that
 // time, which must fall on the day its name says, give or take the
 // world's time zones. Undefined when it doesn't, which fails the check.
-export function certVerifyArgs(name: string, date: string | undefined): string[] | undefined {
+// Not a tag dated ahead of `now` either (an hour's slack for clocks): forks
+// keep the newest name and never go back, so a leaked key mustn't be able
+// to name one for days to come and shut out the release that revokes it.
+// The name must be a real day: Date.UTC turns 2027-00-05 into 5 Dec 2026,
+// a time the key may have covered, under a name sorting after December's.
+export function certVerifyArgs(name: string, date: string | undefined, now = Date.now()): string[] | undefined {
   const day = /^release\/(\d{4})-(\d{2})-(\d{2})$/.exec(name);
   const t = date ? Date.parse(date) : NaN;
-  if (!day || !Number.isFinite(t)) return undefined;
-  const start = Date.UTC(Number(day[1]), Number(day[2]) - 1, Number(day[3])) - 14 * 3_600_000;
+  if (!day || !Number.isFinite(t) || t > now + 3_600_000) return undefined;
+  const midnight = Date.UTC(Number(day[1]), Number(day[2]) - 1, Number(day[3]));
+  if (new Date(midnight).toISOString().slice(0, 10) !== `${day[1]}-${day[2]}-${day[3]}`) return undefined;
+  const start = midnight - 14 * 3_600_000;
   const end = start + 24 * 3_600_000 + 26 * 3_600_000;
   if (t < start || t >= end) return undefined;
   const d = new Date(t);
@@ -228,6 +242,14 @@ function writeAtomic(file: string, text: string): void {
 export function readRevoked(home: string): string[] {
   try {
     return keysIn(fs.readFileSync(revokedPath(home), 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+export function readWeeklyRevoked(home: string): string[] {
+  try {
+    return keysIn(fs.readFileSync(weeklyRevokedPath(home), 'utf8'));
   } catch {
     return [];
   }
@@ -328,11 +350,15 @@ function withKeyLock<T>(home: string, fn: () => T): T {
 // Applies what a verified release's commit says about the keys (above).
 // `signer` is the key that signed that release, `announced` the keys in its
 // release-signers, `revoke` those in its release-keys-revoked.
-export function applyKeyChanges(o: { home: string; signers: string; signer: string; announced: string[]; revoke: string[]; tag: string; now: number }): KeyChange {
+// viaCert: the release was signed by a weekly key (its certificate's
+// authority is `signer`). Such a release can only revoke weekly keys: a
+// weekly key that leaked mustn't announce a key of its own or revoke a
+// pinned one, as that would outlast its week.
+export function applyKeyChanges(o: { home: string; signers: string; signer: string; announced: string[]; revoke: string[]; tag: string; now: number; viaCert?: boolean }): KeyChange {
   return withKeyLock(o.home, () => applyLocked(o));
 }
 
-function applyLocked(o: { home: string; signers: string; signer: string; announced: string[]; revoke: string[]; tag: string; now: number }): KeyChange {
+function applyLocked(o: { home: string; signers: string; signer: string; announced: string[]; revoke: string[]; tag: string; now: number; viaCert?: boolean }): KeyChange {
   const out: KeyChange = { added: [], revoked: [], waiting: [], refused: [] };
   let lines = fs.readFileSync(o.signers, 'utf8').split('\n').filter((l) => l.trim());
   const revoked = new Set(readRevoked(o.home));
@@ -350,14 +376,23 @@ function applyLocked(o: { home: string; signers: string; signer: string; announc
   const signerAt = at(o.signer);
   if (signerAt < 0) return out; // only a pinned key's release says anything
 
+  const weekly = new Set(readWeeklyRevoked(o.home));
+  const weeklyBefore = weekly.size;
   for (const r of o.revoke) {
     if (revoked.has(r)) continue;
     const waiting = state.pending.find((p) => p.key === r);
+    // A key never pinned nor waiting is a weekly key's, or nobody's: any
+    // pinned key's release may revoke it, for certificates only.
+    if (at(r) < 0 && !waiting) {
+      if (!weekly.has(r)) {
+        weekly.add(r);
+        out.revoked.push(r);
+      }
+      continue;
+    }
     // Itself, or a key pinned after it; one still waiting, by the key that
-    // announced it or a later one.
-    // A key never pinned nor waiting is a weekly key's (above), or nobody's:
-    // any pinned key's release may revoke it.
-    const may = r === o.signer || (at(r) >= 0 ? signerAt > at(r) : waiting ? at(waiting.by) >= 0 && signerAt >= at(waiting.by) : true);
+    // announced it or a later one. Never by a weekly key's release.
+    const may = !o.viaCert && (r === o.signer || (at(r) >= 0 ? signerAt > at(r) : waiting ? at(waiting.by) >= 0 && signerAt >= at(waiting.by) : false));
     if (!may) {
       if (at(r) >= 0 || waiting) out.refused.push(r);
       continue;
@@ -371,7 +406,7 @@ function applyLocked(o: { home: string; signers: string; signer: string; announc
 
   // The principal of the first real key line (a comment above it isn't one).
   const principal = lines.find((l) => keyOf(l))?.trim().split(/\s+/)[0] || 'threadbear-releases';
-  for (const a of o.announced) {
+  for (const a of o.viaCert ? [] : o.announced) {
     if (revoked.has(a) || pinnedNow(a) || state.pending.some((p) => p.key === a)) continue;
     if (revoked.has(o.signer)) continue;
     state.pending.push({ key: a, by: o.signer, seenAt: o.now, tag: o.tag });
@@ -392,5 +427,6 @@ function applyLocked(o: { home: string; signers: string; signer: string; announc
   writeAtomic(o.signers, lines.join('\n') + '\n');
   writeAtomic(revokedPath(o.home), [...revoked].join('\n') + (revoked.size ? '\n' : ''));
   writeAtomic(keyStatePath(o.home), JSON.stringify(state, null, 2) + '\n');
+  if (weekly.size !== weeklyBefore) writeAtomic(weeklyRevokedPath(o.home), [...weekly].join('\n') + '\n');
   return out;
 }

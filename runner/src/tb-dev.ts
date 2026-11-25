@@ -123,6 +123,9 @@ export async function runDev(client: RunnerClient, cmd: string, args: string[], 
           return 1;
         }
         if (f.json) return printJson(p);
+        const wk = p.upstream.weeklyKey;
+        if (wk?.error) process.stdout.write(`The weekly signing key wasn't renewed: ${wk.error}.\n`);
+        else if (wk?.until) process.stdout.write(`The weekly signing key is good until ${new Date(wk.until).toLocaleString()}.\n`);
         if (p.tag) process.stdout.write(`Tagged and pushed ${p.tag}.\n`);
         else if (p.upstream.held) process.stdout.write(`No release: ${p.upstream.held.why} (main at ${p.upstream.held.commit.slice(0, 9)}).\n`);
         else if (p.upstream.published) process.stdout.write(`Nothing new to release: the last one is ${p.upstream.published.tag}.\n`);

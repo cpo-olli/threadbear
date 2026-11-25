@@ -13,7 +13,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DELEGATE_DAYS, keyOf, parseCert, type ReleaseCert, withAuthorities } from './release-keys.ts';
+import { DELEGATE_DAYS, keyOf, keysIn, parseCert, type ReleaseCert, withAuthorities } from './release-keys.ts';
 
 export const RENEW_AHEAD_MS = 3 * 24 * 60 * 60_000;
 export const REMIND_AHEAD_MS = 36 * 60 * 60_000;
@@ -39,6 +39,24 @@ export function currentCert(home: string): ReleaseCert | undefined {
   }
 }
 
+// The weekly key's certificate if it's fit to sign with: its key file is
+// the one it certifies (two runners renewing at once, or a crash between
+// the renames, could leave them apart), the release key made it (not one
+// from before a change of signingKey), and it isn't revoked in `revoked`
+// (release-keys-revoked's text at main). Undefined otherwise, which
+// counts as no key at all: renewed when Mike's next at the Mac.
+export function usableCert(home: string, signingKey: string, revoked: string): ReleaseCert | undefined {
+  const c = currentCert(home);
+  if (!c) return undefined;
+  try {
+    if (keyOf(fs.readFileSync(`${delegatePaths(home).key}.pub`, 'utf8')) !== c.key) return undefined;
+    if (keyOf(fs.readFileSync(signingKey.endsWith('.pub') ? signingKey : `${signingKey}.pub`, 'utf8')) !== c.ca) return undefined;
+  } catch {
+    return undefined;
+  }
+  return keysIn(revoked).includes(c.key) ? undefined : c;
+}
+
 type DelegateState = { remindThread?: string };
 
 export function readDelegateState(home: string): DelegateState {
@@ -58,15 +76,28 @@ export function writeDelegateState(home: string, s: DelegateState): void {
 
 export type Run = (cmd: string, args: string[], opts?: { env?: Record<string, string>; timeoutMs?: number; input?: Buffer }) => Promise<{ code: number; stdout: string; stderr: string }>;
 
+// In its own process group, so a deadline also stops what it started
+// (ssh-sk-helper, and the Touch ID prompt with it).
 export const runCommand: Run = (cmd, args, opts = {}) =>
   new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...opts.env }, timeout: opts.timeoutMs ?? 60_000 });
+    const group = process.platform !== 'win32';
+    const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...opts.env }, detached: group });
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        if (group && child.pid) process.kill(-child.pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch {
+        // already gone
+      }
+    }, opts.timeoutMs ?? 60_000);
     child.stdout.setEncoding('utf8').on('data', (d: string) => (stdout += d));
     child.stderr.setEncoding('utf8').on('data', (d: string) => (stderr += d));
-    child.on('error', (e) => reject(new Error(`${cmd} could not run: ${e.message}`)));
-    child.on('close', (code, signal) => resolve({ code: code ?? (signal ? 124 : 1), stdout, stderr }));
+    child.on('error', (e) => (clearTimeout(timer), reject(new Error(`${cmd} could not run: ${e.message}`))));
+    child.on('close', (code) => (clearTimeout(timer), resolve({ code: timedOut ? 124 : (code ?? 1), stdout, stderr })));
     child.stdin.on('error', () => undefined);
     child.stdin.end(opts.input ?? Buffer.alloc(0));
   });
