@@ -2632,14 +2632,12 @@ Mac app. This part is for a Mac that already has the old one.
 
 The Mac app is being replaced by a new desktop app that looks and works the
 same and runs on Windows and Linux too. The Mac app is frozen now: it no
-longer gets new features, and everything new goes into the new app. There's
-no date yet for when it stops being updated; once there is, the window and
-the card below say it too.
+longer gets new features, everything new goes into the new app, and it stops
+being updated on 2 December 2026, when its code leaves the repo.
 
-The Mac app tells you about it once when it starts, in a window with Not now
-and Start using the new app, and keeps a card at the top of the sidebar until
-you start or press Later (which hides it for a week); the card's Start using
-it brings the window back. Start using the new app starts a thread, "Switch
+The Mac app tells you about it each time it starts, in a window with Close
+and Start using the new app, and keeps a card at the top of the sidebar; the
+card's Start using it brings the window back. Start using the new app starts a thread, "Switch
 to the new Threadbear app", in your checkout, and the window closes once it's
 made. The card then shows that thread, what it's doing and Open the thread.
 The thread builds the new app on your Mac from your checkout's `main` with

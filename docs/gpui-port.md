@@ -388,7 +388,9 @@ itself doesn't draw everything that way yet.
 ## Deleting the Swift app
 
 Not before 26 Nov 2026 (two weeks of daily use from 12 Nov), and only when
-Mike says go. Nothing outside `app/` and `dock/` uses them but what
+Mike says go. He said go on 25 Nov 2026, for **2 Dec 2026**: the last Swift
+build that moves people across (below) went out first, saying the app stops
+being updated that day, so forks get a week with it. Nothing outside `app/` and `dock/` uses them but what
 `runner/test/unit/swift-app-paths.test.ts` allows, so the deletion is one
 change.
 
@@ -397,14 +399,18 @@ change.
 - The Mac rows that don't pass yet in [PARITY.md](gpui-port/PARITY.md):
   `dock.titlebar`, `dock.frame`, `sidebar.hibernate.pick`,
   `terminal.panel`, `terminal.putcommand` and `composer.contextring`
-  (partly). Each passes, or Mike drops it.
+  (partly). Each passes, or Mike drops it. On 25 Nov he counted
+  `dock.titlebar`, `dock.frame` and `sidebar.hibernate.pick` as checked by
+  his daily use (their specs are `@manual`, so no run fills them in); the
+  terminal two and the context ring have to pass.
 - People on forks are moved across. Today the Swift app offers it
   (`app/Sources/Threadbear/NewApp.swift`: a window once and a sidebar card,
   whose button starts a thread in the checkout that runs
   `desktop/scripts/switch-from-swift.sh`), and a fork only sees that after
   bringing in a release with it and its Swift app rebuilding itself. A
-  last Swift build that moves people needs: the offer made unmissable (no
-  Not now; the date the Swift app stops, `NewAppCopy.retirementDate`), the
+  last Swift build that moves people needs: the offer made unmissable (done
+  25 Nov: the window at every launch with Close rather than Not now, no Later
+  on the card, and `NewAppCopy.retirementDate` 2 December), the
   release that deletes `app/` held back until forks have had that one, and
   `swift_import.rs` still bringing their settings over. A fork that brings
   in the deletion while still on the Swift app keeps its installed app,
