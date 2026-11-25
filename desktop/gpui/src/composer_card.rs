@@ -136,6 +136,22 @@ impl Composer {
         threadbear_core::sidebar::work_wait_row(thread, &threadbear_core::chrono::Local::now())
     }
 
+    /// The done card's title: Done, or what it's waiting on with a spinner.
+    /// A long thread title ends in "…" short of Archive, the whole of it in
+    /// the tip (25 Nov: one ran on under the button).
+    fn done_heading(&self, tick: AnyElement, cx: &App) -> AnyElement {
+        match self.waiting_on_work(cx) {
+            Some((words, tip)) => h_flex()
+                .id("waiting-on-work")
+                .flex_1()
+                .min_w_0()
+                .child(card_title(self.waiting_spinner(cx), 4., words, cx))
+                .tip(tip)
+                .into_any_element(),
+            None => card_title(tick, 2.5, "Done", cx).into_any_element(),
+        }
+    }
+
     fn waiting_spinner(&self, cx: &App) -> AnyElement {
         crate::spinner::Spinner::new()
             .with_size(px(13.))
@@ -780,17 +796,13 @@ impl Composer {
         // from, or the app restarting onto what it landed): what for, with a
         // spinner, as it hasn't finished (19 Nov: one waiting to land read
         // Done and was archived with nothing landed).
-        let heading = match self.waiting_on_work(cx) {
-            Some((words, _)) => {
-                card_title(self.waiting_spinner(cx), 4., words, cx).into_any_element()
-            }
-            None => card_title(tick, 2.5, "Done", cx).into_any_element(),
-        };
+        let heading = self.done_heading(tick, cx);
         column = column.child(
             h_flex()
                 .w_full()
                 .h(px(metrics::PAGED_HEADING))
                 .justify_between()
+                .gap(px(8.))
                 .child(heading)
                 .child(
                     card_button(
@@ -2526,13 +2538,17 @@ fn card_title(
     cx: &App,
 ) -> impl IntoElement {
     let words: SharedString = words.into();
+    // Shrinks to an ellipsis rather than running under the buttons beside it.
     h_flex()
-        .flex_none()
+        .flex_1()
+        .min_w_0()
         .items_center()
         .gap(px(gap))
         .child(mark)
         .child(
             div()
+                .min_w_0()
+                .truncate()
                 .relative()
                 .top(px(0.75))
                 .text_size(px(style::size::CARD_TITLE))
