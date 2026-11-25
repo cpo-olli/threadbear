@@ -24,6 +24,19 @@ function setup(home = tmpDir(), enabled = () => true) {
   return { h, projects, c, project, home };
 }
 
+function recoverFresh(h: ReturnType<typeof setup>['h'], home: string) {
+  const clock = new FakeClock(h.clock.now());
+  const projects = new Projects({ home, clock, log: nullLogger });
+  const adapter = new FakeAdapter();
+  const host = new Runner({ config: h.cfg, store: new ThreadStore(home), adapters: { claude: adapter }, accounts: new FakeAccounts(withCodex()), clock, log: nullLogger, projects, defer: (fn) => fn(), backgroundJobs: false, reachable: async () => true, panelsRoot: home });
+  projects.start(host);
+  const replacement = new Coordinators({ home, host, projects, clock, enabled: () => true, log: nullLogger });
+  host.coordinators = replacement;
+  host.start();
+  replacement.start();
+  return { host, adapter, c: replacement };
+}
+
 test('a coordinator is one real thread per project, starts with shared notes and retains pool selection', async () => {
   const { h, c, project, projects } = setup();
   projects.update(project.id, { notes: 'Use the oldest food first.' });
@@ -367,18 +380,66 @@ test('acknowledged project events survive recovery by a fresh runner before thei
   assert.equal(c.forThread(coordinator.threadId)!.events.length, 0);
   assert.ok(h.runner.threads.get(coordinator.threadId)!.rec.queue.some((q) => q.text.includes('Durable project event')));
   c.stop();
-  const clock = new FakeClock(h.clock.now());
-  const projects = new Projects({ home, clock, log: nullLogger });
-  const adapter = new FakeAdapter();
-  const host = new Runner({ config: h.cfg, store: new ThreadStore(home), adapters: { claude: adapter }, accounts: new FakeAccounts(withCodex()), clock, log: nullLogger, projects, defer: (fn) => fn(), backgroundJobs: false, reachable: async () => true, panelsRoot: home });
-  projects.start(host);
-  const replacement = new Coordinators({ home, host, projects, clock, enabled: () => true, log: nullLogger });
-  host.coordinators = replacement;
-  host.start();
-  replacement.start();
+  const { adapter, c: replacement } = recoverFresh(h, home);
   await tick();
   assert.ok(adapter.sessions.some((s) => s.sent.some((m) => m.text.includes('Durable project event'))), 'recovery dispatches the queued event instead of turning it into a note');
   replacement.stop();
+});
+
+test('a fresh runner does not replay a started update left in a stale queue snapshot', async () => {
+  const { c, h, project, home } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  c.forThread(coordinator.threadId)!.events.push({ key: 'stale', text: 'Already delivered update' });
+  c.update(project.id, { wakeAt: new Date(h.clock.now() + 60_000).toISOString() });
+  h.clock.advance(60_000);
+  const stale = structuredClone(h.runner.threads.get(coordinator.threadId)!.rec);
+  assert.ok(stale.queue.some((q) => q.text.includes('Already delivered update')));
+  h.adapter.sessions.at(-1)!.result('completed');
+  await tick();
+  assert.ok(h.events(coordinator.threadId).some((e) => e.type === 'user.message' && e.text.includes('Already delivered update')));
+  h.runner.store.save(stale);
+  c.stop();
+  const fresh = recoverFresh(h, home);
+  await tick();
+  assert.ok(fresh.host.threads.get(coordinator.threadId)!.rec.queue.every((q) => !q.text.includes('Already delivered update')));
+  assert.ok(fresh.adapter.sessions.every((s) => s.sent.every((m) => !m.text.includes('Already delivered update'))));
+  fresh.c.stop();
+});
+
+test('project removal cannot race a slow Pause and its pending Resume', async () => {
+  const { c, h, projects, project } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  const session = h.adapter.sessions.at(-1)!;
+  session.slowExit = true;
+  const pause = c.pause(project.id, true);
+  const resume = c.pause(project.id, false);
+  assert.throws(() => projects.delete(project.id), /still stopping/);
+  assert.throws(() => h.runner.delete(coordinator.threadId), /still stopping/);
+  session.exit();
+  await Promise.all([pause, resume]);
+  assert.equal(c.get(project.id).state, 'active');
+  assert.equal(h.runner.get(coordinator.threadId).coordinatorProjectId, project.id);
+  assert.equal(h.runner.get(coordinator.threadId).archivedAt, undefined);
+  c.stop();
+});
+
+test('removal keeps restrictions until the archived conversation has saved durably', async () => {
+  const { c, h, projects, project, home } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  await c.pause(project.id, true);
+  const save = h.runner.store.save.bind(h.runner.store);
+  h.runner.store.save = () => { throw Error('Disk unavailable'); };
+  assert.throws(() => projects.delete(project.id), /Disk unavailable/);
+  assert.equal(c.get(project.id).state, 'paused');
+  assert.equal(projects.get(project.id).project.id, project.id);
+  h.runner.store.save = save;
+  projects.delete(project.id);
+  assert.equal(c.list().length, 0);
+  assert.ok(new ThreadStore(home).loadAll().records.find((r) => r.id === coordinator.threadId)?.archivedAt);
+  c.stop();
 });
 
 test('project deletion and merge require the coordinator stopped, then archive its conversation and work', async () => {

@@ -189,6 +189,7 @@ export class Coordinators {
     // It cannot reuse that closing CLI or re-enable its tool callbacks.
     const stopping = this.stoppingSessions.get(projectId);
     if (stopping) await stopping;
+    if (this.rows.get(projectId) !== row || this.stopped || !this.deps.enabled()) throw bad('This coordinator changed while it was stopping. Open the project home again.');
     row.state = paused ? 'paused' : 'active';
     this.timers.get(projectId)?.cancel(); this.timers.delete(projectId);
     this.timerAt.delete(projectId);
@@ -281,7 +282,13 @@ export class Coordinators {
   forget(threadId: string): void {
     const row = this.forThread(threadId);
     if (!row) return;
-    if (row.state === 'active') throw bad('Pause this project’s coordinator before deleting its conversation.');
+    this.requireStopped(row);
+    const st = this.deps.host.threads.get(threadId);
+    if (st) {
+      this.deps.host.update({ threadId, archived: true });
+      // Archive is durable before its execution restrictions are removed.
+      this.deps.host.store.save(st.rec);
+    }
     fs.appendFileSync(path.join(this.deps.home, 'coordinator-history.jsonl'), JSON.stringify({ coordinator: row, removedAt: this.now() }) + '\n', { mode: 0o600 });
     this.rows.delete(row.projectId); this.save();
     this.deps.host.publish({ method: 'coordinators.updated', params: { coordinators: this.list() } });
@@ -290,9 +297,13 @@ export class Coordinators {
   removeProject(projectId: string): void {
     const row = this.rows.get(projectId);
     if (!row) return;
-    if (row.state === 'active') throw bad('Pause this project’s coordinator before deleting or merging the project.');
-    if (this.deps.host.threads.has(row.threadId)) this.deps.host.update({ threadId: row.threadId, archived: true });
+    this.requireStopped(row);
     this.forget(row.threadId);
+  }
+
+  private requireStopped(row: Coordinator): void {
+    if (row.state === 'active') throw bad('Pause this project’s coordinator before deleting its conversation, deleting or merging the project.');
+    if (this.stoppingSessions.has(row.projectId) || this.deps.host.threads.get(row.threadId)?.rt.session) throw bad('This coordinator is still stopping. Wait for Pause to finish before removing it.');
   }
 
   session(threadId: string): NativeBoundary | undefined {

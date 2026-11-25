@@ -1430,9 +1430,11 @@ export class Runner {
       this.markDirty(st);
       return false;
     }
-    const durable = (q: QueuedSend) => q.reviewId || (this.coordinators?.forThread(rec.id) && q.origin === 'runner');
-    const reviewQueue = rec.queue.filter(durable);
-    rec.queue = rec.queue.filter(q => !durable(q));
+    const coordinatorInput = (q: QueuedSend) => Boolean(this.coordinators?.forThread(rec.id) && q.origin === 'runner');
+    const reviewQueue = rec.queue.filter(q => q.reviewId || (coordinatorInput(q) && !this.scheduledDelivery(st, q.turnId, 0, 'runner')?.started));
+    // A stale thread.json may still hold an input whose receipt is already
+    // in the log. It was delivered; neither replay it nor call it unsent.
+    rec.queue = rec.queue.filter(q => !q.reviewId && !coordinatorInput(q));
     if (rec.queue.length) {
       const texts = rec.queue.map((q) => q.text).filter(Boolean);
       this.emit(st, {
