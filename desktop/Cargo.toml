@@ -93,6 +93,12 @@ gpui-pre = { path = "vendor/gpui-pre" }
 # And a scroll with no gesture phase or momentum is ScrollSource::Wheel
 # (events.rs): Mike's Razer wheel reports pixels, so it looked like a trackpad.
 gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
+# gpui-pre-windows 0.3.11 as published (its first commit under vendor/), except
+# that the pointer leaving the window is a move to where it went and then
+# MouseExited (events.rs, `pointer_left_to`). Upstream only cleared the
+# window's hovered flag, so a row's hover buttons and its tooltip stayed up
+# after the pointer went off the window onto the desktop (Mike's XPS, 25 Nov).
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 
 # Scripted screenshots run in debug apps, often at background priority. An
 # unoptimized PNG encode stalled the app for 30 seconds (14 Nov). Optimize
