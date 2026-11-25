@@ -5,6 +5,24 @@ import type { ThreadbearWorld } from '../support/world.ts';
 type Coordinator = { on: boolean; thread: string | null; tab: string; state: string | null; tasks: { title: string; state: string }[] | null; documentShown: boolean; editing: { draft: string; reviewCurrent: string | null } | null; document: { state: string; notes: string } | null };
 const coordinator = (d: unknown) => (d as { coordinator?: Coordinator }).coordinator;
 
+Then('the coordinator experiment is {string}', async function (this: ThreadbearWorld, state: string) {
+  await this.until(`coordinator experiment ${state}`, (d) => coordinator(d)?.on === (state === 'on'));
+});
+
+Then('the project hides its Add coordinator control', async function (this: ThreadbearWorld) {
+  const labels = JSON.parse(await this.app.do({ cmd: 'labels' })) as { label: string }[];
+  assert.equal(labels.some((control) => control.label === "Add a coordinator that keeps this project's notes and work current"), false);
+});
+
+Then('the project offers its Add coordinator control', async function (this: ThreadbearWorld) {
+  const labels = JSON.parse(await this.app.do({ cmd: 'labels' })) as { label: string }[];
+  assert.equal(labels.some((control) => control.label === "Add a coordinator that keeps this project's notes and work current"), true);
+});
+
+When('the coordinator setting is restored without a notification', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'mock', method: 'coordinatorExperiment', params: { on: true, notify: false } });
+});
+
 When("I add the project's coordinator", async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'click', tip: "Add a coordinator that keeps this project's notes and work current" });
   await this.app.do({ cmd: 'click', tip: "Start this project's coordinator using the chosen pool and model" });

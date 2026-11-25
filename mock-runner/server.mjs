@@ -362,6 +362,9 @@ const settings = {
     privateFolders: ['~/dev/clients/acme'],
   },
 };
+if (process.env.TB_MOCK_COORDINATORS) {
+  settings.experiments = [{ id: 'coordinators', name: 'Project coordinators', does: 'Keep a project moving with a coordinator and helpers.', on: true }];
+}
 if (process.env.TB_MOCK_REVIEWERS) {
   settings.labReviewers = [{ provider: 'codex', effort: 'high' }, { provider: 'grok', model: 'grok-4.7', effort: 'high' }, { provider: 'claude', effort: 'high' }];
   settings.labPanel = [{ provider: 'codex', effort: 'high' }, { provider: 'opencode', model: 'google/gemini-4-neon', effort: 'high' }];
@@ -955,7 +958,10 @@ async function handle(client, { id, method, params = {} }) {
 }
 
 async function dispatch(client, method, p) {
-  if (coordinatorRequest && (method.startsWith('coordinators.') || ['mock.coordinatorFinish', 'mock.coordinatorVerify', 'mock.coordinatorNotesChanged'].includes(method))) return coordinatorRequest(method, p);
+  if (coordinatorRequest && (method.startsWith('coordinators.') || ['mock.coordinatorFinish', 'mock.coordinatorVerify', 'mock.coordinatorNotesChanged'].includes(method))) {
+    if (method.startsWith('coordinators.') && !settings.experiments.find((e) => e.id === 'coordinators')?.on) throw rpcError(-32602, 'The coordinator experiment is off.');
+    return coordinatorRequest(method, p);
+  }
   switch (method) {
     case 'hello':
       // The Mac mini has two logins of its own and no pools, as the real one does,
@@ -2107,6 +2113,11 @@ async function dispatch(client, method, p) {
     case 'settings.get':
       return { settings };
     case 'settings.update': {
+      for (const [id, on] of Object.entries(p.experiments ?? {})) {
+        const experiment = settings.experiments?.find((e) => e.id === id);
+        if (!experiment || typeof on !== 'boolean') throw rpcError(-32602, 'Choose an existing experiment and an on or off value.');
+        experiment.on = on;
+      }
       if (p.defaultCwd !== undefined) {
         if (typeof p.defaultCwd !== 'string' || !p.defaultCwd.trim()) throw rpcError(-32602, 'defaultCwd must be a folder');
         settings.defaultCwd = p.defaultCwd;
@@ -2527,6 +2538,13 @@ async function dispatch(client, method, p) {
       return { ok: true };
     case 'mock.restart':
       return restartNow(p);
+    case 'mock.coordinatorExperiment': {
+      const experiment = settings.experiments?.find((e) => e.id === 'coordinators');
+      if (!experiment) throw rpcError(-32601, 'The coordinator fixture is off.');
+      experiment.on = Boolean(p.on);
+      if (p.notify !== false) broadcastSettings();
+      return {};
+    }
     // The runner going away with no notice first (it crashed, or was
     // stopped): the apps say they can't reach it, rather than "restarting".
     case 'mock.goAway':

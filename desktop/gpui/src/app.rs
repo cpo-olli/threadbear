@@ -1193,7 +1193,10 @@ impl Threadbear {
                     ))
                 }
                 "recipes.updated" => self.load_recipes(cx),
-                "settings.updated" => self.runner_settings = Some(params["settings"].clone()),
+                "settings.updated" => {
+                    self.runner_settings = Some(params["settings"].clone());
+                    self.load_coordinators(cx);
+                }
                 // A login appearing or going, its models once asked, its
                 // usage; and the pools after a save: both replace `hello`'s.
                 "accounts.updated" => {
@@ -1520,6 +1523,7 @@ impl Threadbear {
                     Ok(v) => {
                         this.runner_settings = Some(v["settings"].clone());
                         this.settings_unsupported = false;
+                        this.load_coordinators(cx);
                     }
                     // A runner from before settings.
                     Err(e) if e.code == -32601 => {
@@ -1553,6 +1557,7 @@ impl Threadbear {
                     Ok(v) => {
                         this.runner_settings = Some(v["settings"].clone());
                         this.settings_error = None;
+                        this.load_coordinators(cx);
                     }
                     Err(e) => {
                         // Put back only if nothing newer has come since

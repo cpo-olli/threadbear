@@ -11,6 +11,34 @@ Feature: Project coordinators
     Then the ordinary Done card has its Archive button
 
   @coordinators.home @coordinators @swift-pending
+  Scenario: The coordinator experiment switch updates the open app
+    When I open the project "Threadbear"
+    Then the coordinator's "Conversation" tab is open
+    When I open Settings on "general"
+    And I press "Turn Project coordinators off" in Settings
+    Then the coordinator experiment is "off"
+    When I open the project "Photo sync"
+    Then the project hides its Add coordinator control
+    When I press "Try Project coordinators" in Settings
+    Then the coordinator experiment is "on"
+    And the project offers its Add coordinator control
+    When I open the project "Threadbear"
+    Then the coordinator's "Conversation" tab is open
+    And the coordinator's document contains "Two helpers are working"
+
+  @coordinators.home @coordinators @swift-pending
+  Scenario: Reconnecting refreshes a cached experiment setting before restoring the home
+    When I open Settings on "general"
+    And I press "Turn Project coordinators off" in Settings
+    Then the coordinator experiment is "off"
+    When the coordinator setting is restored without a notification
+    And the runner restarts
+    Then the app is connected again
+    When I open the project "Threadbear"
+    Then the coordinator's "Conversation" tab is open
+    And the coordinator's document contains "Two helpers are working"
+
+  @coordinators.home @coordinators @swift-pending
   Scenario: A project can add its coordinator using the ordinary model controls
     When I open the project "Photo sync"
     And I add the project's coordinator

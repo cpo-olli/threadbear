@@ -55,7 +55,7 @@ pub(crate) struct CoordinatorsState {
 
 impl Threadbear {
     pub(crate) fn coordinators_on(&self) -> bool {
-        self.remote.experiments.iter().any(|e| e == "coordinators")
+        self.experiment_on("coordinators")
     }
 
     pub(crate) fn coordinator_for_project(&self, id: &str) -> Option<&Coordinator> {
@@ -73,6 +73,9 @@ impl Threadbear {
 
     pub(crate) fn load_coordinators(&mut self, cx: &mut Context<Self>) {
         if !self.coordinators_on() {
+            if self.coordinators.setup.is_some() {
+                self.close_coordinator_setup(cx);
+            }
             self.receive_coordinators(&json!([]));
             return;
         }
