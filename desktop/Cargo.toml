@@ -100,6 +100,10 @@ gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 # window's hovered flag, so a row's hover buttons and its tooltip stayed up
 # after the pointer went off the window onto the desktop (Mike's XPS, 25 Nov).
 gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
+# gpui-pre-apple 0.3.11 as published, except that the Metal display link asks
+# for the screen's full frame rate (display_link.rs). By default it drew at 60 on
+# Mike's 120 Hz MacBook screen, and scrolling looked juddery (25 Nov).
+gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
 
 # Scripted screenshots run in debug apps, often at background priority. An
 # unoptimized PNG encode stalled the app for 30 seconds (14 Nov). Optimize
