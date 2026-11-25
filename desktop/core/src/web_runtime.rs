@@ -1345,7 +1345,7 @@ mod tests {
         assert_eq!(State::Missing.words(), "Not installed");
         let s = State::Downloading {
             received: 45_200_000,
-            total: 134_979_837,
+            total: 134_916_866,
         };
         assert_eq!(s.words(), "Downloading, 45 of 135 MB");
         assert_eq!(s.percent(), Some(33));
