@@ -28,6 +28,7 @@
 // Mike's rotation, then: add the new key to scripts/release-signers and let
 // a release signed with the old key carry it; after the wait, sign with the
 // new key; then list the old key in scripts/release-keys-revoked.
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -105,7 +106,18 @@ export function signerKey(armor: string): string | undefined {
 export const CERT_TYPE = 'ssh-ed25519-cert-v01@openssh.com';
 export const DELEGATE_DAYS = 8;
 
-export type ReleaseCert = { key: string; ca: string; principals: string[]; validAfter: number; validBefore: number };
+export type ReleaseCert = { key: string; ca: string; principals: string[]; validAfter: number; validBefore: number; keys?: string };
+
+// The certificate extension that carries keyFilesHash: the release key
+// vouches, with its one touch, for the key files every release the weekly
+// key signs must have (Codex's review, 25 Nov 2026). So a weekly key can't
+// announce or revoke a key, and each release it signs carries the whole
+// list, so a fork that was away takes every change from the next one.
+export const KEYS_EXTENSION = 'threadbear-keys@threadbear';
+
+export function keyFilesHash(signers: string, revoked: string): string {
+  return createHash('sha256').update(signers).update('\0').update(revoked).digest('hex');
+}
 
 // An ed25519 certificate's fields (PROTOCOL.certkeys), times in ms, or
 // undefined for anything else (only the runner's own kind is read).
@@ -147,13 +159,24 @@ export function parseCert(blob: Buffer): ReleaseCert | undefined {
     const validAfter = ms(u64());
     const validBefore = ms(u64());
     str(); // critical options
-    str(); // extensions
+    const exts = str();
+    let keys: string | undefined;
+    for (let i = 0; i + 4 <= exts.length; ) {
+      const n = exts.readUInt32BE(i);
+      const name = exts.subarray(i + 4, i + 4 + n).toString('latin1');
+      i += 4 + n;
+      const m = exts.readUInt32BE(i);
+      const data = exts.subarray(i + 4, i + 4 + m);
+      i += 4 + m;
+      // Its value is itself a string inside the data.
+      if (name === KEYS_EXTENSION && data.length >= 4) keys = data.subarray(4, 4 + data.readUInt32BE(0)).toString('latin1');
+    }
     str(); // reserved
     const caBlob = str();
     const caType = caBlob.subarray(4, 4 + caBlob.readUInt32BE(0)).toString('latin1');
     if (!KEY_TYPE.test(caType)) return undefined;
     const plain = Buffer.concat([Buffer.from([0, 0, 0, 11]), Buffer.from('ssh-ed25519', 'latin1'), Buffer.from([0, 0, 0, 32]), pk]);
-    return { key: `ssh-ed25519 ${plain.toString('base64')}`, ca: `${caType} ${caBlob.toString('base64')}`, principals, validAfter, validBefore };
+    return { key: `ssh-ed25519 ${plain.toString('base64')}`, ca: `${caType} ${caBlob.toString('base64')}`, principals, validAfter, validBefore, ...(keys ? { keys } : {}) };
   } catch {
     return undefined;
   }
@@ -211,6 +234,8 @@ export function certVerifyArgs(name: string, date: string | undefined, now = Dat
   const day = /^release\/(\d{4})-(\d{2})-(\d{2})$/.exec(name);
   const t = date ? Date.parse(date) : NaN;
   if (!day || !Number.isFinite(t) || t > now + 3_600_000) return undefined;
+  // Nor a name after UTC's today, even in its last hour (Codex's review).
+  if (`${day[1]}-${day[2]}-${day[3]}` > new Date(now).toISOString().slice(0, 10)) return undefined;
   // The UTC day, exactly: with time zones' slack a key could name
   // tomorrow's release today and shut out today's (Codex's review). Mike's
   // runner signs with the weekly key only when its local day is UTC's.
@@ -349,15 +374,15 @@ function withKeyLock<T>(home: string, fn: () => T): T {
 // Applies what a verified release's commit says about the keys (above).
 // `signer` is the key that signed that release, `announced` the keys in its
 // release-signers, `revoke` those in its release-keys-revoked.
-// viaCert: the release was signed by a weekly key (its certificate's
-// authority is `signer`). Such a release can only revoke weekly keys: a
-// weekly key that leaked mustn't announce a key of its own or revoke a
-// pinned one, as that would outlast its week.
-export function applyKeyChanges(o: { home: string; signers: string; signer: string; announced: string[]; revoke: string[]; tag: string; now: number; viaCert?: boolean }): KeyChange {
+// A weekly key's release counts as its authority's (signerKey): the key
+// files it changes are the ones that key vouched for (KEYS_EXTENSION).
+// onlyRevoke: from an older release than the newest, read for its
+// revocations alone.
+export function applyKeyChanges(o: { home: string; signers: string; signer: string; announced: string[]; revoke: string[]; tag: string; now: number; onlyRevoke?: boolean }): KeyChange {
   return withKeyLock(o.home, () => applyLocked(o));
 }
 
-function applyLocked(o: { home: string; signers: string; signer: string; announced: string[]; revoke: string[]; tag: string; now: number; viaCert?: boolean }): KeyChange {
+function applyLocked(o: { home: string; signers: string; signer: string; announced: string[]; revoke: string[]; tag: string; now: number; onlyRevoke?: boolean }): KeyChange {
   const out: KeyChange = { added: [], revoked: [], waiting: [], refused: [] };
   let lines = fs.readFileSync(o.signers, 'utf8').split('\n').filter((l) => l.trim());
   const revoked = new Set(readRevoked(o.home));
@@ -390,8 +415,8 @@ function applyLocked(o: { home: string; signers: string; signer: string; announc
       continue;
     }
     // Itself, or a key pinned after it; one still waiting, by the key that
-    // announced it or a later one. Never by a weekly key's release.
-    const may = !o.viaCert && (r === o.signer || (at(r) >= 0 ? signerAt > at(r) : waiting ? at(waiting.by) >= 0 && signerAt >= at(waiting.by) : false));
+    // announced it or a later one.
+    const may = (r === o.signer || (at(r) >= 0 ? signerAt > at(r) : waiting ? at(waiting.by) >= 0 && signerAt >= at(waiting.by) : false));
     if (!may) {
       if (at(r) >= 0 || waiting) out.refused.push(r);
       continue;
@@ -405,7 +430,7 @@ function applyLocked(o: { home: string; signers: string; signer: string; announc
 
   // The principal of the first real key line (a comment above it isn't one).
   const principal = lines.find((l) => keyOf(l))?.trim().split(/\s+/)[0] || 'threadbear-releases';
-  for (const a of o.viaCert ? [] : o.announced) {
+  for (const a of o.onlyRevoke ? [] : o.announced) {
     if (revoked.has(a) || pinnedNow(a) || state.pending.some((p) => p.key === a)) continue;
     if (revoked.has(o.signer)) continue;
     state.pending.push({ key: a, by: o.signer, seenAt: o.now, tag: o.tag });

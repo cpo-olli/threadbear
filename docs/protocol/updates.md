@@ -152,17 +152,21 @@ such a signature is checked at the tag's own tagger time
 (`-O verify-time`), which must fall on the UTC day the tag's name says
 and be no more than an hour ahead of the fork's clock, so the
 certificate's week bounds the names it can sign, and a leaked one can't
-name tomorrow's release today. A failure there isn't remembered, as it
-may pass later. A certificate for any key type but ed25519 is refused. A
-release signed by a weekly key never announces a key or revokes a pinned
-one; any release may revoke a key that was never pinned (a weekly key),
-which goes in `<home>/upstream-revoked-weekly` (ed25519 keys only) and is
-checked against the key a certificate certifies, never its authority. So
-a key change goes out in a release the release key signs itself, and
-Mike's runner signs those with it; while the newest release is a weekly
-key's, a fork also reads key changes from the newest release before it
-that the release key signed itself, so one offline that day still takes
-them.
+name tomorrow's release today (nor one after the fork's UTC day). A
+failure there isn't remembered, as it may pass later. A certificate for
+any key type but ed25519 is refused. The certificate carries, in its
+`threadbear-keys@threadbear` extension, the SHA-256 of the
+`scripts/release-signers` and `scripts/release-keys-revoked` its
+authority vouched for (with a NUL between them), and a release it signs
+counts only if its commit has exactly those: so a weekly key can't change
+which keys count, its release's key changes are its authority's, and each
+one carries the whole list, so a fork that was away takes every change
+from the next. Any release may revoke a key that was never pinned (a
+weekly key), which goes in `<home>/upstream-revoked-weekly` (ed25519 keys
+only) and is checked against the key a certificate certifies, never its
+authority. Revocations are read from every release a check fetched that
+verifies and is on upstream's main, not just the newest, so a newer
+release signed by a revoked key can't hide the one revoking it.
 `release.commit` is the commit
 the verified tag names, and that is what a bring-in merges. It never
 changes main: bringing a release in is a thread (docs/bringing-in-updates.md).
@@ -255,9 +259,8 @@ renewed starts a starred thread asking him to (its id in
 `release-delegate.json`, one at a time). The weekly key is used only once
 the last release's `runner/src/release-keys.ts` has the check that takes
 it, with an hour or more left, when its key file and the release key
-match its certificate, when it isn't in main's
-`scripts/release-keys-revoked`, and when the release doesn't change
-`scripts/release-signers` or `scripts/release-keys-revoked`, and when
+match its certificate, when it isn't revoked, and when it vouches for the
+release's key files (a key change needs a new one, with a touch), and when
 this Mac's day is UTC's (in Perth, from 8am; before then it waits);
 otherwise the release key signs, as before (and a key that doesn't fit is renewed
 next time). `tb updates publish` says until when the weekly key signs, or

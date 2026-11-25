@@ -6,22 +6,33 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FakeClock } from '../../src/clock.ts';
-import { applyKeyChanges, certVerifyArgs, keyStatePath, readRevoked, readWeeklyRevoked, revokedPath, signatureCert, signerKey, weeklyRevokedPath, withAuthorities } from '../../src/release-keys.ts';
+import { applyKeyChanges, certVerifyArgs, keyFilesHash, KEYS_EXTENSION, keyStatePath, readRevoked, readWeeklyRevoked, revokedPath, signatureCert, signerKey, weeklyRevokedPath, withAuthorities } from '../../src/release-keys.ts';
 import { currentCert, delegatePaths, readDelegateState, renewDelegate, usableCert } from '../../src/release-delegate.ts';
-import { SETTLE_MS, gitAsync, type GitOptions } from '../../src/upstream.ts';
+import { gitAsync, type GitOptions } from '../../src/upstream.ts';
 import { GIT_ENV, commit, git, key, pubOf, release, upstreamFor, world } from '../helpers/upstream-harness.ts';
 
 type World = ReturnType<typeof world>;
 
-// A weekly key certified by `ca` for Mike's principal, valid as `-V` says.
-function weekly(w: World, name: string, validity: string, ca = w.mikeKey.priv): { priv: string; cert: string; pub: string } {
+// The key files at Mike's HEAD, as a release there has them.
+function keyFiles(w: World): { signers: string; revoked: string } {
+  const show = (f: string) => spawnSync('git', ['-C', w.mike, 'show', `HEAD:${f}`], { encoding: 'utf8' });
+  const r = show('scripts/release-keys-revoked');
+  return { signers: show('scripts/release-signers').stdout, revoked: r.status === 0 ? r.stdout : '' };
+}
+
+// A weekly key certified by `ca` for Mike's principal, valid as `-V` says,
+// vouching for the key files at Mike's HEAD (or `files`).
+function weekly(w: World, name: string, validity: string, ca = w.mikeKey.priv, files = keyFiles(w)): { priv: string; cert: string; pub: string } {
   const priv = path.join(w.root, name);
   assert.equal(spawnSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', priv]).status, 0);
-  const r = spawnSync('ssh-keygen', ['-q', '-s', ca, '-I', name, '-n', 'mike@example.com', '-V', validity, `${priv}.pub`], { encoding: 'utf8' });
+  const ext = `extension:${KEYS_EXTENSION}=${keyFilesHash(files.signers, files.revoked)}`;
+  const r = spawnSync('ssh-keygen', ['-q', '-s', ca, '-I', name, '-n', 'mike@example.com', '-V', validity, '-O', 'clear', '-O', ext, `${priv}.pub`], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   return { priv, cert: `${priv}-cert.pub`, pub: fs.readFileSync(`${priv}.pub`, 'utf8').split(' ').slice(0, 2).join(' ') };
 }
 
+// Noon UTC (today's, or yesterday's if it's still ahead): not ahead of
+// forks' clocks, and a day that's the same here and in UTC.
 function noonUtc(): number {
   const d = new Date();
   const noon = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12);
@@ -31,9 +42,16 @@ function noonUtc(): number {
 const armorOf = (tag: string) => tag.slice(tag.indexOf('-----BEGIN SSH SIGNATURE-----')) + '\n';
 
 // A release tag signed with a weekly key's certificate, dated `date`.
-function certTag(repo: string, tag: string, cert: string, date: string): void {
-  const r = spawnSync('git', ['-C', repo, '-c', 'gpg.format=ssh', '-c', `user.signingkey=${cert}`, 'tag', '-s', '-m', `Threadbear ${tag}`, tag], { encoding: 'utf8', env: { ...GIT_ENV, GIT_COMMITTER_DATE: date, SSH_AUTH_SOCK: '' } });
+function certTag(repo: string, tag: string, cert: string, date: string, rev = 'HEAD'): void {
+  const r = spawnSync('git', ['-C', repo, '-c', 'gpg.format=ssh', '-c', `user.signingkey=${cert}`, 'tag', '-s', '-m', `Threadbear ${tag}`, tag, rev], { encoding: 'utf8', env: { ...GIT_ENV, GIT_COMMITTER_DATE: date, SSH_AUTH_SOCK: '' } });
   assert.equal(r.status, 0, r.stderr);
+}
+
+function commitFile(w: World, file: string, text: string, subject: string): string {
+  fs.writeFileSync(path.join(w.mike, file), text);
+  git(w.mike, 'add', file);
+  git(w.mike, 'commit', '-q', '-m', subject);
+  return git(w.mike, 'rev-parse', 'HEAD');
 }
 
 test('a fork takes a release signed by a weekly key its pinned key certified', async () => {
@@ -61,11 +79,21 @@ test("not when the tag's date is outside the certificate, or not the day its nam
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
   const s = await upstreamFor(w.theirs, w.home).check();
   assert.equal(s.release?.tag, 'release/2026-10-01');
-  assert.equal(certVerifyArgs('release/2026-11-21', '2026-11-01T10:00:00Z'), undefined);
-  assert.ok(certVerifyArgs('release/2026-11-21', '2026-11-21T00:00:00Z'));
-  assert.ok(certVerifyArgs('release/2026-11-21', '2026-11-21T23:59:59Z'));
-  assert.equal(certVerifyArgs('release/2026-11-21', '2026-11-20T23:00:00Z'), undefined, "UTC's day only: no naming tomorrow's today");
-  assert.equal(certVerifyArgs('release/2026-11-21', '2026-11-22T00:00:01Z'), undefined);
+});
+
+// Gemini's and Codex's reviews, 25 Nov 2026.
+test('certVerifyArgs: only a real UTC day, never ahead of now, never tomorrow', () => {
+  const now = Date.parse('2026-12-30T12:00:00Z');
+  assert.equal(certVerifyArgs('release/2027-00-05', '2026-12-05T12:00:00Z', now), undefined, 'month 00 is not December');
+  assert.equal(certVerifyArgs('release/2026-12-00', '2026-11-29T10:30:00Z', now), undefined, 'day 00 is not 30 Nov');
+  assert.equal(certVerifyArgs('release/2026-02-30', '2026-03-02T00:00:00Z', now), undefined);
+  assert.ok(certVerifyArgs('release/2026-12-29', '2026-12-29T00:00:00Z', now));
+  assert.ok(certVerifyArgs('release/2026-12-29', '2026-12-29T23:59:59Z', now));
+  assert.equal(certVerifyArgs('release/2026-12-29', '2026-12-28T23:00:00Z', now), undefined, "UTC's day only");
+  assert.equal(certVerifyArgs('release/2026-12-29', '2026-12-30T00:00:01Z', now), undefined);
+  assert.equal(certVerifyArgs('release/2027-01-01', '2027-01-01T00:00:00Z', now), undefined, 'dated ahead');
+  const lastHour = Date.parse('2026-12-30T23:30:00Z');
+  assert.equal(certVerifyArgs('release/2026-12-31', '2026-12-31T00:00:00Z', lastHour), undefined, "tomorrow's name in today's last hour");
 });
 
 test("not a certificate from a key that isn't pinned, nor a weekly key that's been revoked", async () => {
@@ -81,9 +109,63 @@ test("not a certificate from a key that isn't pinned, nor a weekly key that's be
   commit(w.mike, 'c.txt', 'Signed by a leaked weekly key');
   certTag(w.mike, 'release/2026-10-31', leaked.cert, '2026-10-31T10:00:00Z');
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  assert.equal((await upstreamFor(w.theirs, w.home).check()).release?.tag, 'release/2026-10-31', 'taken until it is revoked');
-  fs.writeFileSync(revokedPath(w.home), `${leaked.pub}\n`);
+  const up = upstreamFor(w.theirs, w.home);
+  assert.equal((await up.check()).release?.tag, 'release/2026-10-31', 'taken until it is revoked');
+  // Revoked, on the same runner: not from an answer kept from before.
+  fs.writeFileSync(weeklyRevokedPath(w.home), `${leaked.pub}\n`);
+  assert.equal((await up.check()).release?.tag, 'release/2026-10-01');
+});
+
+test("not a weekly key's release whose key files aren't the ones its certificate vouches for", async () => {
+  const w = world();
+  const k = weekly(w, 'week', '20261029Z:20261106Z');
+  const attacker = key(w.root, 'attacker');
+  commitFile(w, 'scripts/release-signers', fs.readFileSync(w.mikeKey.signers, 'utf8') + fs.readFileSync(attacker.signers, 'utf8'), 'Announce a key of their own');
+  certTag(w.mike, 'release/2026-10-30', k.cert, '2026-10-30T10:00:00Z');
+  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
   assert.equal((await upstreamFor(w.theirs, w.home).check()).release?.tag, 'release/2026-10-01');
+  const pending = fs.existsSync(keyStatePath(w.home)) ? (JSON.parse(fs.readFileSync(keyStatePath(w.home), 'utf8')).pending as unknown[]) : [];
+  assert.equal(pending.length, 0, 'its key not announced');
+});
+
+test("not a certificate for a kind of key the check can't read the dates of", async () => {
+  const w = world();
+  const priv = path.join(w.root, 'ecdsa-week');
+  assert.equal(spawnSync('ssh-keygen', ['-q', '-t', 'ecdsa', '-N', '', '-f', priv]).status, 0);
+  assert.equal(spawnSync('ssh-keygen', ['-q', '-s', w.mikeKey.priv, '-I', 'e', '-n', 'mike@example.com', '-V', '-1d:+8d', `${priv}.pub`]).status, 0);
+  commit(w.mike, 'b.txt', 'An ecdsa weekly key');
+  certTag(w.mike, 'release/2026-10-30', `${priv}-cert.pub`, '2026-10-30T10:00:00Z');
+  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
+  assert.equal((await upstreamFor(w.theirs, w.home).check()).release?.tag, 'release/2026-10-01');
+});
+
+test('a fork away the day a key change went out takes it from the next weekly-signed release', async () => {
+  const w = world();
+  const next = key(w.root, 'next');
+  release(w, 'release/2026-10-29', w.mikeKey.priv, { 'scripts/release-signers': fs.readFileSync(w.mikeKey.signers, 'utf8') + fs.readFileSync(next.signers, 'utf8') });
+  // Renewed with a touch after the change, so it vouches for the new files.
+  const k = weekly(w, 'week', '20261029Z:20261106Z');
+  commit(w.mike, 'c.txt', 'Weekly');
+  certTag(w.mike, 'release/2026-10-30', k.cert, '2026-10-30T10:00:00Z');
+  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
+  assert.equal((await upstreamFor(w.theirs, w.home).check()).release?.tag, 'release/2026-10-30');
+  const pending = JSON.parse(fs.readFileSync(keyStatePath(w.home), 'utf8')).pending as { key: string }[];
+  assert.deepEqual(pending.map((p) => p.key), [pubOf(next)]);
+});
+
+// Codex's review: a leaked weekly key signing an older commit, under a
+// newer name, mustn't hide the release that revokes it.
+test('a revocation in an older release still counts when a revoked weekly key signed a newer one', async () => {
+  const w = world();
+  const leaked = weekly(w, 'leaked', '20261029Z:20261106Z');
+  const b = commit(w.mike, 'b.txt', 'Something bad, never released');
+  commitFile(w, 'scripts/release-keys-revoked', `${leaked.pub}\n`, 'Revoke the leaked weekly key');
+  git(w.mike, '-c', 'gpg.format=ssh', '-c', `user.signingkey=${w.mikeKey.priv}`, 'tag', '-s', '-m', 'Threadbear release/2026-10-29', 'release/2026-10-29');
+  certTag(w.mike, 'release/2026-10-30', leaked.cert, '2026-10-30T10:00:00Z', b);
+  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
+  const s = await upstreamFor(w.theirs, w.home).check();
+  assert.equal(s.release?.tag, 'release/2026-10-29', s.reason ?? '');
+  assert.deepEqual(readWeeklyRevoked(w.home), [leaked.pub]);
 });
 
 test('withAuthorities: each pinned key also counts as an authority, for git only', () => {
@@ -92,10 +174,31 @@ test('withAuthorities: each pinned key also counts as an authority, for git only
   assert.equal(withAuthorities('# a comment\n'), '# a comment\n');
 });
 
+test("a release revoking a key nobody's pinned puts it with the weekly keys only, so it can still be pinned", () => {
+  const w = world();
+  const signers = path.join(w.root, 'pinned');
+  fs.copyFileSync(w.mikeKey.signers, signers);
+  const mike = pubOf(w.mikeKey);
+  const future = key(w.root, 'future');
+  const r = applyKeyChanges({ home: w.home, signers, signer: mike, announced: [], revoke: [pubOf(future)], tag: 't', now: 0 });
+  assert.deepEqual(r.revoked, [pubOf(future)]);
+  assert.deepEqual(readRevoked(w.home), []);
+  assert.deepEqual(readWeeklyRevoked(w.home), [pubOf(future)]);
+  applyKeyChanges({ home: w.home, signers, signer: mike, announced: [pubOf(future)], revoke: [], tag: 't2', now: 0 });
+  assert.equal(JSON.parse(fs.readFileSync(keyStatePath(w.home), 'utf8')).pending.length, 1, 'it can still be announced');
+  // Only ed25519 keys, which weekly keys are.
+  applyKeyChanges({ home: w.home, signers, signer: mike, announced: [], revoke: ['sk-ecdsa-sha2-nistp256@openssh.com AAAAInNrLWVjZHNh'], tag: 't3', now: 0 });
+  assert.deepEqual(readWeeklyRevoked(w.home), [pubOf(future)]);
+  // An older release's, read for revocations alone, announces nothing.
+  const other = key(w.root, 'other');
+  applyKeyChanges({ home: w.home, signers, signer: mike, announced: [pubOf(other)], revoke: [], tag: 't4', now: 0, onlyRevoke: true });
+  assert.equal(JSON.parse(fs.readFileSync(keyStatePath(w.home), 'utf8')).pending.length, 1);
+});
+
 // Mike's side: the release before has the check that takes the weekly key,
-// and his weekly key is in place.
+// and his weekly key is in place, vouching for main's key files.
 function readyToDelegate(w: World, validity = '-3d:+8d') {
-  release(w, 'release/2026-10-02', w.mikeKey.priv, { 'runner/src/release-keys.ts': '// cert-authority\n' });
+  release(w, 'release/2026-10-02', w.mikeKey.priv, { 'runner/src/release-keys.ts': `// ${KEYS_EXTENSION}\n` });
   const k = weekly(w, 'week', validity);
   const p = delegatePaths(w.home);
   fs.mkdirSync(path.dirname(p.key), { recursive: true });
@@ -110,8 +213,6 @@ test("Mike's runner signs with the weekly key, and a fork takes it", async () =>
   readyToDelegate(w);
   commit(w.mike, 'b.txt', 'Newer work');
   git(w.mike, 'push', '-q', 'origin', 'main');
-  // Noon UTC (today's, or yesterday's if it's still ahead): not ahead of
-  // forks' clocks, and a day that's the same here and in UTC.
   const clock = new FakeClock(noonUtc());
   const signs: string[][] = [];
   const up = upstreamFor(w.mike, w.home, clock, {
@@ -129,42 +230,74 @@ test("Mike's runner signs with the weekly key, and a fork takes it", async () =>
   assert.equal((await upstreamFor(w.theirs, w.home, clock).check()).release?.tag, tag);
 });
 
-test("the release key signs instead until forks have the check, or when the weekly key's run out", async () => {
-  for (const how of ['no check yet', 'ran out'] as const) {
+test("the release key signs instead until forks have the check, when the weekly key's run out, is revoked, isn't its key's, or doesn't vouch for the key files", async () => {
+  for (const how of ['no check yet', 'ran out', 'revoked', 'mismatched', 'key change'] as const) {
     const w = world();
-    if (how === 'ran out') readyToDelegate(w, '-10d:-1d');
-    else {
-      const k = weekly(w, 'week', '-1d:+8d');
+    if (how === 'no check yet') {
+      const k = weekly(w, 'week', '-3d:+8d');
       fs.mkdirSync(path.dirname(delegatePaths(w.home).key), { recursive: true });
       fs.copyFileSync(k.priv, delegatePaths(w.home).key);
       fs.copyFileSync(`${k.priv}.pub`, `${delegatePaths(w.home).key}.pub`);
       fs.copyFileSync(k.cert, delegatePaths(w.home).cert);
+    } else {
+      const k = readyToDelegate(w, how === 'ran out' ? '-10d:-1d' : '-3d:+8d');
+      if (how === 'revoked') commitFile(w, 'scripts/release-keys-revoked', `${k.pub}\n`, 'Revoke the weekly key');
+      else if (how === 'mismatched') {
+        const other = key(w.root, 'other');
+        fs.copyFileSync(other.priv, delegatePaths(w.home).key);
+      } else if (how === 'key change') {
+        const next = key(w.root, 'next');
+        commitFile(w, 'scripts/release-signers', fs.readFileSync(w.mikeKey.signers, 'utf8') + fs.readFileSync(next.signers, 'utf8'), 'Announce a new key');
+      }
     }
     commit(w.mike, 'b.txt', 'Newer work');
     git(w.mike, 'push', '-q', 'origin', 'main');
-    const committed = Number(git(w.mike, 'log', '-1', '--format=%ct')) * 1000;
-    const up = upstreamFor(w.mike, w.home, new FakeClock(committed + 2 * SETTLE_MS), { publish: { publish: true, signingKey: w.mikeKey.priv, delegate: true }, runningMainSettled: () => true });
-    const tag = await up.publishOnce();
-    assert.ok(tag, how);
+    const up = upstreamFor(w.mike, w.home, new FakeClock(noonUtc()), { publish: { publish: true, signingKey: w.mikeKey.priv, delegate: true }, runningMainSettled: () => true });
+    const tag = await up.publishOnce({ now: true });
+    assert.ok(tag, `${how}: ${up.status().held?.why ?? ''}`);
     assert.equal(signatureCert(armorOf(git(w.mike, 'cat-file', 'tag', tag))), undefined, how);
   }
 });
 
-test('renewDelegate makes a key the release key certifies, checked before it goes in place', async () => {
+test("Mike's runner waits for UTC's day rather than ask for Touch ID", async () => {
   const w = world();
-  const signers = fs.readFileSync(w.mikeKey.signers, 'utf8');
+  readyToDelegate(w);
+  commit(w.mike, 'b.txt', 'Newer work');
+  git(w.mike, 'push', '-q', 'origin', 'main');
+  // A moment whose local day isn't UTC's, if this machine has one: 23:30
+  // UTC east of Greenwich, 00:30 UTC west, a day or two back.
+  const off = new Date().getTimezoneOffset();
+  if (off === 0) return;
+  const d = new Date(Date.now() - 2 * 24 * 60 * 60_000);
+  const at = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), off < 0 ? 23 : 0, 30);
+  assert.notEqual(new Date(at).toISOString().slice(0, 10), `${new Date(at).getFullYear()}-${String(new Date(at).getMonth() + 1).padStart(2, '0')}-${String(new Date(at).getDate()).padStart(2, '0')}`);
+  const up = upstreamFor(w.mike, w.home, new FakeClock(at), { publish: { publish: true, signingKey: w.mikeKey.priv, delegate: true }, runningMainSettled: () => true });
+  assert.equal(await up.publishOnce({ now: true }), undefined);
+  assert.match(up.status().held?.why ?? '', /UTC's day/);
+});
+
+test('renewDelegate makes a key the release key certifies for these key files, checked before it goes in place', async () => {
+  const w = world();
+  const { signers, revoked } = keyFiles(w);
   const now = Date.now();
-  const c = await renewDelegate({ home: w.home, signingKey: w.mikeKey.priv, signers, now, timeoutMs: 30_000 });
+  const c = await renewDelegate({ home: w.home, signingKey: w.mikeKey.priv, signers, revoked, now, timeoutMs: 30_000 });
   assert.equal(c.ca, pubOf(w.mikeKey));
   assert.deepEqual(c.principals, ['mike@example.com']);
+  assert.equal(c.keys, keyFilesHash(signers, revoked));
   assert.ok(c.validBefore - now > 7.9 * 24 * 60 * 60_000 && c.validBefore - now <= 8 * 24 * 60 * 60_000 + 60_000);
   assert.deepEqual(currentCert(w.home), c);
+  assert.ok(usableCert(w.home, w.mikeKey.priv, signers, revoked));
+  assert.equal(usableCert(w.home, w.mikeKey.priv, signers, `${c.key}\n`), undefined, 'revoked, and other key files');
   assert.equal(fs.statSync(delegatePaths(w.home).key).mode & 0o077, 0, 'the key is private');
 
   // A key that isn't in release-signers isn't certified.
   const stranger = key(w.root, 'stranger');
-  await assert.rejects(renewDelegate({ home: w.home, signingKey: stranger.priv, signers, now, timeoutMs: 30_000 }), /not in release-signers/);
+  await assert.rejects(renewDelegate({ home: w.home, signingKey: stranger.priv, signers, revoked, now, timeoutMs: 30_000 }), /not in release-signers/);
   assert.deepEqual(currentCert(w.home), c, 'the one in place stays');
+
+  // Not when the private key beside it is another's.
+  fs.copyFileSync(stranger.priv, delegatePaths(w.home).key);
+  assert.equal(usableCert(w.home, w.mikeKey.priv, signers, revoked), undefined);
 });
 
 test('a weekly key near its end that Touch ID never renewed starts one starred reminder', async () => {
@@ -197,114 +330,6 @@ test('a weekly key near its end that Touch ID never renewed starts one starred r
   assert.equal(started.length, 2, 'again once he archived it unrenewed');
 });
 
-test("not a certificate for a kind of key the check can't read the dates of", async () => {
-  const w = world();
-  const priv = path.join(w.root, 'ecdsa-week');
-  assert.equal(spawnSync('ssh-keygen', ['-q', '-t', 'ecdsa', '-N', '', '-f', priv]).status, 0);
-  assert.equal(spawnSync('ssh-keygen', ['-q', '-s', w.mikeKey.priv, '-I', 'e', '-n', 'mike@example.com', '-V', '-1d:+8d', `${priv}.pub`]).status, 0);
-  commit(w.mike, 'b.txt', 'An ecdsa weekly key');
-  certTag(w.mike, 'release/2026-10-30', `${priv}-cert.pub`, '2026-10-30T10:00:00Z');
-  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  assert.equal((await upstreamFor(w.theirs, w.home).check()).release?.tag, 'release/2026-10-01');
-});
-
-// Gemini's and Codex's reviews, 25 Nov 2026.
-test('certVerifyArgs: only a real day, and never ahead of now', () => {
-  const now = Date.parse('2026-12-30T00:00:00Z');
-  assert.equal(certVerifyArgs('release/2027-00-05', '2026-12-05T12:00:00Z', now), undefined, 'month 00 is not December');
-  assert.equal(certVerifyArgs('release/2026-12-00', '2026-11-29T10:30:00Z', now), undefined, 'day 00 is not 30 Nov');
-  assert.equal(certVerifyArgs('release/2026-02-30', '2026-03-02T00:00:00Z', now), undefined);
-  assert.ok(certVerifyArgs('release/2026-12-29', '2026-12-29T09:00:00Z', now));
-  assert.equal(certVerifyArgs('release/2027-01-01', '2027-01-01T00:00:00Z', now), undefined, 'dated two days ahead');
-});
-
-test("a weekly key's release can only revoke weekly keys, never announce or revoke a pinned one", () => {
-  const w = world();
-  const signers = path.join(w.root, 'pinned');
-  fs.copyFileSync(w.mikeKey.signers, signers);
-  const mike = pubOf(w.mikeKey);
-  const attacker = key(w.root, 'attacker');
-  const otherWeek = weekly(w, 'other-week', '-1d:+8d');
-  const r = applyKeyChanges({ home: w.home, signers, signer: mike, announced: [mike, pubOf(attacker)], revoke: [mike, otherWeek.pub], tag: 't', now: 0, viaCert: true });
-  assert.deepEqual(r.revoked, [otherWeek.pub]);
-  assert.deepEqual(readRevoked(w.home), [], 'the pinned key stands');
-  assert.deepEqual(readWeeklyRevoked(w.home), [otherWeek.pub]);
-  assert.ok(fs.readFileSync(signers, 'utf8').includes(mike));
-  assert.equal(fs.existsSync(keyStatePath(w.home)) ? fs.readFileSync(keyStatePath(w.home), 'utf8').includes('attacker') : false, false);
-  assert.deepEqual(JSON.parse(fs.readFileSync(keyStatePath(w.home), 'utf8')).pending, [], 'nothing announced');
-
-  // The release key's own release revoking a key it doesn't know puts it
-  // with the weekly keys only, so it can still be pinned if announced.
-  const future = key(w.root, 'future');
-  applyKeyChanges({ home: w.home, signers, signer: mike, announced: [], revoke: [pubOf(future)], tag: 't2', now: 0 });
-  assert.deepEqual(readRevoked(w.home), []);
-  assert.ok(readWeeklyRevoked(w.home).includes(pubOf(future)));
-  applyKeyChanges({ home: w.home, signers, signer: mike, announced: [pubOf(future)], revoke: [], tag: 't3', now: 0 });
-  assert.equal(JSON.parse(fs.readFileSync(keyStatePath(w.home), 'utf8')).pending.length, 1, 'it can still be announced');
-  assert.ok(fs.existsSync(weeklyRevokedPath(w.home)));
-});
-
-test("Mike's runner doesn't sign with a weekly key that's revoked, isn't the key's, or for a release that changes keys", async () => {
-  for (const how of ['revoked', 'mismatched', 'key change'] as const) {
-    const w = world();
-    const k = readyToDelegate(w);
-    if (how === 'revoked') {
-      fs.writeFileSync(path.join(w.mike, 'scripts', 'release-keys-revoked'), `${k.pub}\n`);
-      git(w.mike, 'add', 'scripts/release-keys-revoked');
-      git(w.mike, 'commit', '-q', '-m', 'Revoke the weekly key');
-    } else if (how === 'mismatched') {
-      const other = weekly(w, 'other', '-1d:+8d');
-      fs.copyFileSync(other.priv, delegatePaths(w.home).key);
-      fs.copyFileSync(`${other.priv}.pub`, `${delegatePaths(w.home).key}.pub`);
-      assert.equal(usableCert(w.home, w.mikeKey.priv, ''), undefined);
-    } else {
-      const next = key(w.root, 'next');
-      fs.appendFileSync(path.join(w.mike, 'scripts', 'release-signers'), fs.readFileSync(next.signers, 'utf8'));
-      git(w.mike, 'add', 'scripts/release-signers');
-      git(w.mike, 'commit', '-q', '-m', 'Announce a new key');
-    }
-    commit(w.mike, 'b.txt', 'Newer work');
-    git(w.mike, 'push', '-q', 'origin', 'main');
-    const committed = Number(git(w.mike, 'log', '-1', '--format=%ct')) * 1000;
-    const up = upstreamFor(w.mike, w.home, new FakeClock(committed + 2 * SETTLE_MS), { publish: { publish: true, signingKey: w.mikeKey.priv, delegate: true }, runningMainSettled: () => true });
-    const tag = await up.publishOnce();
-    assert.ok(tag, `${how}: ${up.status().held?.why ?? ''}`);
-    assert.equal(signatureCert(armorOf(git(w.mike, 'cat-file', 'tag', tag))), undefined, how);
-  }
-});
-
-test("a weekly key revoked after its release was taken stops counting, on the same runner", async () => {
-  const w = world();
-  const k = weekly(w, 'week', '20261029Z:20261106Z');
-  commit(w.mike, 'b.txt', 'Work');
-  certTag(w.mike, 'release/2026-10-30', k.cert, '2026-10-30T10:00:00Z');
-  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  const up = upstreamFor(w.theirs, w.home);
-  assert.equal((await up.check()).release?.tag, 'release/2026-10-30');
-  fs.writeFileSync(weeklyRevokedPath(w.home), `${k.pub}\n`);
-  assert.equal((await up.check()).release?.tag, 'release/2026-10-01', 'not from an answer kept from before');
-});
-
-test("a fork offline the day a key change went out takes it from that release, under a weekly key's newer one", async () => {
-  const w = world();
-  const next = key(w.root, 'next');
-  // The release key's own release announces a new key...
-  release(w, 'release/2026-10-29', w.mikeKey.priv, { 'scripts/release-signers': fs.readFileSync(w.mikeKey.signers, 'utf8') + fs.readFileSync(next.signers, 'utf8') });
-  // ...and the next day's, the first this fork sees, is the weekly key's.
-  const k = weekly(w, 'week', '20261029Z:20261106Z');
-  commit(w.mike, 'c.txt', 'Weekly');
-  certTag(w.mike, 'release/2026-10-30', k.cert, '2026-10-30T10:00:00Z');
-  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  assert.equal((await upstreamFor(w.theirs, w.home).check()).release?.tag, 'release/2026-10-30');
-  const pending = JSON.parse(fs.readFileSync(keyStatePath(w.home), 'utf8')).pending as { key: string; tag: string }[];
-  assert.deepEqual(pending.map((p) => [p.key, p.tag]), [[pubOf(next), 'release/2026-10-29']]);
-});
-
-test('usableCert: not when the private key beside it is another', () => {
-  const w = world();
-  readyToDelegate(w);
-  assert.ok(usableCert(w.home, w.mikeKey.priv, ''));
-  const other = key(w.root, 'other-private');
-  fs.copyFileSync(other.priv, delegatePaths(w.home).key);
-  assert.equal(usableCert(w.home, w.mikeKey.priv, ''), undefined);
+test('revokedPath is where a fork keeps revoked keys', () => {
+  assert.equal(weeklyRevokedPath('/h'), `${revokedPath('/h')}-weekly`);
 });

@@ -13,7 +13,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DELEGATE_DAYS, keyOf, keysIn, parseCert, type ReleaseCert, withAuthorities } from './release-keys.ts';
+import { DELEGATE_DAYS, keyFilesHash, keyOf, keysIn, KEYS_EXTENSION, parseCert, type ReleaseCert, withAuthorities } from './release-keys.ts';
 
 export const RENEW_AHEAD_MS = 3 * 24 * 60 * 60_000;
 export const REMIND_AHEAD_MS = 36 * 60 * 60_000;
@@ -39,13 +39,15 @@ export function currentCert(home: string): ReleaseCert | undefined {
   }
 }
 
-// The weekly key's certificate if it's fit to sign with: its key file is
-// the one it certifies (two runners renewing at once, or a crash between
-// the renames, could leave them apart), the release key made it (not one
-// from before a change of signingKey), and it isn't revoked in `revoked`
-// (release-keys-revoked's text at main). Undefined otherwise, which
-// counts as no key at all: renewed when Mike's next at the Mac.
-export function usableCert(home: string, signingKey: string, revoked: string): ReleaseCert | undefined {
+// The weekly key's certificate if it's fit to sign a release whose key
+// files are `signers` and `revoked` (release-signers' and
+// release-keys-revoked's text): its key file is the one it certifies (two
+// runners renewing at once, or a crash between the renames, could leave
+// them apart), the release key made it (not one from before a change of
+// signingKey), it vouches for those key files, and it isn't revoked there.
+// Undefined otherwise, which counts as no key at all: renewed when Mike's
+// next at the Mac, and the release key signs meanwhile.
+export function usableCert(home: string, signingKey: string, signers: string, revoked: string): ReleaseCert | undefined {
   const c = currentCert(home);
   if (!c) return undefined;
   try {
@@ -57,6 +59,7 @@ export function usableCert(home: string, signingKey: string, revoked: string): R
   } catch {
     return undefined;
   }
+  if (c.keys !== keyFilesHash(signers, revoked)) return undefined;
   return keysIn(revoked).includes(c.key) ? undefined : c;
 }
 
@@ -111,7 +114,7 @@ export const runCommand: Run = (cmd, args, opts = {}) =>
 // `signers` (release-signers' text) with the release key as authority.
 // That catches the Secure Enclave's empty signatures (release/2026-11-19).
 // Returns the certificate, or throws saying why.
-export async function renewDelegate(o: { home: string; signingKey: string; provider?: string; signers: string; now: number; timeoutMs: number; run?: Run }): Promise<ReleaseCert> {
+export async function renewDelegate(o: { home: string; signingKey: string; provider?: string; signers: string; revoked: string; now: number; timeoutMs: number; run?: Run }): Promise<ReleaseCert> {
   const run = o.run ?? runCommand;
   const { key, cert } = delegatePaths(o.home);
   fs.mkdirSync(path.dirname(key), { recursive: true });
@@ -128,14 +131,15 @@ export async function renewDelegate(o: { home: string; signingKey: string; provi
     const made = await run('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', 'threadbear-release-weekly', '-f', fresh]);
     if (made.code !== 0) throw new Error(`ssh-keygen couldn't make a key: ${made.stderr.trim().slice(0, 200)}`);
     const stamp = new Date(o.now).toISOString().slice(0, 16);
-    const signed = await run('ssh-keygen', ['-q', '-s', o.signingKey, '-I', `threadbear-release-weekly-${stamp}`, '-n', principal, '-V', `-10m:+${DELEGATE_DAYS}d`, `${fresh}.pub`], {
+    const keys = keyFilesHash(o.signers, o.revoked);
+    const signed = await run('ssh-keygen', ['-q', '-s', o.signingKey, '-I', `threadbear-release-weekly-${stamp}`, '-n', principal, '-V', `-10m:+${DELEGATE_DAYS}d`, '-O', 'clear', '-O', `extension:${KEYS_EXTENSION}=${keys}`, `${fresh}.pub`], {
       timeoutMs: o.timeoutMs,
       ...(o.provider ? { env: { SSH_SK_PROVIDER: o.provider } } : {}),
     });
     if (signed.code !== 0) throw new Error(signed.code === 124 ? 'Touch ID was not given in time' : `the release key didn't certify it: ${signed.stderr.trim().slice(0, 200)}`);
     const made64 = fs.readFileSync(`${fresh}-cert.pub`, 'utf8').trim().split(/\s+/)[1] ?? '';
     const c = parseCert(Buffer.from(made64, 'base64'));
-    if (!c || c.ca !== ca || !c.principals.includes(principal)) throw new Error("the certificate isn't the release key's for this principal");
+    if (!c || c.ca !== ca || !c.principals.includes(principal) || c.keys !== keys) throw new Error("the certificate isn't the release key's for this principal and these key files");
     // Signed once and checked as a fork checks a release.
     const msg = path.join(dir, 'probe');
     fs.writeFileSync(msg, 'threadbear release key probe\n');
