@@ -13,6 +13,8 @@ import { ErrorCode, RpcError } from './protocol.ts';
 import type { StartSessionOptions, SubagentUpdate } from './adapters/types.ts';
 import { atomicWriteFileSync } from './fsutil.ts';
 import { scheduledMessageId } from './runner/messages.ts';
+import { loginOk, roomWait } from './pools.ts';
+import { resetTime } from './usage.ts';
 
 const runStates = ['queued', 'running', 'interrupted', 'completed', 'failed', 'stopped'] as const;
 export type RunState = typeof runStates[number];
@@ -175,7 +177,16 @@ export class Coordinators {
     fs.mkdirSync(cwd, { recursive: true });
     const params = { ...p, onlyProvider: 'claude' as const, cwd, title: `${project.title} coordinator`, text: 'Coordinate this project.', worktree: false };
     // The normal account/pool picker resolves the selection, before any thread exists.
-    if (this.deps.host.draftRecord(params).account.provider !== 'claude') throw bad('Project coordinators currently need a Claude model and pool, so helper permissions can be enforced.');
+    const draft = this.deps.host.draftRecord(params);
+    if (draft.account.provider !== 'claude') throw bad('Project coordinators currently need a Claude model and pool, so helper permissions can be enforced.');
+    // A coordinator only runs on Claude, so a pool whose Claude logins are
+    // all out would hand its first turn to one that refuses it (25 Nov).
+    const pool = !p.accountId && draft.poolId ? this.deps.host.poolById(draft.poolId) : undefined;
+    if (pool && !loginOk(draft.account)) {
+      const claude = this.deps.host.usableAccounts().filter((a) => a.provider === 'claude');
+      const back = roomWait(pool, claude, this.deps.clock.now());
+      throw bad(`No Claude login in ${pool.title} has room${back.accountId ? ` until ${resetTime(back.waitUntil, this.deps.clock.now())}` : ' just now'}. Add the coordinator then, or pick another pool.`);
+    }
     const { st } = this.deps.host.makeThread(params);
     const row: Coordinator = { projectId: project.id, threadId: st.rec.id, state: 'active', charter: INITIAL_CHARTER, interests: [], tasks: [], questions: [], events: [], seen: [], updatedAt: this.now() };
     this.rows.set(project.id, row); this.save();

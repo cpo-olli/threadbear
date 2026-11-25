@@ -558,3 +558,21 @@ test('a turn finishing on a draining runner’s thread reaches the coordinator t
   assert.match(events[0]!.text, /Check stock/);
   c.stop();
 });
+
+test('adding a coordinator when every Claude login in its pool is out says when one is back, before making a thread', () => {
+  const home = tmpDir();
+  const projects = new Projects({ home, clock: new FakeClock(), log: nullLogger });
+  const fake = new FakeAccounts(withCodex());
+  const h = makeHarness(home, {}, { projects, accounts: fake });
+  const resetsAt = new Date(h.clock.now() + 6 * 3600_000).toISOString();
+  fake.base = fake.base.map((a) => (a.provider === 'claude' ? { ...a, usage: { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0, resetsAt }], readAt: new Date(h.clock.now()).toISOString(), source: 'live' as const, blocked: true } } : a));
+  const c = new Coordinators({ home, host: h.runner, projects, clock: h.clock, enabled: () => true, log: nullLogger });
+  h.runner.coordinators = c;
+  projects.start(h.runner);
+  c.start();
+  const project = projects.create({ title: 'Pantry', goals: 'Keep food fresh', by: 'mike' });
+  assert.throws(() => c.create({ projectId: project.id }), /No Claude login in .+ has room until/);
+  assert.equal(c.list().length, 0);
+  assert.equal(h.runner.threadRecords().length, 0);
+  c.stop();
+});
