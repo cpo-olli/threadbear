@@ -2229,15 +2229,29 @@ impl Threadbear {
                     .cached(StyleRefinement::default().size_full())
                     .into_any_element()
             }
-            MAIN if ghost => self.render_main_panel(window, cx).into_any_element(),
+            MAIN if ghost => {
+                use crate::web_panels::{main_panel_mark, MainMark};
+                div()
+                    .relative()
+                    .size_full()
+                    .child(main_panel_mark(MainMark::GhostStart))
+                    .child(self.render_main_panel(window, cx))
+                    .child(main_panel_mark(MainMark::GhostEnd))
+                    .into_any_element()
+            }
             MAIN => {
                 let app = cx.entity();
                 let view = self
                     .main_view
                     .get_or_insert_with(|| cx.new(|cx| MainPanelView::new(&app, cx)))
                     .clone();
-                AnyView::from(view)
-                    .cached(StyleRefinement::default().size_full())
+                div()
+                    .relative()
+                    .size_full()
+                    .child(AnyView::from(view).cached(StyleRefinement::default().size_full()))
+                    .child(crate::web_panels::main_panel_mark(
+                        crate::web_panels::MainMark::Drawn,
+                    ))
                     .into_any_element()
             }
             RUNNERS => self.activity_panel_view(RUNNERS, ghost, window, cx),
@@ -2617,7 +2631,14 @@ impl Render for MainPanelView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match self.app.upgrade() {
             Some(app) => app.update(cx, |t, cx| {
-                t.render_main_panel(window, cx).into_any_element()
+                use crate::web_panels::{main_panel_mark, MainMark};
+                div()
+                    .relative()
+                    .size_full()
+                    .child(main_panel_mark(MainMark::Start))
+                    .child(t.render_main_panel(window, cx))
+                    .child(main_panel_mark(MainMark::End))
+                    .into_any_element()
             }),
             None => div().into_any_element(),
         }
