@@ -264,6 +264,6 @@ fn fade(background: Hsla, edge: FadeEdge) -> Div {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "automation"))]
 #[path = "list_wheel_tests.rs"]
 mod wheel_tests;
