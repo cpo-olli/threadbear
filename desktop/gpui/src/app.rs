@@ -194,8 +194,6 @@ pub struct Threadbear {
     pub(crate) librarian: crate::librarian::LibrarianState,
     /// The Recipes view (recipes.rs), with the `recipes` experiment on.
     pub(crate) recipes: crate::recipes::RecipesState,
-    /// The Canvas page (thread_canvas.rs).
-    pub(crate) thread_canvas: crate::thread_canvas::CanvasPage,
     /// What the Librarian page's picture says when it's poked.
     pub(crate) librarian_pokes: crate::home_page::Pokes,
     /// The Usage panel's numbers and the honey pot (usage.rs).
@@ -624,7 +622,6 @@ impl Threadbear {
             restoring_place: false,
             librarian: crate::librarian::LibrarianState::new(),
             recipes: crate::recipes::RecipesState::new(),
-            thread_canvas: Default::default(),
             librarian_pokes: crate::home_page::Pokes::new(crate::home_page::Art::Librarian),
             usage,
             runner_settings: None,
@@ -1407,8 +1404,6 @@ impl Threadbear {
                         }
                         let before = (*this.threads).clone();
                         let cleanup = list.apply(&mut *this.threads);
-                        // The Canvas page reads the board only from a whole list.
-                        this.thread_canvas.listed = true;
                         // A move just picked stays shown over the new list.
                         let now = crate::now_ms();
                         for id in this.starting_moves.threads() {
@@ -1688,10 +1683,6 @@ impl Threadbear {
         } else {
             self.opening.take()
         };
-        // A thread opened from anywhere but the Canvas page takes the page down.
-        if !self.thread_canvas.opening {
-            self.hide_thread_canvas();
-        }
         // A thread (its own row, say) in place of one of its sub-agents.
         self.close_subagent(cx);
         // A thread in place of an archived session (archive_search.rs).
@@ -2210,7 +2201,6 @@ impl Threadbear {
             .is_some_and(|(_, _, moving)| moving)
             || self.flight.in_flight()
             || crate::open_motion::moving()
-            || self.thread_canvas.in_motion()
     }
 
     /// The composer's part of the dump (AppDump.composer).

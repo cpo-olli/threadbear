@@ -84,7 +84,6 @@ pub mod starting_moves;
 pub mod swift_import;
 pub mod terminal;
 pub mod text_file;
-pub mod thread_canvas;
 pub mod thread_find;
 pub mod thread_link;
 pub mod thread_load;

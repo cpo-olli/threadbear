@@ -490,9 +490,6 @@ function mockExperiments() {
     ...(process.env.TB_MOCK_RECIPES ? ['recipes'] : []),
     // Reviews as a board you drag and zoom, with TB_MOCK_REVIEW_CANVAS (addCanvasMarks).
     ...(process.env.TB_MOCK_REVIEW_CANVAS ? ['reviewCanvas'] : []),
-    // The Canvas page, with TB_MOCK_THREAD_CANVAS (with TB_MOCK_NESTED's threads
-    // for a tree with arrows).
-    ...(process.env.TB_MOCK_THREAD_CANVAS ? ['threadCanvas'] : []),
     // Agent Archive in the sidebar's search, with TB_MOCK_ARCHIVE (ARCHIVE_SESSIONS).
     ...(process.env.TB_MOCK_ARCHIVE ? ['archive'] : []),
   ];

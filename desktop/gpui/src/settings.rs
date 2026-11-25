@@ -117,10 +117,6 @@ pub struct Saved {
     /// 13 Nov). A panel with its title hidden moves from its background
     /// either way. The GPUI app's own.
     pub panel_background_drag: Option<bool>,
-    /// The Canvas page's board (thread_canvas.rs, the `threadCanvas`
-    /// experiment): each project's area, where each thread sits and the
-    /// camera, as `threadbear_core::thread_canvas::Layout` saves it.
-    pub thread_canvas: Option<Value>,
     /// Fields this build doesn't know (a newer build's), kept as they are,
     /// so going back a version and forward again loses nothing.
     #[serde(flatten)]

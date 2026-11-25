@@ -409,7 +409,6 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | `review.picks` | Picks and notes | Tick, None, Send, drafts | Drawn, with `Textarea`. | build | M | `ReviewSession`, `ReviewWindow` |
 | `review.openlive` | Open live | Tries a running option | Through the open gate. | build | S | `ReviewWindow` |
 | `review.canvas` | The review as a board | The `reviewCanvas` experiment: options laid out on a board to drag and zoom, the agent's handwritten notes on the pictures with a switch to hide them, a tour flying through them, and tools to circle, highlight or pin a part that drop numbered chips in the reply | GPUI-only, new in this app (the Swift app is frozen without it). `threadbear-core`'s `review_canvas` lays it out; `gpui/src/review_window/canvas.rs` draws it. | build | L | none (GPUI-only) |
-| `thread.canvas` | The Canvas page | The `threadCanvas` experiment: every live thread as a miniature of its window on one zoomable board, each project an area, arrows from each thread to the ones it started with why in handwriting, new threads arriving beside their parent, archived ones as ghosts until Tidy, and a click flying in until the real thread takes over | GPUI-only, new in this app (the Swift app is frozen without it). `threadbear-core`'s `thread_canvas` lays it out; `gpui/src/thread_canvas.rs` draws it. | build | L | none (GPUI-only) |
 
 ## 17. Navigation, shortcuts, main menu
 

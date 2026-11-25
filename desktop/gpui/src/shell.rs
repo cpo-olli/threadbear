@@ -1217,8 +1217,6 @@ impl Threadbear {
     /// The Scheduled, Projects and Librarian buttons open their page in the
     /// main panel too (`showSchedules`); picking a thread puts the thread back.
     pub(crate) fn set_mode(&mut self, mode: SidebarMode, cx: &mut Context<Self>) {
-        // Any view of the rail's in place of the Canvas page (thread_canvas.rs).
-        self.hide_thread_canvas();
         let home = mode != SidebarMode::Inbox;
         // A page of the activity bar's takes a project's page's place
         // (`showProjects`); the Inbox leaves it where it is.
@@ -2110,12 +2108,7 @@ impl Threadbear {
         // On a project's page, the panels it borrows from one of its threads.
         // What the tour and the intros watch for (tour.rs).
         self.tour_watch(window, cx);
-        // The Canvas page, in place of the list and the thread (thread_canvas.rs).
-        let canvas = self
-            .thread_canvas
-            .showing
-            .then(|| self.render_thread_canvas(window, cx));
-        let has_rail = canvas.is_none() && self.pane_thread().is_some();
+        let has_rail = self.pane_thread().is_some();
         let rail = has_rail.then(|| self.render_right_rail(cx));
         let root = div()
             .id("threadbear-shell")
@@ -2136,14 +2129,15 @@ impl Threadbear {
             .child(self.page_swipe_watch(cx))
             .child(self.row_press_watch(cx))
             .child(self.render_activity_bar(window, cx))
-            .child(div().relative().flex_1().min_w_0().h_full().map(|d| {
-                match canvas {
-                    Some(canvas) => d.child(canvas),
-                    None => d
-                        .child(self.dock_view.clone())
-                        .child(crate::tour::dock_origin_mark()),
-                }
-            }))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(self.dock_view.clone())
+                    .child(crate::tour::dock_origin_mark()),
+            )
             .when_some(rail, |s, r| s.child(r))
             // An archived or hibernated thread's page on its way to its
             // heading, over the sidebar and the panel alike (archive_flight.rs).

@@ -179,12 +179,6 @@ Before(async function (this: ThreadbearWorld, { pickle }) {
   else delete process.env.TB_MOCK_RECIPES;
   if (pickle.tags.some((t) => t.name === '@review.canvas')) process.env.TB_MOCK_REVIEW_CANVAS = '1';
   else delete process.env.TB_MOCK_REVIEW_CANVAS;
-  // The Canvas page, with the nested demo's coordinator and the threads it started.
-  if (pickle.tags.some((t) => t.name === '@thread.canvas')) {
-    process.env.TB_MOCK_THREAD_CANVAS = '1';
-    process.env.TB_MOCK_NESTED = '1';
-    process.env.TB_MOCK_NESTED_OFF = '1';
-  } else delete process.env.TB_MOCK_THREAD_CANVAS;
   // Agent Archive in the sidebar's search: the archive experiment on, with
   // the mock's made-up sessions, and its answers slow with @slow-archive.
   if (pickle.tags.some((t) => t.name === '@archive')) process.env.TB_MOCK_ARCHIVE = '1';
