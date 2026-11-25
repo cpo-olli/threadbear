@@ -48,6 +48,16 @@ Feature: The chips under the message box
     Then the "model" menu has a row "## Codex"
     And the "model" menu has a row "## Claude"
 
+  # Pool strip across the top, provider rail down the left, models on the right
+  # (Mike's pick, Option A, 26 Nov): the Swift app is frozen.
+  @composer.modelpicker @swift-pending
+  Scenario: Picking a pool, then a provider, then a model switches the thread
+    When I open the model picker
+    And I click "Pool: Personal" in the model picker
+    And I click "Provider: Codex" in the model picker
+    And I click "GPT-6.1-Sol" in the model picker
+    Then the model chip says "Personal · GPT-6.1-Sol"
+
   # The Login line under the effort levels (Mike's pick, 12 Nov): the Swift
   # app is frozen with its "Pinned to … · Unpin" line, so these are GPUI's.
   @composer.modelpicker @swift-pending

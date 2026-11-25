@@ -45,6 +45,10 @@ When('I search the model picker for {string} and press Return', async function (
   await this.app.do({ cmd: 'composer-menu', menu: 'model', search: words });
 });
 
+When('I click {string} in the model picker', async function (this: ThreadbearWorld, title: string) {
+  await this.app.do({ cmd: 'click', title });
+});
+
 When('I pick {string} from the {string} menu', async function (this: ThreadbearWorld, title: string, menu: string) {
   await this.app.do({ cmd: 'composer-menu', menu, click: title });
 });
