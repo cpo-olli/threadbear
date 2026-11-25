@@ -850,6 +850,19 @@ the owning runner.
   own copy) and deleted threads after 30 days in the trash. Archived
   threads keep their pictures unless you set `"archivedMediaDays": <days>`
   in `runner.json`.
+- **Build cache cleanup** (`runner/src/build-cache-cleanup.ts`, the
+  `buildCacheCleanup` experiment): sweeps stale build output hourly (5
+  minutes after start, then every hour) and checks free disk space every 10
+  minutes and before each runner update build. Removes git-ignored Cargo
+  `CACHEDIR.TAG` build folders (such as `desktop/target`) in spare and
+  kept-archived worktrees, and in open threads idle for 2 days (2 hours
+  when free space is under 10 GiB); removes week-old `update-desktop/target`,
+  `update/build`, `check-desktop-target` and non-App-Store `ios-builds/*`
+  under `~/Library/Caches/Threadbear`, and week-old `shared-*` folders under
+  `~/.cache/threadbear-check/local-builds`. When free space drops below 10
+  GiB, clears all non-busy build caches until 20 GiB is free. Skips any
+  folder with a held build lock, a live process cwd inside the worktree, or
+  a write in the last 30 minutes.
 - **Moving threads** (`runner/src/moves.ts`, only with the Convex
   backend): watches your Convex deployment for threads you've
   moved to or from this machine. One moving away is packed (its folder,

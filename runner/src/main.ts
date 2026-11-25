@@ -17,6 +17,7 @@ import { threadKey as makeThreadKey } from './rpc-auth.ts';
 import { makePrivate } from './win-acl.ts';
 import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION, RunnerJsonError, peekRunnerJson, expandHome } from './config.ts';
 import { startHousekeeping } from './housekeeping.ts';
+import { BuildCacheCleaner } from './build-cache-cleanup.ts';
 import { startBorrowSweep } from './runner/worktrees.ts';
 import { win32Helper } from './win32-helper.ts';
 import { RELEASE, markConfigStop, markGoodLater, onStopRequest, onSupervisorGone, ownCheckout, readRelease, readState, requestHandover, supervised, takeRollbackNotice, tellLaunchListening } from './release.ts';
@@ -1102,6 +1103,15 @@ async function main(): Promise<void> {
     setTimeout(() => void lookAtFailures(), 30_000).unref();
     setInterval(() => void lookAtFailures(), 2 * 60_000).unref();
   }
+  // Stale desktop, worktree, iPhone and local-check build caches cleared
+  // before the disk fills (build-cache-cleanup.ts, buildCacheCleanup experiment).
+  const buildCacheCleaner = new BuildCacheCleaner({
+    home: cfg.home,
+    log,
+    enabled: cfg.home === defaultHome() && !box,
+    on: () => experimentOn(cfg.home, 'buildCacheCleanup'),
+    records: () => [...runner.threads.values()].map((t) => t.rec),
+  });
   // Follows main once this release has been marked good (below).
   const updater = new RunnerUpdater({
     home: cfg.home,
@@ -1116,6 +1126,7 @@ async function main(): Promise<void> {
     restart: (p) => restarter.request({ when: 'idle', ...p }),
     pendingRestart: () => Boolean(restarter.status().pendingRestart),
     followsOrigin: () => followOriginOn(cfg.home),
+    beforeBuild: () => buildCacheCleaner.ifLow('before a build'),
     onChange: () => {
       // updaterReady: the first onChange can come before the reinstaller exists.
       if (updaterReady) reinstaller.consider();
@@ -1808,7 +1819,9 @@ async function main(): Promise<void> {
   });
   // Borrowed worktrees nobody gave back (borrows.ts), on this Mac's real
   // data dir only: a dev runner's threads aren't the ones that borrowed.
-  const stopBorrowSweep = cfg.home === defaultHome() && !box ? startBorrowSweep(runner, log) : () => {};
+  const stopBorrowSweep = cfg.home === defaultHome() && !box
+    ? ((stops) => () => stops.forEach((stop) => stop()))([startBorrowSweep(runner, log), buildCacheCleaner.start()])
+    : () => {};
   const cancelMarkGood = markGoodLater(cfg.home, RELEASE.release, log, process.env, () => {
     restarter.proven();
     // A box never updates itself or anything else: a new release is a new image.
