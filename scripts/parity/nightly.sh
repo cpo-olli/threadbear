@@ -37,10 +37,10 @@ HOST=$(
 try:
   j=json.load(open(sys.argv[1])); h=j.get("checkHosts") or j.get("checkHost") or []
   h=[h] if isinstance(h,str) else h
-  print("\n".join(h))
+  print("\n".join(x for x in h if isinstance(x,str)))
 except Exception: pass' "$RUNNER_JSON"
   fi | parity_host
-) || exit 1
+) || { echo "Parity could not start: no reachable Mac with Desk Runner (THREADBEAR_PARITY_HOST or $RUNNER_JSON)."; exit 1; }
 KEEP="$HOME/Library/Caches/Threadbear/parity"
 REMOTE=.cache/threadbear-parity
 mkdir -p "$KEEP"
