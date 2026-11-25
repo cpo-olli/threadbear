@@ -35,3 +35,20 @@ Feature: Project coordinators
     Then the coordinator's document contains "The project home is ready"
     And the coordinator has the to-do "Build the project home" in "Done"
     And the coordinator is listed once in its own sidebar section
+
+  @coordinators.home @coordinators @swift-pending
+  Scenario: A conflicting document edit keeps the draft until the current version is reviewed
+    When I open the project "Threadbear"
+    And I edit the project notes and add "My draft decision."
+    And the coordinator changes the saved notes to "The coordinator's new decision."
+    And I save the project text
+    Then the project editor shows the current version "The coordinator's new decision."
+    And the project editor still contains "My draft decision."
+    When I acknowledge the current project text
+    Then the project editor still contains "My draft decision."
+    When I append "The coordinator's new decision." to the project draft
+    And I save the project text
+    Then the project notes contain "My draft decision."
+    And the project notes contain "The coordinator's new decision."
+    And the project editor is closed
+    And there's no error bar

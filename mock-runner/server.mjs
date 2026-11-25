@@ -955,7 +955,7 @@ async function handle(client, { id, method, params = {} }) {
 }
 
 async function dispatch(client, method, p) {
-  if (coordinatorRequest && (method.startsWith('coordinators.') || ['mock.coordinatorFinish', 'mock.coordinatorVerify'].includes(method))) return coordinatorRequest(method, p);
+  if (coordinatorRequest && (method.startsWith('coordinators.') || ['mock.coordinatorFinish', 'mock.coordinatorVerify', 'mock.coordinatorNotesChanged'].includes(method))) return coordinatorRequest(method, p);
   switch (method) {
     case 'hello':
       // The Mac mini has two logins of its own and no pools, as the real one does,

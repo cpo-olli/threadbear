@@ -356,7 +356,7 @@ impl Threadbear {
             .editing
             .as_ref()
             .filter(|e| e.project == project.id && e.field == field)
-            .map(|e| (e.input.clone(), e.saving));
+            .map(|e| (e.input.clone(), e.saving, e.baseline.clone()));
         let key = format!("text:{}", field.title());
         let hovering = self.projects.hovered.as_deref() == Some(key.as_str());
         let detail = field.detail(project, &local_now());
@@ -383,7 +383,8 @@ impl Threadbear {
             .on_hover(self.page_hover(key, cx))
             .child(page_heading(field.title(), detail, edit, cx));
         let text = field.text(project).to_owned();
-        if let Some((input, saving)) = editing {
+        if let Some((input, saving, baseline)) = editing {
+            let changed = text != baseline;
             let min = if field == TextField::Notes { 220. } else { 90. };
             let _ = window;
             section = section.child(
@@ -414,6 +415,9 @@ impl Threadbear {
                                     .line_height(px(19.)),
                             ),
                     )
+                    .when(changed && !saving, |s| {
+                        s.child(self.render_project_text_review(project, field, text.clone(), cx))
+                    })
                     .child(
                         h_flex()
                             .gap(px(8.))
@@ -430,15 +434,17 @@ impl Threadbear {
                                         this.finish_editing_project(false, window, cx)
                                     }),
                                 ))
-                                .child(small_push_button(
-                                    "edit-save",
-                                    "Save",
-                                    "Save (⌘Return)",
-                                    cx,
-                                    cx.listener(|this, _: &ClickEvent, window, cx| {
-                                        this.finish_editing_project(true, window, cx)
-                                    }),
-                                ))
+                                .when(!changed, |s| {
+                                    s.child(small_push_button(
+                                        "edit-save",
+                                        "Save",
+                                        "Save (⌘Return)",
+                                        cx,
+                                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                                            this.finish_editing_project(true, window, cx)
+                                        }),
+                                    ))
+                                })
                             }),
                     ),
             );
@@ -488,6 +494,53 @@ impl Threadbear {
             );
         }
         section.into_any_element()
+    }
+
+    fn render_project_text_review(
+        &self,
+        project: &Project,
+        field: TextField,
+        current: String,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let id = project.id.clone();
+        let text = if current.is_empty() {
+            "(empty)".to_owned()
+        } else {
+            current.clone()
+        };
+        let saved = div()
+            .id(SharedString::from(format!("review-{}", field.title())))
+            .w_full()
+            .max_h(px(220.))
+            .overflow_y_scroll()
+            .text_size(px(13.))
+            .line_height(px(19.))
+            .child(gpui_kit::base::SelectableText::new(
+                "saved-project-version",
+                text,
+            ));
+        let acknowledge = small_push_button(
+            "review-project-text",
+            "I've reviewed this version",
+            "Keep my draft and compare its next save against this saved version",
+            cx,
+            cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.review_project_text(&id, field, current.clone(), window, cx)
+            }),
+        );
+        v_flex()
+            .w_full()
+            .gap(px(10.))
+            .p(px(12.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(div().text_size(px(13.)).font_semibold().child("Current saved version"))
+            .child(div().text_size(px(12.)).line_height(px(18.)).text_color(style::secondary_text(cx)).child("The saved text changed. Keep your draft above, and include any changes you want before saving."))
+            .child(saved)
+            .child(acknowledge)
+            .into_any_element()
     }
 
     /// `TasksSection`: the board read from the Notion page, a column per Status

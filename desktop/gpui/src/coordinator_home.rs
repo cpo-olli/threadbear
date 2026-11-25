@@ -463,7 +463,11 @@ impl Threadbear {
                 .drawn
                 .get(highlights)
                 .is_some_and(|kind| kind == "project");
-        json!({"on":self.coordinators_on(),"count":self.coordinators.list.len(),"tab":self.coordinators.tab.title(),"project":current.map(|c|c.project_id.clone()),"thread":current.map(|c|c.thread_id.clone()),"state":current.map(|c|if c.state==State::Paused{"paused"}else{"active"}),"tasks":current.map(|c|c.tasks.iter().map(|t|json!({"title":t.title,"state":t.status_label()})).collect::<Vec<_>>()),"documentShown":document_shown,"document":project.map(|p|json!({"goals":p.goals,"state":p.state,"notes":p.notes}))})
+        let editing = self.projects.editing.as_ref().map(|e| {
+            let current = self.project(&e.project).map(|p| e.field.text(p).to_owned());
+            json!({"field":e.field.title(),"draft":e.input.read(cx).value().to_string(),"reviewCurrent":current.filter(|text| !e.saving && *text != e.baseline)})
+        });
+        json!({"on":self.coordinators_on(),"count":self.coordinators.list.len(),"tab":self.coordinators.tab.title(),"project":current.map(|c|c.project_id.clone()),"thread":current.map(|c|c.thread_id.clone()),"state":current.map(|c|if c.state==State::Paused{"paused"}else{"active"}),"tasks":current.map(|c|c.tasks.iter().map(|t|json!({"title":t.title,"state":t.status_label()})).collect::<Vec<_>>()),"documentShown":document_shown,"editing":editing,"document":project.map(|p|json!({"goals":p.goals,"state":p.state,"notes":p.notes}))})
     }
 }
 

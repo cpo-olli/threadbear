@@ -84,6 +84,11 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
       target.state = 'The project home helper has returned. The coordinator is checking its result before marking the work done.';
       target.stateUpdatedAt = now();
       projectChanged();
+    } else if (method === 'mock.coordinatorNotesChanged') {
+      // A notification still in flight: projects.update must reject the old
+      // baseline, then projects.get gives the editor the version to review.
+      target.notes = String(p.text);
+      target.updatedAt = now();
     } else if (method === 'mock.coordinatorVerify') {
       coordinator.tasks[0].state = 'done';
       target.state = 'The project home is ready. The coordinator checked the helper result and the conversation and living document use the same project state.';

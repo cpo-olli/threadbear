@@ -1220,6 +1220,15 @@ impl Threadbear {
             cx.notify();
             return;
         }
+        // The current version is shown under the draft. Only its explicit
+        // review action may advance the comparison used by the next save.
+        if self
+            .project(&editing.project)
+            .is_some_and(|p| editing.field.text(p) != editing.baseline)
+        {
+            cx.notify();
+            return;
+        }
         let (project, field, baseline, input) = (
             editing.project.clone(),
             editing.field,
@@ -1234,8 +1243,21 @@ impl Threadbear {
         let client = self.client.clone();
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
-            let result = call(client, "projects.update", params).await;
+            let result = call(client.clone(), "projects.update", params).await;
+            // The update notification can race the failed save. Read the
+            // current version so the editor can show exactly what changed.
+            let current = if result.is_err() {
+                call(client, "projects.get", json!({"projectId":project}))
+                    .await
+                    .ok()
+                    .and_then(|v| Project::decode(&v["project"]))
+            } else {
+                None
+            };
             this.update_in(cx, |this, _, cx| {
+                if let Some(project) = current {
+                    this.replace_project(project);
+                }
                 let still_editing = this
                     .projects
                     .editing
@@ -1245,6 +1267,7 @@ impl Threadbear {
                     Ok(value) => {
                         if let Some(project) = Project::decode(&value["project"]) {
                             this.replace_project(project);
+                            this.clear_project_edit_error();
                             if still_editing {
                                 if input.read(cx).value().as_ref() == draft.as_str() {
                                     this.projects.editing = None;
@@ -1275,6 +1298,49 @@ impl Threadbear {
             .ok();
         })
         .detach();
+    }
+
+    pub(crate) fn review_project_text(
+        &mut self,
+        project: &str,
+        field: TextField,
+        reviewed: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .project(project)
+            .is_some_and(|p| field.text(p) == reviewed)
+        {
+            self.show_error(
+                "The saved text changed again. Review its newest version before saving.".to_owned(),
+                cx,
+            );
+            return;
+        }
+        let Some(editing) = self
+            .projects
+            .editing
+            .as_mut()
+            .filter(|e| e.project == project && e.field == field && !e.saving)
+        else {
+            return;
+        };
+        editing.baseline = reviewed;
+        editing
+            .input
+            .update(cx, |input, cx| input.focus(window, cx));
+        self.clear_project_edit_error();
+        cx.notify();
+    }
+
+    fn clear_project_edit_error(&mut self) {
+        if self.error_message.as_deref().is_some_and(|text| {
+            text.ends_with("Your text is still in the editor.")
+                || text == "The saved text changed again. Review its newest version before saving."
+        }) {
+            self.error_message = None;
+        }
     }
 
     // ---- For the specs ----

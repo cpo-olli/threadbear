@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { Then, When } from '@cucumber/cucumber';
 import type { ThreadbearWorld } from '../support/world.ts';
 
-type Coordinator = { on: boolean; thread: string | null; tab: string; state: string | null; tasks: { title: string; state: string }[] | null; documentShown: boolean; document: { state: string } | null };
+type Coordinator = { on: boolean; thread: string | null; tab: string; state: string | null; tasks: { title: string; state: string }[] | null; documentShown: boolean; editing: { draft: string; reviewCurrent: string | null } | null; document: { state: string; notes: string } | null };
 const coordinator = (d: unknown) => (d as { coordinator?: Coordinator }).coordinator;
 
 When("I add the project's coordinator", async function (this: ThreadbearWorld) {
@@ -49,4 +49,44 @@ When('a coordinator helper finishes its work', async function (this: ThreadbearW
 
 When('the coordinator checks and accepts the helper result', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'mock', method: 'coordinatorVerify', params: {} });
+});
+
+When('I edit the project notes and add {string}', async function (this: ThreadbearWorld, text: string) {
+  await this.app.do({ cmd: 'click', tip: 'Edit the notes (or double-click it)' });
+  await this.app.do({ cmd: 'type', here: true, text: `\n${text}` });
+});
+
+When('the coordinator changes the saved notes to {string}', async function (this: ThreadbearWorld, text: string) {
+  await this.app.do({ cmd: 'mock', method: 'coordinatorNotesChanged', params: { text } });
+});
+
+When('I save the project text', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'menu-key', key: 'enter', modifiers: ['cmd'] });
+});
+
+Then('the project editor shows the current version {string}', async function (this: ThreadbearWorld, text: string) {
+  await this.until('the current saved text beside the draft', (d) => coordinator(d)?.editing?.reviewCurrent === text);
+});
+
+Then('the project editor still contains {string}', async function (this: ThreadbearWorld, text: string) {
+  await this.until('the preserved draft', (d) => coordinator(d)?.editing?.draft.includes(text));
+});
+
+When('I acknowledge the current project text', async function (this: ThreadbearWorld) {
+  const size = /([\d.]+)x([\d.]+)/.exec(await this.app.do({ cmd: 'window' }));
+  if (!size) throw new Error('The window did not give its size');
+  await this.app.do({ cmd: 'point', x: Number(size[1]) - 100, y: Number(size[2]) / 2, scrollY: -2000 });
+  await this.app.do({ cmd: 'click', tip: 'Keep my draft and compare its next save against this saved version' });
+});
+
+When('I append {string} to the project draft', async function (this: ThreadbearWorld, text: string) {
+  await this.app.do({ cmd: 'type', here: true, text: `\n${text}` });
+});
+
+Then('the project notes contain {string}', async function (this: ThreadbearWorld, text: string) {
+  await this.until('the merged saved notes', (d) => coordinator(d)?.documentShown && coordinator(d)?.document?.notes.includes(text));
+});
+
+Then('the project editor is closed', async function (this: ThreadbearWorld) {
+  await this.until('the editor closed after saving', (d) => Boolean(coordinator(d)) && coordinator(d)?.editing === null);
 });
