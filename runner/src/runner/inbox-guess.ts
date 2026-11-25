@@ -188,7 +188,7 @@ export const inboxGuessPart = {
     try {
       if (!experimentOn(this.cfg.home, INBOX_GUESS)) return;
       // Another lab's review of a change archives itself: nothing to learn.
-      if (rec.reviewOf) return;
+      if (rec.reviewOf || this.coordinators?.forThread(rec.id)) return;
       // So does a helper nobody's touched, when it finishes clean
       // (quiet-inbox.ts). One that stays, for its follow-ups or something
       // left open, is in his inbox like any other, and he answers for it
@@ -296,7 +296,7 @@ export const inboxGuessPart = {
     // default model, labelled so (models/index.ts), which doesn't count.
     const strong = guesses.find((g) => g.strong && (g.by === OPUS || g.by.startsWith(`${OPUS} on `)));
     if (!strong?.skip || guesses.some((g) => g.by === 'rule')) return;
-    if (rec.starredAt || rec.keptOut || rec.reviewOf || rec.lastSeenSeq >= seq || isReminder(rec)) return;
+    if (rec.starredAt || rec.keptOut || rec.reviewOf || rec.lastSeenSeq >= seq || isReminder(rec) || this.coordinators?.forThread(rec.id)) return;
     // A design review waiting on his answer is his to see (Codex's review).
     if (rec.reviews?.some((r) => r.status === 'pending')) return;
     // The models took a moment: anything since decides instead, as in

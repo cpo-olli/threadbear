@@ -686,7 +686,9 @@ tool restrictions. They cannot become unrestricted threads by turning it off.
 
 `Coordinator` is `{ projectId, threadId, state: "active" | "paused", charter,
 interests: string[], tasks, questions, updatedAt, wakeAt? }`. Tasks have `{ id,
-title, doneWhen, run? }`; run is `{ id, agentId?, status, summary? }`.
+title, doneWhen, state, run? }`; task state is `todo`, `working`, `blocked`,
+`review` or `done`. Run is `{ id, agentId?, nativeTaskId?, nativeRunId?, status,
+summary?, updatedAt }`.
 Run states are `queued`, `running`, `interrupted`, `completed`, `failed`, `stopped`.
 One transition function owns the allowed moves. A native dispatch reserves a run
 before the tool proceeds. Its native worker identity is attached by the trusted
@@ -694,9 +696,17 @@ SDK hook, and native task results determine its status. The UI does not manually
 mark running work done. Questions have `{ id, agentId, questions, state, answer? }`.
 
 The runner stores the registry outside the model's context, including briefs,
-native identities and checkpoints. Restart marks unfinished execution interrupted;
+native identities and checkpoints. Each execution has its own native `run_id`;
+late results from earlier executions cannot finish resumed work. Native helper
+completion puts the task in review. The coordinator checks its result against
+`doneWhen` before `completeTask` marks it done; `archiveTask` retains the full
+finished record in `coordinator-history.jsonl` and frees its active-list space.
+These actions use the scoped coordinator tool, with `taskId`, rather than a
+manual running-task checkbox. Restart marks unfinished execution interrupted;
 the next coordinator turn reconciles it rather than blindly replaying work. A
-known helper may be resumed explicitly. Compaction waits for helpers to finish.
+A known helper with a recorded native execution identity may be resumed
+explicitly. Otherwise a new helper starts from its saved checkpoint. Compaction
+waits for helpers to finish.
 It retains the charter and rereads canonical project records after compaction.
 
 Only the user-facing app may start or pause a coordinator. The coordinator's
@@ -712,4 +722,9 @@ not pause independent threads that the coordinator messages. Completion/failure
 events from project threads and matching interest keywords are deduplicated and
 batched for ten minutes; progress does not wake it. An explicit timer or a helper
 question wakes it without that batch delay. Sources remain quoted event data.
+
+This version watches completed project threads and literal interest keywords.
+It does not yet classify incoming email, Slack or Sentry through the librarian.
+The project document follows the existing canonical project updates in place;
+a browsable document-version history and per-edit source links are not included.
 

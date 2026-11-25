@@ -795,6 +795,7 @@ export const movesPart = {
   },
 
   async describeForMove(this: Runner, threadId: string, schedules: number): Promise<MoveInfo | undefined> {
+    if (this.coordinators?.forThread(threadId)) throw new Error('Project coordinators stay on their owning runner in this experiment.');
     const st = this.threads.get(threadId);
     if (!st) return undefined;
     const { rec } = st;
@@ -846,6 +847,7 @@ export const movesPart = {
   // Releases the CLI and gathers what goes: the thread's folder, its
   // Claude transcript, and its worktree's git work.
   async packForMove(this: Runner, threadId: string, row: MoveRow): Promise<{ entries: PackEntry[]; leftBehind: string[] }> {
+    if (this.coordinators?.forThread(threadId)) throw new Error('Project coordinators stay on their owning runner in this experiment.');
     const st = this.threads.get(threadId);
     if (!st) throw new Error("The thread isn't here any more.");
     const { rec, rt } = st;

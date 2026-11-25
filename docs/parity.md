@@ -142,6 +142,7 @@ pasted (`Desktop only for now.` for all three) is left out of this table.
 
 | What | Kind | iPhone | Android | Website |
 |---|---|---|---|---|
+| Coordinators section | `section.coordinators` | Yes | Yes | Yes |
 | Starred section | `section.starred` | Yes | Yes | Yes |
 | Inbox section | `section.inbox` | Yes | Yes | Yes |
 | Running section | `section.running` | Yes | Yes | Yes |

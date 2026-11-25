@@ -1176,6 +1176,24 @@ few things that matter most. To have something pinned, ask the thread
 ## Projects
 <!-- slug: projects -->
 
+With the **Project coordinators** experiment enabled, a project's page offers
+**Add a coordinator** with the ordinary pool and model picker. The first version
+supports Claude models and runs on this Mac. Its conversation stays in a
+Coordinators section above Starred, while routine helpers stay out of the inbox.
+
+The project home has Conversation, Activity, To-dos and Threads tabs. Highlights
+keeps the project's shared goals, state and notes beside them. You can edit that
+document directly; if another thread changed a field while you were editing,
+your draft stays open so you can merge it. Helpers report to the coordinator,
+which checks their results and brings you decisions it cannot settle. Pause
+stops it and its helpers. Resume first reconciles interrupted work.
+
+Other Macs, the phones and the website show the coordinator's conversation and
+questions. Setup and the living document are desktop controls in this version.
+The coordinator can follow project-thread completions, literal interest keywords
+and times it schedules itself. Automatic email, Slack and Sentry routing is not
+part of this first experiment. Account usage remains in Usage.
+
 When a project update needs your approval, its details show the current
 project name and ID alongside the proposed changes.
 

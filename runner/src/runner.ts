@@ -159,7 +159,7 @@ import type { YearTokenAnswer, YearTokenParams } from './year-token-maker.ts';
 import { placeBucket, placeOf } from './place.ts';
 import { allowed as waitMoveAllowed, waitStateOf, type WaitState } from './wait-state.ts';
 import { archivedNote, hibernatedNote, scheduledNote, unarchivedNote, unscheduledNote, wokenNote } from './place-notes.ts';
-import type { Coordinators, Coordinator } from './coordinators.ts';
+import type { Coordinators, CoordinatorView } from './coordinators.ts';
 
 export type Notification =
   | { method: 'thread.updated'; params: { thread: ThreadSummary } }
@@ -176,7 +176,7 @@ export type Notification =
   | { method: 'instructions.updated'; params: { instructions: import('./instructions.ts').StandingInstructions } }
   | { method: 'runner.updates'; params: { updates: RunnerUpdates } }
   | { method: 'projects.updated'; params: { projects: Project[] } }
-  | { method: 'coordinators.updated'; params: { coordinators: Coordinator[] } }
+  | { method: 'coordinators.updated'; params: { coordinators: CoordinatorView[] } }
   | { method: 'librarian.updated'; params: { librarian: LibrarianStatus } }
   | { method: 'connectors.updated'; params: { connectors: ConnectorsStatus } }
   | { method: 'recipes.updated'; params: Record<string, never> }
@@ -1973,13 +1973,14 @@ export class Runner {
     return delivery && 'seq' in delivery ? delivery : undefined;
   }
 
-  private scheduledDelivery(st: ThreadState, messageId: string, since: number): ScheduledDelivery | undefined {
+  private scheduledDelivery(st: ThreadState, messageId: string, since: number, origin: MessageOrigin = 'schedule'): ScheduledDelivery | undefined {
     // A schedule/request may have been timestamped by another runner.
     since = Math.max(0, since - 5 * 60_000);
     const log = this.store.log(st.rec.id);
     let index = this.scheduledMessages.get(log);
     if (!index) { index = new Map(); this.scheduledMessages.set(log, index); }
-    const cached = index.get(messageId);
+    const cacheKey = `${origin}:${messageId}`;
+    const cached = index.get(cacheKey);
     if (cached?.message?.started && cached.through <= log.lastSeq) return cached.message;
     if (cached?.through === log.lastSeq && cached.since <= since) return cached.message;
     const last = log.lastSeq;
@@ -1992,7 +1993,7 @@ export class Runner {
     let started = message?.started ?? false;
     const finish = () => {
       const found = message?.superseded ? message : message && { ...message, started };
-      index.set(messageId, { through: last, since, message: found });
+      index.set(cacheKey, { through: last, since, message: found });
       return found;
     };
     for (let to = last; to >= from; to -= 128) {
@@ -2009,7 +2010,7 @@ export class Runner {
             started = true;
             if (message) return finish();
           }
-          if (e.type === 'user.message' && e.origin === 'schedule') {
+          if (e.type === 'user.message' && e.origin === origin) {
             message = { seq: e.seq, started, text: e.text, images: e.images };
             return finish();
           }
@@ -2020,11 +2021,11 @@ export class Runner {
     return finish();
   }
 
-  findScheduledSend(threadId: string, scheduleId: string, run?: string, since = 0): { turnId: string } | undefined {
+  findScheduledSend(threadId: string, scheduleId: string, run?: string, since = 0, origin: MessageOrigin = 'schedule'): { turnId: string } | undefined {
     if (!run) return undefined;
     const st = this.mustGet(threadId);
     const turnId = scheduledMessageId(threadId, scheduleId, run);
-    if (st.rec.queue.some((q) => q.turnId === turnId) || this.scheduledDelivery(st, turnId, since)?.started) return { turnId };
+    if (st.rec.queue.some((q) => q.turnId === turnId) || this.scheduledDelivery(st, turnId, since, origin)?.started) return { turnId };
     return undefined;
   }
 
@@ -3983,6 +3984,9 @@ export class Runner {
   }): { thread: ThreadSummary } {
     const st = this.mustGet(params.threadId);
     const { rec, rt } = st;
+    if (this.coordinators?.forThread(rec.id)?.state === 'active' && (params.archived || params.snoozedUntil)) {
+      throw new RpcError(ErrorCode.badParams, 'Pause this project’s coordinator before archiving or hibernating its conversation.');
+    }
     // Checked before anything changes, so a refused rename changes nothing else either.
     if (params.title !== undefined && params.titleBy === 'agent' && rec.titleByMike && params.title.trim() !== rec.title) {
       throw new RpcError(ErrorCode.badParams, `The user named this thread "${rec.title}" themselves, so it keeps that title. Only rename it if they ask you to.`);
@@ -4329,6 +4333,7 @@ export class Runner {
   // a mistake can be undone by hand) and forgets it.
   delete(threadId: string): Record<string, never> {
     const st = this.mustGet(threadId);
+    this.coordinators?.forget(threadId);
     const { rec, rt } = st;
     rt.deleted = true;
     rt.trashed = true;
@@ -4991,6 +4996,8 @@ export class Runner {
       lastSeq: rec.lastSeq,
       lastSeenSeq: rec.lastSeenSeq,
     };
+    const coordinatorProjectId = this.coordinators?.projectForThread(rec.id);
+    if (coordinatorProjectId) s.coordinatorProjectId = coordinatorProjectId;
     if (rec.poolId) s.poolId = rec.poolId;
     if (rec.waitingForRoom) s.waitingForRoom = { ...rec.waitingForRoom };
     if (rec.carryOnAtReset === false) s.carryOnAtReset = false;

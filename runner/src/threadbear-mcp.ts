@@ -2009,7 +2009,7 @@ export function buildThreadbearTools(
     ...(opts.coordinators?.()?.forThread(selfId) ? [tool(
       'coordinator',
       'Read your durable project desk, add a bounded job, update your charter/interests or wake time, or record an answer to a helper question. Keep shared project goals/state/notes with update_project. Helpers report to you; ask the user only for decisions your instructions do not settle.',
-      { action: z.enum(['get', 'addTask', 'update', 'answer']), title: z.string().max(200).optional(), doneWhen: z.string().max(1000).optional(), charter: z.string().max(8000).optional(), interests: z.array(z.string().max(200)).max(40).optional(), wakeAt: z.string().nullable().optional(), questionId: z.string().optional(), answer: z.string().max(4000).optional() },
+      { action: z.enum(['get', 'addTask', 'selectTask', 'completeTask', 'archiveTask', 'update', 'answer']), taskId: z.string().optional(), title: z.string().max(200).optional(), doneWhen: z.string().max(1000).optional(), charter: z.string().max(8000).optional(), interests: z.array(z.string().max(200)).max(40).optional(), wakeAt: z.string().nullable().optional(), questionId: z.string().optional(), answer: z.string().max(4000).optional() },
       handle(async (p) => {
         const service = opts.coordinators?.();
         const own = service?.forThread(selfId);
@@ -2017,7 +2017,10 @@ export function buildThreadbearTools(
         if (p.action === 'addTask') service.addTask(own.projectId, p.title ?? '', p.doneWhen ?? '');
         else if (p.action === 'update') service.update(own.projectId, p);
         else if (p.action === 'answer') service.answer(own.projectId, p.questionId ?? '', p.answer ?? '');
-        return service.context(selfId) ?? '';
+        else if (p.action === 'completeTask') service.completeTask(own.projectId, p.taskId ?? '');
+        else if (p.action === 'selectTask') service.selectTask(own.projectId, p.taskId ?? '');
+        else if (p.action === 'archiveTask') service.archiveTask(own.projectId, p.taskId ?? '');
+        return JSON.stringify(service.get(own.projectId));
       }),
     )] : []),
     ...(appRestarts

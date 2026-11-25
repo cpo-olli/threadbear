@@ -6,6 +6,26 @@ check the code against it before running anything. If the code does
 something that isn't on this list, treat that as a problem and say so.
 File references are where to look.
 
+With the optional `coordinators` experiment on (`runner/src/coordinators.ts`),
+each project coordinator uses an ordinary official Claude CLI session and its
+native helper processes on the selected pool. It keeps a durable registry in
+`coordinators.json`, completed work archived in `coordinator-history.jsonl`, and
+its working folder under `coordinators/<project id>/` in the runner data folder.
+Shared project prose remains in `projects.json`. Helper transcripts remain in
+the CLI's normal session storage; work records retain the brief, native identity
+and latest result without copying every helper transcript into each wake.
+
+Project-thread completions and literal keyword matches are batched for ten
+minutes. A coordinator may also set a one-shot wake time. Failed delivery waits
+a minute before retrying. There is no polling model heartbeat. After fifty
+idle minutes, at a safe boundary with no helper running, a context over 100,000
+tokens is compacted; over 150,000 tokens triggers a safe-boundary compaction
+sooner. These are experimental thresholds, not a guarantee about cache lifetime.
+Pause or turning the experiment off stops the coordinator CLI and its helpers.
+No new external source is polled by this experiment. Coordinator identity is
+mirrored through the existing Convex sync; its private work registry stays on
+the owning runner.
+
 ## What setup and install add
 
 - **Git remotes** (`scripts/setup.mjs`, "Your copy"): Mike's repo becomes

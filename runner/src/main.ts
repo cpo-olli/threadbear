@@ -665,8 +665,7 @@ async function main(): Promise<void> {
   // The list as it starts, so the first change to it re-sends the threads it moves.
   runner.recheckWaitStates();
   runner.scheduleChecks = () => scheduler.localChecks();
-  // Projects need the threads loaded (their counts, and the thread side of
-  // membership); the librarian needs both.
+  // The librarian needs both the loaded projects and the recovered threads.
   if (!copyOfReal && !box) coordinators.start();
   const librarian = new Librarian({ host: runner, projects, models, clock: realClock, log, home: cfg.home, pocket: pocketControl });
   if (!copyOfReal && !box) librarian.start();
@@ -1955,10 +1954,11 @@ async function main(): Promise<void> {
     mailFirst = false;
     if (draining || stopping) return;
     // A thread that look started or woke is busy now: it's kept like the rest.
-    const keeps = [...new Set([...busy, ...restarter.busyThreads()])];
+    const keeps = [...new Set([...busy, ...restarter.busyThreads()])].filter((id) => !coordinators.forThread(id));
     draining = true;
     log.info('starting the handover', { keeps });
     try {
+      await coordinators.handover();
       cancelMarkGood();
       updater.stop();
       reinstaller.stop();

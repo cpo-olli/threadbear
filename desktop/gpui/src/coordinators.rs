@@ -278,6 +278,7 @@ impl Threadbear {
                 })
         });
         window.focus(&title.read(cx).focus_handle(cx), cx);
+        crate::web_panels::keyboard_to_app(window);
     }
 
     fn send_coordinator_task(
