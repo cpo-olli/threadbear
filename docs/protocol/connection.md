@@ -378,6 +378,54 @@ found, `-32005` schedule not found, `-32006` sub-agent not found, `-32007` proje
 `-32601` a method this runner doesn't have (`clis.*` on a runner older than
 them), `-32000` anything else with a readable `message`.
 
+### Collecting spare-week jobs
+
+The suggestion brief from `accounts.findWork` and the automatic spare-week
+nudge (`runner/src/spare-week.ts`) tells the parent agent to collect the
+selected jobs back into the original conversation. This uses existing
+tools, not a new RPC or a persisted runner batch type:
+
+- Selection still precedes launch. Each selected job starts once, pinned
+  to the offered account, at max effort, with `nested: false`. Its
+  `startedBy.threadId` and ordinary quiet-inbox archival remain intact.
+- The parent records a batch keyed by the first job's full UUID: approved
+  jobs, titles, full IDs/`thread:<uuid>` links, collected outcomes, and the
+  fallback's schedule ID and fixed deadline. A repeated nudge, continuation
+  or uncertain create result is reconciled against that record and the
+  existing threads before any launch; it is not fresh approval.
+- It reads each job's current state and original full report, including
+  archived threads, before summarizing. Both a wait wake and `read_thread`
+  clip each reply at 2,000 characters. A clipped report needs
+  `tb show <full UUID> --last 1` on this runner (increase `--last` for
+  reports spanning earlier turns), reading all the output. If unavailable,
+  label the report incomplete. Archive/deletion alone is not
+  success. Failed, stopped, needs-user and unavailable jobs are identified
+  with links, without retrying them or answering their asks.
+- For outstanding work, it books at most one one-off `schedule_message`
+  to itself, two hours from launch, with the batch IDs, deadline and
+  collection instructions. It first reconciles `list_schedules`, never
+  books a cron or replaces a fired check, and saves the returned ID.
+  It then ends with `needs: "nothing"`, `waitFor` on eligible local jobs
+  (all four fit), and `snooze` at that same deadline. It omits archived,
+  deleted, failed, stopped and needs-user jobs. A registration refusal
+  requires a fresh read, not a new launch or another timer.
+- A message clears a wait. Before the deadline, the parent re-reads the
+  batch and restores eligible waits, keeping the original check. When all
+  outcomes are known it cancels that check and gives one compact dated
+  digest, each result linked to its full report. A fallback already delivered
+  can race collection; compare the previous digest and keep
+  the useful results rather than publish a second digest or "nothing new".
+- At the fallback/deadline it reads every job, gives a partial digest if
+  necessary, labels still-running work as pending, removes the check and
+  ends this collection round without another wait or timer. Further
+  collection of unfinished work requires an explicit request. Closing a
+  batch early also cancels its check. Children keep running independently.
+
+This is agent instruction, not exactly-once delivery. The runner tests
+exercise message construction and the tools/wait/schedule/report-read
+paths with synthetic jobs; they cannot prove a model follows the brief.
+No new tool arguments, client rendering or archive rules are introduced.
+
 ### Warm start
 
 Claude Code takes about half a second from starting to its first request, and

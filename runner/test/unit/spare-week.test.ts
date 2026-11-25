@@ -136,7 +136,26 @@ test("the brief names the login and its pool, asks before starting, and has noth
   assert.match(text, /last call/);
   assert.match(text, /Ask, don't start/);
   assert.match(text, /account "claude-2"/);
+  assert.match(text, /effort "max", nested false/);
+  assert.match(text, /Nothing that posts, sends, deploys to production or spends money/);
   assert.doesNotMatch(text, /Mike|dev\/me|misc/);
+});
+
+test('every entry brief carries the bounded collection contract without changing selection or launch', () => {
+  const a = login('codex-1', [week(70, 18)], { provider: 'codex' });
+  for (const byHand of [true, false]) for (const stage of ['early', 'last-call'] as const) {
+    const text = brief({ account: a, pools: [], projections: projections(a, () => [], NOW), stage, byHand, now: NOW });
+    assert.match(text, /Ask, don't start/);
+    assert.match(text, /account "codex-1".*effort "max", nested false/);
+    for (const contract of [
+      /first job's full UUID/, /thread:<full UUID>/, /read_thread/, /2,000/, /tb show <full UUID> --last 1/,
+      /schedule_message/, /list_schedules/, /delete_schedule/, /waitFor/,
+      /failed, stopped/, /archived/, /original deadline/, /Do not relaunch/,
+      /at most one one-off/, /Never use cron/, /Do not rearm/,
+      /partial digest/, /explicit request/, /best effort/,
+    ]) assert.match(text, contract);
+    assert.ok(text.indexOf('schedule_message') < text.indexOf('waitFor'), 'book the fallback before ending the turn');
+  }
 });
 
 function rig(accounts: Account[], opts: { on?: boolean; looks?: boolean; home?: string; startId?: number } = {}) {

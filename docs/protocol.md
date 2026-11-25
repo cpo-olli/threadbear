@@ -36,7 +36,7 @@ It was all this one file once. Work made on that comes across by itself in `tb l
 | File | Sections |
 | --- | --- |
 | this page | Ordering and reconnects, Older and newer clients |
-| [connection.md](protocol/connection.md) | Auth, Requests (app to runner), Warm start, Models and effort across providers, Notifications (runner to app) |
+| [connection.md](protocol/connection.md) | Auth, Requests (app to runner), Collecting spare-week jobs, Warm start, Models and effort across providers, Notifications (runner to app) |
 | [types.md](protocol/types.md) | Types |
 | [events.md](protocol/events.md) | Events, Design reviews, Marks: the canvas (the `reviewCanvas` experiment), Reviews on the phone, Reply buttons |
 | [needs-you.md](protocol/needs-you.md) | Needs you, The reply phase, Wait state |

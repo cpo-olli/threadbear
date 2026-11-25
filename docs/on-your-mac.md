@@ -732,7 +732,15 @@ File references are where to look.
   the same window, so a rounded countdown can't repeat a nudge. It keeps
   what it last said in `runner/spare-week.json` in
   the data folder. Find work for it in the Usage panel starts the same
-  thread by hand.
+  thread by hand. Its brief also tells the agent to record selected jobs'
+  full thread IDs in that conversation, wait for eligible jobs, and read
+  the original full reports for a digest there (`read_thread` clips replies;
+  `tb show` reads them in full). For incomplete collection it books at most
+  one ordinary one-off schedule to itself two hours after launch, cancelling
+  it when all outcomes are known or collection is stopped. The deadline
+  produces a partial digest if needed and ends that round, without another
+  timer. The batch record and schedule use the existing transcript and
+  schedule storage; there is no new polling service or automatic job retry.
 - **Your email, if you set it up** (`runner/src/mail-watch.ts`, the
   experiment mailWatch, off unless you turn it on and give it a command):
   every five minutes the main Mac's runner runs the command you put in

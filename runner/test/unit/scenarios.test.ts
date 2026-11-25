@@ -20,6 +20,22 @@ import path from 'node:path';
 
 test('phone reads review previews and submits a revision-checked answer through Convex', phoneReviewScenario);
 
+test('spare-week digest keeps all four full report links and mixed outcomes on every route', async () => {
+  const outcomes = ['review complete', 'failed', 'stopped', 'needs a scope decision'];
+  const links = outcomes.map((_, i) => `thread:00000000-0000-4000-8000-00000000000${i}`);
+  const digest = `Reports collected on 25 November.\n${outcomes.map((outcome, i) => `- [Review ${i + 1}](${links[i]}): ${outcome}.`).join('\n')}`;
+  const { views, refused } = await threeWays((p) => {
+    p.say(digest);
+    p.endTurn({ needs: 'nothing' });
+  });
+  assert.deepEqual(refused, []);
+  for (const view of Object.values(views)) {
+    const reply = view.messages.find((m) => m.text === digest);
+    assert.ok(reply, 'the whole digest reaches this route');
+    for (const link of links) assert.ok(reply.text.includes(link));
+  }
+});
+
 type Route = 'relay' | 'phone';
 type Field = 'needs' | 'asks' | 'next' | 'looseEnds' | 'review' | 'plans' | 'messages' | 'notes' | 'pictures' | 'failed' | 'origins' | 'waitState';
 

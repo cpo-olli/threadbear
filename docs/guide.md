@@ -1769,6 +1769,21 @@ Each one you say yes to starts on that login, so it spends the week that
 would otherwise go to waste. Pressing it again while that thread is still
 open takes you back to it.
 
+That original thread collects the results too. It links to each independent
+job's full report, waits for the jobs that are still running, then reads
+their reports and gives a dated digest here. Reports remain accessible
+through those links even when Threadbear has archived them; desktop
+Highlights also lists **Threads it started**.
+
+Each batch gets at most one fallback check, two hours after launch. If
+everything is accounted for earlier, the agent cancels the check. Otherwise
+it reports what is ready and what failed, stopped, needs you or is still
+pending, then closes that collection round. Unfinished jobs carry on;
+ask the original thread to collect them again later. This is guidance to
+the agent using ordinary waits and schedules, not a guarantee against
+duplicate summaries after an interrupted session. A repeat nudge does not
+approve or launch the same jobs again.
+
 Threadbear also does this by itself, with "Tell me when a week's about to
 go unused" in Settings › General › Usage (on to begin with). A day before
 a login's week resets, if at the rate it's going 30% or more of it would be
