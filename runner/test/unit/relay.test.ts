@@ -1496,3 +1496,11 @@ test('remote usage uses its effective pools, including local defaults', async ()
   const old = await harness({ apiVersion: 100 }).relay.logins('mac-mini');
   assert.equal(old.usagePools, undefined);
 });
+
+test('a remote coordinator remains a coordinator while its transcript is open', async () => {
+  const h = harness({ row: () => ({ ...idle, share: { access: 'link', slug: 'abc' } }) });
+  h.remote.threads[0]!.coordinatorProjectId = 'p_threadbear';
+  await h.relay.call(T, 'threads.subscribe', { threadId: T, afterSeq: 0 });
+  const update = h.published.find((n) => (n as { method: string }).method === 'thread.updated');
+  assert.equal((update as { params: { thread: { coordinatorProjectId?: string } } }).params.thread.coordinatorProjectId, 'p_threadbear');
+});

@@ -724,7 +724,7 @@ export class Relay {
       lastSeenSeq: 0,
       runnerId: t.runnerId,
     };
-    for (const k of ['poolId', 'model', 'createdAt', 'lastActivityAt', 'snoozedUntil', 'archivedAt', 'starredAt', 'startedBy', 'asked', 'keywords', 'waitState'] as const) {
+    for (const k of ['poolId', 'model', 'createdAt', 'lastActivityAt', 'snoozedUntil', 'archivedAt', 'starredAt', 'coordinatorProjectId', 'startedBy', 'asked', 'keywords', 'waitState'] as const) {
       if (t[k] !== undefined) thread[k] = t[k];
     }
     // Its real access, or "unknown" from a runner that doesn't say: never
