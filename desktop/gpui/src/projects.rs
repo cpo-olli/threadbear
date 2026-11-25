@@ -1330,6 +1330,7 @@ impl Threadbear {
         editing
             .input
             .update(cx, |input, cx| input.focus(window, cx));
+        crate::web_panels::keyboard_to_app(window);
         self.clear_project_edit_error();
         cx.notify();
     }
