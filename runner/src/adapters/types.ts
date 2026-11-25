@@ -73,6 +73,14 @@ export type StartSessionOptions = {
   // the session must be able to stop them applying if the thread leaves
   // Full (askBeforeEveryTool).
   heldGrants?: boolean;
+  // The coordinator's boundary is checked by the adapter before any native
+  // allow rule, including Full access. Helper identity comes from the SDK's
+  // hook envelope, never tool arguments. The host owns pause and run records.
+  coordinator?: {
+    checkTool(call: { name: string; input: Record<string, unknown>; agentId?: string; toolUseId?: string }): string | undefined;
+    helperQuestion?(agentId: string, questions: Question[]): void;
+    workerStarted?(agentId: string, agentType?: string): void;
+  };
 };
 
 export type TurnResult = {

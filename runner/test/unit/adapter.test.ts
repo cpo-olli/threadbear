@@ -108,6 +108,105 @@ function start(allowRules: string[] = [], extra: Record<string, unknown> = {}, d
   return { session, state, outputs, approvals, adapter };
 }
 
+test('a coordinator gate runs before Full access and trusts only the SDK helper identity', async () => {
+  const known = new Set<string>();
+  let paused = false;
+  const calls: { name: string; agentId?: string }[] = [];
+  const { session, state, approvals } = start([], {
+    permissionMode: 'full',
+    coordinator: {
+      checkTool: (call: { name: string; agentId?: string }) => {
+        calls.push(call);
+        return paused ? 'Coordinator paused.' : call.agentId && !known.has(call.agentId) ? 'Unknown helper.' : undefined;
+      },
+      workerStarted: (id: string) => known.add(id),
+    },
+  });
+  const pre = state.options.hooks.PreToolUse[0].hooks[0];
+  const hook = (name: string, input: unknown = {}, agentId?: string) => pre({ hook_event_name: 'PreToolUse', tool_name: name, tool_use_id: 'call-1', tool_input: input, ...(agentId ? { agent_id: agentId } : {}) });
+  try {
+    for (const name of ['Bash', 'Write', 'Skill', 'mcp__other__write', 'mcp__threadbear__create_thread']) {
+      assert.equal((await hook(name)).hookSpecificOutput.permissionDecision, 'deny', name);
+    }
+    assert.equal((await hook('Bash', { agent_id: 'worker-1' })).hookSpecificOutput.permissionDecision, 'deny', 'the model cannot put its helper identity in tool input');
+    assert.equal((await hook('Write', {}, 'unknown')).hookSpecificOutput.permissionDecision, 'deny');
+    await state.options.hooks.SubagentStart[0].hooks[0]({ hook_event_name: 'SubagentStart', agent_id: 'worker-1', agent_type: 'coordinator-worker' });
+    assert.deepEqual(await hook('Write', { file_path: '/tmp/a' }, 'worker-1'), {});
+    assert.deepEqual(await hook('mcp__threadbear__read_project'), {});
+    assert.equal(calls.at(-1)?.name, 'mcp__threadbear__read_project');
+    assert.deepEqual(await hook('ToolSearch', { query: 'threadbear coordinator' }), {}, 'deferred MCP tools must remain discoverable');
+    paused = true;
+    assert.equal((await hook('Write', {}, 'worker-1')).hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal((await hook('Read')).hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(approvals.length, 0, 'a gate refusal cannot turn into a user card');
+  } finally {
+    state.close();
+    await session.end();
+  }
+});
+
+test('coordinator verification failures deny a tool instead of dropping the boundary', async () => {
+  const { session, state } = start([], { permissionMode: 'full', coordinator: { checkTool: () => { throw new Error('record unavailable'); } } });
+  try {
+    const pre = state.options.hooks.PreToolUse[0].hooks[0];
+    const result = await pre({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'r1', tool_input: {} });
+    assert.equal(result.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(result.hookSpecificOutput.permissionDecisionReason, /could not verify/);
+    const approval = await state.options.canUseTool('Write', {}, { signal: new AbortController().signal, toolUseID: 'w1', agentID: 'worker-1' });
+    assert.equal(approval.behavior, 'deny');
+  } finally {
+    state.close();
+    await session.end();
+  }
+});
+
+test('coordinator dispatch uses its controlled worker and cannot override the worker permissions', async () => {
+  const { session, state } = start([], { coordinator: { checkTool: () => undefined } });
+  try {
+    const pre = state.options.hooks.PreToolUse[0].hooks[0];
+    const result = await pre({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'a1', tool_input: { description: 'Fix it', prompt: 'Read the brief', subagent_type: 'general-purpose', mode: 'bypassPermissions', model: 'opus', tools: ['Bash'] } });
+    assert.equal(result.hookSpecificOutput.updatedInput.subagent_type, 'coordinator-worker');
+    assert.equal(result.hookSpecificOutput.updatedInput.mode, undefined);
+    assert.equal(result.hookSpecificOutput.updatedInput.tools, undefined);
+    assert.equal(result.hookSpecificOutput.updatedInput.model, undefined);
+    assert.equal(state.options.agents['coordinator-worker'].model, 'inherit');
+    assert.match(state.options.agents['coordinator-worker'].prompt, /report.*coordinator/i);
+  } finally {
+    state.close();
+    await session.end();
+  }
+});
+
+test('coordinator helper questions go to the coordinator and approval needs never open helper cards', async () => {
+  const questions: unknown[] = [];
+  const { session, state, approvals } = start([], {
+    permissionMode: 'ask',
+    coordinator: {
+      checkTool: () => undefined,
+      helperQuestion: (agentId: string, items: unknown[]) => questions.push({ agentId, items }),
+    },
+  });
+  try {
+    const pre = state.options.hooks.PreToolUse[0].hooks[0];
+    const q = { questions: [{ question: 'Which repo?', options: [{ label: 'Threadbear' }] }] };
+    const denied = await pre({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'q1', tool_input: q, agent_id: 'worker-1' });
+    assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(denied.hookSpecificOutput.permissionDecisionReason, /coordinator/i);
+    assert.equal(questions.length, 1);
+    for (const name of ['mcp__threadbear__end_turn', 'mcp__threadbear__ask_secret', 'mcp__threadbear__delete_thread', 'Agent']) {
+      const result = await pre({ hook_event_name: 'PreToolUse', tool_name: name, tool_use_id: 'x1', tool_input: {}, agent_id: 'worker-1' });
+      assert.equal(result.hookSpecificOutput.permissionDecision, 'deny', name);
+    }
+    const r = await state.options.canUseTool('Write', { file_path: '/tmp/a', content: 'b' }, { signal: new AbortController().signal, toolUseID: 'w1', agentID: 'worker-1' });
+    assert.equal(r.behavior, 'deny');
+    assert.match(r.message, /coordinator/i);
+    assert.equal(approvals.length, 0);
+  } finally {
+    state.close();
+    await session.end();
+  }
+});
+
 test("a folder's own settings load normally; with untrusted Claude settings, only Alex's, plus the rest as flag settings and the folder's CLAUDE.md", async () => {
   const plain = start();
   assert.deepEqual(plain.state.options.settingSources, ['user', 'project', 'local']);

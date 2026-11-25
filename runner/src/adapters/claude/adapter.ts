@@ -25,6 +25,7 @@ import { RUNNER_VERSION } from '../../config.ts';
 import { stripModelSuffix } from '../../accounts.ts';
 import { END_TURN_FULL_NAME, END_TURN_NUDGE, endTurnMessageStands, endTurnWantsReply, needsFromTool, ONE_REPLY_END_TURN_NUDGE, ONE_REPLY_WRITE_NUDGE, missingLinksNudge, owedReplyAfterCompact, replyAsks, replyAsksNudge, WakeRead } from '../../needs.ts';
 import { missingFileLinks } from '../../highlights.ts';
+import { coordinatorTool, COORDINATOR_WORKER, COORDINATOR_WORKER_PROMPT, HELPER_REPORT } from './coordinator.ts';
 
 // Variables a parent Claude Code session sets for its own children. If the
 // runner was started from inside one (tests, a terminal in T3), they would
@@ -504,6 +505,7 @@ class ClaudeSession implements AgentSession {
         // mode it ran on is recorded, and where one that writes code is
         // made to ask outside Full access (onEditCall).
         PreToolUse: [
+          ...(opts.coordinator ? [{ hooks: [async (input: HookInput) => this.onCoordinatorTool(input)] }] : []),
           // The same hook refuses a queued call Mike denied on a card
           // (onQueuedCall), before any allow rule or Auto's classifier could
           // let it through: only tools that can queue, so the rest don't
@@ -519,10 +521,15 @@ class ClaudeSession implements AgentSession {
           ...(opts.heldGrants ? [{ hooks: [async () => (this.askEvery ? { hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision: 'ask' as const, permissionDecisionReason: "The folder's permission rules aren't trusted for this thread." } } : {})] }] : []),
         ],
         SessionStart: [{ hooks: [async (input) => this.onCompact(input)] }],
+        ...(opts.coordinator ? { SubagentStart: [{ hooks: [async (input: HookInput) => {
+          if (input.hook_event_name === 'SubagentStart' && input.agent_type === COORDINATOR_WORKER) opts.coordinator?.workerStarted?.(input.agent_id, input.agent_type);
+          return {};
+        }] }] } : {}),
       },
       abortController: this.abort,
       spawnClaudeCodeProcess: groupSpawner(deps.registry, deps.log, (line) => this.stderr(line), opts.threadId),
     };
+    if (opts.coordinator) options.agents = { [COORDINATOR_WORKER]: { description: 'Carry out one bounded project job and report to the coordinator.', prompt: COORDINATOR_WORKER_PROMPT, model: 'inherit' } };
     const servers = deps.mcpServersFor?.(opts.threadId);
     if (servers && Object.keys(servers).length) options.mcpServers = servers;
     this.hasEndTurn = Object.keys(servers ?? {}).some((k) => END_TURN_FULL_NAME.startsWith(`mcp__${k}__`));
@@ -542,6 +549,30 @@ class ClaudeSession implements AgentSession {
     const queryFn = deps.queryFn ?? sdkQuery;
     this.q = queryFn({ prompt: this.input, options });
     void this.pump();
+  }
+
+  private onCoordinatorTool(input: HookInput): { hookSpecificOutput?: { hookEventName: 'PreToolUse'; permissionDecision?: 'deny'; permissionDecisionReason?: string; updatedInput?: Record<string, unknown> } } {
+    if (input.hook_event_name !== 'PreToolUse' || !this.opts.coordinator) return {};
+    const args = input.tool_input && typeof input.tool_input === 'object' && !Array.isArray(input.tool_input) ? input.tool_input as Record<string, unknown> : {};
+    const gate = this.coordinatorCheck(input.tool_name, args, input.agent_id, input.tool_use_id);
+    if (gate.reason) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: gate.reason } };
+    return gate.updatedInput ? { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: gate.updatedInput } } : {};
+  }
+
+  private coordinatorCheck(name: string, input: Record<string, unknown>, agentId?: string, toolUseId?: string): { reason?: string; updatedInput?: Record<string, unknown> } {
+    const host = this.opts.coordinator;
+    if (!host) return {};
+    const gate = coordinatorTool(name, input, Boolean(agentId));
+    // The host sees only sanitized dispatch input and trusted identity.
+    // Check questions too, before recording one for an unknown helper.
+    try {
+      const reason = host.checkTool({ name, input: gate.updatedInput ?? input, agentId, toolUseId });
+      if (reason) return { reason };
+      if (agentId && name === 'AskUserQuestion') host.helperQuestion?.(agentId, normaliseQuestions(input.questions));
+      return gate;
+    } catch {
+      return { reason: 'The runner could not verify this coordinator operation. Stop and report the problem; the operation was not allowed.' };
+    }
   }
 
   private async onStop(input: HookInput): Promise<{ decision?: 'block'; reason?: string }> {
@@ -921,6 +952,11 @@ class ClaudeSession implements AgentSession {
     input: Record<string, unknown>,
     o: { signal: AbortSignal; suggestions?: PermissionUpdate[]; toolUseID: string; title?: string; suppressAlwaysAllowRule?: boolean; agentID?: string; decisionReason?: string; decisionReasonType?: string },
   ): Promise<PermissionResult> {
+    if (this.opts.coordinator) {
+      const gate = this.coordinatorCheck(name, input, o.agentID, o.toolUseID);
+      if (gate.reason) return { behavior: 'deny', message: gate.reason, toolUseID: o.toolUseID };
+      if (gate.updatedInput) input = gate.updatedInput;
+    }
     // A subagent's tool calls stay inside its Agent call (the normaliser
     // drops them), so there's no tool.call to wait for or point at.
     const sub = Boolean(o.agentID);
@@ -951,6 +987,7 @@ class ClaudeSession implements AgentSession {
     }
     if (this.deps.neverAsk?.has(name) && !this.deps.alwaysAsk?.has(name)) return { behavior: 'allow', updatedInput: input, toolUseID: o.toolUseID };
     if (this.mode === 'full' && !this.deps.alwaysAsk?.has(name)) return { behavior: 'allow', updatedInput: input, toolUseID: o.toolUseID };
+    if (this.opts.coordinator && sub) return { behavior: 'deny', message: HELPER_REPORT, toolUseID: o.toolUseID };
     // "Plan first": the plan goes to Mike as a plan card, and this call
     // waits on it like any approval. Approving it answers with the mode to
     // leave plan mode for (setMode below), as the CLI's own prompt does.
