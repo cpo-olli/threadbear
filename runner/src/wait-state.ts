@@ -76,8 +76,11 @@ export const WAIT_MOVES: Move[] = [
   { from: ['review'], to: 'needsYou', on: 'the review is answered' },
   { from: ['review'], to: 'done', on: 'the review is answered or dismissed' },
   { from: ['scheduled'], to: 'done', on: 'the schedule is paused, finished or deleted' },
+  { from: ['scheduled'], to: 'needsYou', on: 'the schedule goes before the user has seen its agent\'s snooze end (quietWake)' },
   { from: ['landing'], to: 'hibernating', on: 'its commits reach main and it stays asleep until its wake' },
   { from: PUT_AWAY, to: 'needsYou', on: 'it wakes by itself (marked unread) or the snooze ends' },
+  { from: ['hibernating'], to: 'scheduled', on: 'its agent\'s snooze ends with a schedule booked and nothing for the user' },
+  { from: ['needsYou'], to: 'scheduled', on: 'the user reads it with a schedule booked, or the schedules load after a start' },
   { from: PUT_AWAY, to: 'done', on: 'the user wakes it and it has nothing for him' },
   { from: ['onThreads', 'appRestart', 'hibernating'], to: 'card', on: 'a card stays open while it hibernates and then wakes' },
   // The quiet inbox archives too (runner/src/runner/quiet-inbox.ts): a

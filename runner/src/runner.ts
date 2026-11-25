@@ -1583,7 +1583,9 @@ export class Runner {
     for (const st of this.threads.values()) if (this.scheduled(st.rec.id)) now.add(st.rec.id);
     // The first time, every thread a summary has said is scheduled counts
     // as before, so the first schedule removed after a start is sent too.
-    const before = this.scheduledThreads ?? new Set([...this.threads.values()].filter((st) => st.rt.waitState === 'scheduled').map((st) => st.rec.id));
+    // A thread adopted since (a handover) was never in the last list: what
+    // its summary said counts too.
+    const before = new Set([...(this.scheduledThreads ?? []), ...[...this.threads.values()].filter((st) => st.rt.waitState === 'scheduled').map((st) => st.rec.id)]);
     this.scheduledThreads = now;
     for (const id of new Set([...now, ...before])) {
       if (now.has(id) === before.has(id)) continue;
@@ -1595,25 +1597,34 @@ export class Runner {
   // The threads a schedule would message, as of the last schedules.updated.
   private scheduledThreads?: Set<string>;
 
-  private scheduled(threadId: string): boolean {
-    return (this.schedulesFor?.(threadId) ?? []).some((x) => x.threadId === threadId && !x.paused && !x.finishedAt && Boolean(x.nextRunAt));
+  // The soonest booked schedule that will message the thread.
+  nextSchedule(threadId: string): Schedule | undefined {
+    return (this.schedulesFor?.(threadId) ?? [])
+      .filter((x) => x.threadId === threadId && !x.paused && !x.finishedAt && x.nextRunAt && !Number.isNaN(Date.parse(x.nextRunAt)))
+      .sort((a, b) => Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!))[0];
+  }
+
+  scheduled(threadId: string): boolean {
+    return this.nextSchedule(threadId) !== undefined;
   }
 
   // The line for a move into or out of Hibernating for a schedule, once
   // the summary that saw it is made. Checked again, as a turn may have
   // started in between.
-  private sayScheduled(st: ThreadState, into: boolean): void {
+  sayScheduled(st: ThreadState, into: boolean): void {
     if (st.rt.deleted || this.stopping) return;
     if ((st.rt.waitState === 'scheduled') !== into) return;
     const now = this.clock.now();
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (!into) {
+      // Out for news while its schedule is still booked (a turn's reply, a
+      // wake): that has its own line, and "no schedule is booked" would be
+      // wrong (25 Nov 2026).
+      if (this.scheduled(st.rec.id)) return;
       this.emit(st, { type: 'system.note', text: unscheduledNote({ now, timeZone }) });
       return;
     }
-    const next = (this.schedulesFor?.(st.rec.id) ?? [])
-      .filter((x) => x.threadId === st.rec.id && !x.paused && !x.finishedAt && x.nextRunAt)
-      .sort((a, b) => Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!))[0];
+    const next = this.nextSchedule(st.rec.id);
     this.emit(st, { type: 'system.note', text: scheduledNote({ title: next?.title, next: next?.nextRunAt ? Date.parse(next.nextRunAt) : undefined, now, timeZone }) });
   }
 
@@ -2424,6 +2435,8 @@ export class Runner {
       this.markDirty(st);
       throw e;
     }
+    // Started: how this turn ends says whether it wants Mike now.
+    delete rec.quietWake;
     rt.idleTimer?.cancel();
     rt.idleTimer = undefined;
     rt.turn = { turnId: msg.turnId, startedAt: this.clock.now(), interruptRequested: false, messages: [msg.turnId], edited: new Set(), access: rec.permissionMode };
@@ -3588,7 +3601,7 @@ export class Runner {
     const text = until === 'restart' ? 'Hibernating until the runner next starts, as the agent was asked to.'
       : until === 'release' ? 'Hibernating until the runner starts on a new release, as the agent was asked to.' : `Hibernating until ${localWhen(Date.parse(until), timeZone)}, as the agent was asked to.`;
     this.emit(st, { type: 'system.note', text });
-    this.update({ threadId: rec.id, snoozedUntil: until, noted: true });
+    this.update({ threadId: rec.id, snoozedUntil: until, noted: true, byAgent: true });
   }
 
   // A snooze its agent asked for that didn't take, after a check a wake
@@ -4194,7 +4207,7 @@ export class Runner {
       } else {
         const t = Date.parse(params.snoozedUntil);
         if (Number.isNaN(t)) throw new RpcError(ErrorCode.badParams, 'snoozedUntil must be an ISO time, "restart" or "release"');
-        this.park(st, { kind: 'snooze', until: { kind: 'time', at: new Date(t).toISOString() } });
+        this.park(st, { kind: 'snooze', until: { kind: 'time', at: new Date(t).toISOString(), ...(params.byAgent ? { by: 'agent' as const } : {}) } });
         stop = true;
       }
       this.armSnoozeTimer();
@@ -4363,6 +4376,13 @@ export class Runner {
     return { thread: this.summary(st) };
   }
 
+  // A quiet wake (HibernationPart.wake) wants Mike once no schedule will
+  // bring the thread back: the same test as its wait state's, so the two
+  // agree, and schedules.updated looks at it again (recheckWaitStates).
+  quietWakeShows(rec: ThreadRecord): boolean {
+    return Boolean(rec.quietWake) && this.bucket(rec) === 'inbox' && !this.scheduled(rec.id);
+  }
+
   saidNothing(rec: ThreadRecord): boolean {
     return rec.needs?.needs === 'nothing' && rec.needs.seq === rec.lastTurnCompletedSeq;
   }
@@ -4373,6 +4393,7 @@ export class Runner {
     const last = Math.max(rec.lastSeq, this.store.log(threadId).lastSeq);
     rec.lastSeenSeq = Math.max(rec.lastSeenSeq, Math.min(Math.floor(seq), last));
     rec.forceUnread = false;
+    delete rec.quietWake;
     this.park(st, { kind: 'seen' });
     this.markDirty(st);
     return { thread: this.summary(st) };
@@ -4947,7 +4968,7 @@ export class Runner {
       // (docs/protocol/needs-you.md, "Needs you"). A pending design review only
       // counts once the turn ends: show_options doesn't block, and Mike
       // didn't want a "Needs you" (or a phone push) mid-turn.
-      needsYou: (!unfinished && Boolean(rec.reviews?.some(r => r.status === 'pending'))) || rec.status === 'waiting' || Boolean(rec.forceUnread) || (!unfinished && rec.lastTurnCompletedSeq > rec.lastSeenSeq && !this.saidNothing(rec)),
+      needsYou: (!unfinished && Boolean(rec.reviews?.some(r => r.status === 'pending'))) || rec.status === 'waiting' || Boolean(rec.forceUnread) || this.quietWakeShows(rec) || (!unfinished && rec.lastTurnCompletedSeq > rec.lastSeenSeq && !this.saidNothing(rec)),
       createdAt: rec.createdAt,
       updatedAt: rec.updatedAt,
       lastActivityAt: rec.lastActivityAt,
@@ -4990,7 +5011,7 @@ export class Runner {
     // lists them with whether the build on its way has their commit.
     const appWant = rec.archivedAt ? undefined : this.appRestartWant?.(rec.id);
     if (appWant) s.awaitingApp = appWant;
-    if (rec.woke && rec.forceUnread) s.woke = { ...rec.woke };
+    if (rec.woke && (rec.forceUnread || this.quietWakeShows(rec))) s.woke = { ...rec.woke };
     if (rec.archivedAt) {
       s.archivedAt = rec.archivedAt;
       // Archived before who did it was kept: nobody can say.

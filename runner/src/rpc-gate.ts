@@ -133,7 +133,9 @@ export class CallerGate {
     const known = this.authority(threadId);
     // Any agent's move, Full's too: it never starts a turn by itself
     // (Runner.update's carry-on after a limit is Mike's pick from the menu).
-    if (method === 'threads.update' && (p.cwd !== undefined || p.accountId !== undefined || p.poolId !== undefined)) p = { ...p, byAgent: true };
+    // A snooze too (`tb snooze` from a thread): its waking then follows the
+    // agent's rules, not Mike's (HibernationPart.wake, quietWake).
+    if (method === 'threads.update' && (p.cwd !== undefined || p.accountId !== undefined || p.poolId !== undefined || (p.snoozedUntil !== undefined && p.snoozedUntil !== null))) p = { ...p, byAgent: true };
     // A CLI started ahead of a new thread is for the app's new-thread page
     // (runner/warm-start.ts): a thread neither starts one nor takes the app's.
     if (method === 'threads.warm') throw new RpcError(ErrorCode.notAllowed, "Starting a CLI ahead of a new thread is the app's to do.");

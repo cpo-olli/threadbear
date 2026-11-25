@@ -264,6 +264,7 @@ export type ThreadRecord = {
   // makes no threads), for the runner that adopts or loads this one to start.
   // `seq`: where that turn's events end, which its diff is read back from.
   labReviewOwed?: { turnId: string; seq?: number; reply?: string };
+  snoozedByAgent?: true; // its snooze until a time was its agent's, not Mike's (place.ts)
   snoozedAt?: string; // when it was last put away, for how long it slept; may be stale once awake
   woke?: { at: string; since?: string }; // woke by itself and not looked at yet (since = snoozedAt)
   archivedAt?: string;
@@ -328,6 +329,7 @@ export type ThreadRecord = {
   sessionCostTotal?: number; // the CLI's running total_cost_usd for this native session
   lastTurnCompletedSeq: number;
   forceUnread?: boolean; // set when a snooze ends
+  quietWake?: true; // its agent's snooze ended with nothing for Mike: unread only while no schedule is booked (HibernationPart.wake)
   // What the last completed turn said it needs from Mike, with the seq of
   // its turn.completed and which of its asks he has ticked.
   // (A record from 11 to 13 Nov 2026 may also hold `open`, the agent's own
