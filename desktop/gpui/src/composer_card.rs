@@ -787,6 +787,7 @@ impl Composer {
                 cx,
             )
             .test_support()
+            .role(Role::Button)
             .aria_label("Archive this thread")
             .on_click(move |event, window, cx| {
                 if let Some(this) = this.upgrade() {
