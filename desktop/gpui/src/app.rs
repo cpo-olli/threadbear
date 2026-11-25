@@ -63,6 +63,7 @@ pub struct Threadbear {
     /// Agent Archive in the sidebar's search, and a session open in the
     /// thread's place (archive_search.rs).
     pub(crate) archive: crate::archive_search::ArchiveSearch,
+    pub(crate) coordinators: crate::coordinators::CoordinatorsState,
 
     // The window shell (shell.rs, rails.rs, header.rs).
     /// Holds the keyboard when nothing in the window has it (no thread open,
@@ -550,6 +551,7 @@ impl Threadbear {
             kept: Default::default(),
             search,
             archive: Default::default(),
+            coordinators: Default::default(),
             folded,
             composers: HashMap::new(),
             drafts: crate::drafts::Drafts::load(
@@ -1054,6 +1056,7 @@ impl Threadbear {
                     self.load_list(cx);
                     self.refresh_restart(cx);
                     self.load_projects(cx);
+                    self.load_coordinators(cx);
                     self.load_runner_settings(cx);
                     self.load_schedules(cx);
                     self.load_remote(cx);
@@ -1229,6 +1232,11 @@ impl Threadbear {
                             &params["instructions"],
                         ),
                     )
+                }
+                "coordinators.updated" => {
+                    if self.coordinators_on() {
+                        self.receive_coordinators(&params["coordinators"]);
+                    }
                 }
                 "projects.updated" => {
                     self.librarian.projects_made =
@@ -1663,7 +1671,13 @@ impl Threadbear {
     }
 
     pub(crate) fn open(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let project = self.coordinator_project_for_thread(&id);
         self.open_with(id, None, window, cx);
+        if let Some(project) = project {
+            self.projects.open = Some(project);
+            self.show_pane(crate::shell::HIGHLIGHTS, cx);
+            cx.notify();
+        }
     }
 
     /// `open`, with the pane of a thread brought back from a panel of its own
@@ -2085,6 +2099,7 @@ impl Threadbear {
             // A project's page in place of the thread, and the Projects page's
             // cards while it's showing (projects.rs, projects_page.rs).
             "project": self.project_page_dump(),
+            "coordinator": self.coordinator_dump(cx),
             "projectCards": self.project_cards_dump(),
             "banner": self.banner_dump(),
             "limit": self.limit_dump(cx),
@@ -2284,6 +2299,10 @@ impl Threadbear {
         out
     }
 
+    pub(crate) fn invalidate_coordinator_sections(&self) {
+        self.sections_cache.borrow_mut().take();
+    }
+
     /// The sections with the search applied, as they're drawn.
     /// The sidebar's sections as they stand. Worked out again only when the
     /// threads, the search, the order or the schedules changed, or a snooze
@@ -2337,10 +2356,19 @@ impl Threadbear {
         let nesting =
             nested.then(|| Rc::new(threadbear_core::nested::Nesting::build(all(), now, &wakes)));
         let shown = all().filter(|t| query.is_empty() || inbox::matches(t, &query));
-        let sections = Rc::new(match &nesting {
+        let sections = match &nesting {
             Some(n) => inbox::sections_nested(shown, now, self.sidebar.order, &wakes, n),
             None => inbox::sections_ordered(shown, now, self.sidebar.order, &wakes),
-        });
+        };
+        let coordinators = if self.coordinators_on() {
+            self.coordinators.list.as_slice()
+        } else {
+            &[]
+        };
+        let sections = Rc::new(threadbear_core::coordinators::sections(
+            sections,
+            coordinators,
+        ));
         // Until the next snooze runs out, when a thread moves out of
         // Hibernating; nothing else in the sorting goes by the clock.
         let until = self

@@ -2164,7 +2164,7 @@ impl Threadbear {
                     });
                     body = place(t.id.clone(), far.row(&t.id, row, gap.unwrap_or(0.)), body);
                     // Its sub-agents' rows (a few, and rare) are always built.
-                    if !matches!(section.key, "hibernating" | "archived") {
+                    if !matches!(section.key, "hibernating" | "archived" | "coordinators") {
                         for (i, sub) in self
                             .render_subagents(t, section.key, now, &p, cx)
                             .into_iter()
@@ -2476,6 +2476,7 @@ impl Threadbear {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let symbol = match key {
+            "coordinators" => "sparkles",
             "starred" => "star",
             "inbox" => "tray",
             "running" => "bolt",
@@ -3533,7 +3534,10 @@ impl Threadbear {
                 None
             };
             let finished_shown = key != "inbox" && key != "starred";
-            let subagents: Vec<Value> = if matches!(key, "hibernating" | "archived") {
+            let subagents: Vec<Value> = if matches!(
+                key,
+                "hibernating" | "archived" | "coordinators"
+            ) {
                 vec![]
             } else {
                 let is_selected = selected_thread.as_deref() == Some(t.id.as_str());
@@ -4428,7 +4432,7 @@ pub(crate) fn automation(
             // An inbox heading, as clicking it does. The Rust app's section keys
             // are the Swift enum's raw values.
             let section = cmd["section"].as_str().unwrap_or("");
-            let key: &'static str = ["starred", "inbox", "running", "hibernating", "archived"].into_iter().find(|k| *k == section).ok_or_else(|| format!("section must be one of starred, inbox, running, hibernating, archived, not {section:?}"))?;
+            let key: &'static str = ["coordinators", "starred", "inbox", "running", "hibernating", "archived"].into_iter().find(|k| *k == section).ok_or_else(|| format!("section must be one of coordinators, starred, inbox, running, hibernating, archived, not {section:?}"))?;
             app.update(cx, |t, cx| {
                 if name == "expand" {
                     t.folded.remove(key);

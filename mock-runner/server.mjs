@@ -27,6 +27,7 @@ import { SAMPLE_THREADS } from '../runner/src/samples.ts';
 import { fileURLToPath } from 'node:url';
 import { reviewDraft, reviewReply, sameDraft } from '../runner/src/reviews.ts';
 import { authProof, isNonce, newNonce } from '../runner/src/rpc-auth.ts';
+import { coordinatorDemo } from './coordinators.mjs';
 
 // What a waiting (untrusted) demo patch gives once it's trusted, by file.
 const waitingPatchGives = new Map();
@@ -476,6 +477,15 @@ let connectors = {
   ],
 };
 addDemoProjects();
+const coordinatorRequest = process.env.TB_MOCK_COORDINATORS ? coordinatorDemo({
+  threads, projects, broadcast, projectChanged: broadcastProjects, threadChanged: broadcastSummary, error: rpcError,
+  accountFor(p) {
+    const pool = p.poolId ? poolOf(p.poolId) : undefined;
+    const id = p.accountId ?? (pool ? pickInPool(pool, providerOfModel(p.model)) : defaults.accountId);
+    if (providerOf(id) !== 'claude') throw rpcError(-32602, 'Coordinators currently support Claude. Choose a Claude pool and model.');
+    return id;
+  },
+}) : undefined;
 if (process.env.TB_MOCK_LIVE_PAGES) addLivePageDemo(process.env.TB_MOCK_LIVE_PAGES);
 // The experiments the mock's hello says are on: nested threads with
 // TB_MOCK_NESTED, and the done card's Archive menu with TB_MOCK_INBOX_GUESS.
@@ -488,6 +498,7 @@ function mockExperiments() {
     ...(process.env.TB_MOCK_LIVE_PAGES ? ['livePages'] : []),
     // The Recipes view, with TB_MOCK_RECIPES (addRecipesDemo).
     ...(process.env.TB_MOCK_RECIPES ? ['recipes'] : []),
+    ...(process.env.TB_MOCK_COORDINATORS ? ['coordinators'] : []),
     // Reviews as a board you drag and zoom, with TB_MOCK_REVIEW_CANVAS (addCanvasMarks).
     ...(process.env.TB_MOCK_REVIEW_CANVAS ? ['reviewCanvas'] : []),
     // Agent Archive in the sidebar's search, with TB_MOCK_ARCHIVE (ARCHIVE_SESSIONS).
@@ -944,6 +955,7 @@ async function handle(client, { id, method, params = {} }) {
 }
 
 async function dispatch(client, method, p) {
+  if (coordinatorRequest && (method.startsWith('coordinators.') || method === 'mock.coordinatorFinish')) return coordinatorRequest(method, p);
   switch (method) {
     case 'hello':
       // The Mac mini has two logins of its own and no pools, as the real one does,
@@ -3892,6 +3904,9 @@ function projectRequest(method, p) {
     }
     case 'projects.update': {
       const project = needProject(p.projectId);
+      for (const [key, value] of Object.entries(p.ifUnchanged ?? {})) {
+        if (project[key] !== value) throw rpcError(-32602, 'The project changed while you were editing. Your text has not been saved.');
+      }
       for (const key of ['title', 'folders', 'goals', 'notes', 'links']) if (p[key] !== undefined) project[key] = p[key];
       if (p.notion !== undefined) {
         project.notion = p.notion || undefined;

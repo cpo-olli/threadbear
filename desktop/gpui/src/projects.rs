@@ -80,6 +80,8 @@ pub(crate) struct Editing {
     pub(crate) project: String,
     pub(crate) field: TextField,
     pub(crate) input: Entity<TextareaState>,
+    pub(crate) baseline: String,
+    pub(crate) saving: bool,
     _events: Subscription,
 }
 
@@ -139,6 +141,12 @@ impl Threadbear {
         let Some(project) = self.open_project() else {
             return self.open_thread().cloned();
         };
+        if let Some(coordinator) = self.coordinator_for_project(&project.id) {
+            return self
+                .threads
+                .get(&coordinator.thread_id)
+                .map(|t| (**t).clone());
+        }
         if let Some((id, made)) = self.projects.pane_cache.borrow().as_ref() {
             if *id == project.id {
                 return made.clone();
@@ -1166,7 +1174,7 @@ impl Threadbear {
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(rows.0, rows.1)
-                .default_value(text)
+                .default_value(text.clone())
         });
         // Changes not yet saved (they're saved with Save, not as typed): an
         // update's restart waits for them.
@@ -1186,6 +1194,8 @@ impl Threadbear {
             project: id.to_owned(),
             field,
             input,
+            baseline: text,
+            saving: false,
             _events: events,
         });
         cx.notify();
@@ -1198,20 +1208,73 @@ impl Threadbear {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(editing) = self.projects.editing.take() else {
+        let Some(editing) = self.projects.editing.as_ref() else {
             return;
         };
-        let _ = window;
-        if save {
-            let draft = editing.input.read(cx).value().to_string();
-            if self
-                .project(&editing.project)
-                .is_some_and(|p| editing.field.text(p) != draft)
-            {
-                self.update_project(&editing.project, editing.field.update(draft), cx);
-            }
+        if editing.saving {
+            return;
         }
+        let draft = editing.input.read(cx).value().to_string();
+        if !save || draft == editing.baseline {
+            self.projects.editing = None;
+            cx.notify();
+            return;
+        }
+        let (project, field, baseline, input) = (
+            editing.project.clone(),
+            editing.field,
+            editing.baseline.clone(),
+            editing.input.clone(),
+        );
+        let mut params = field.update(draft.clone()).params(&project);
+        params["ifUnchanged"] = json!({field.title().to_lowercase():baseline});
+        if let Some(editing) = self.projects.editing.as_mut() {
+            editing.saving = true;
+        }
+        let client = self.client.clone();
         cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = call(client, "projects.update", params).await;
+            this.update_in(cx, |this, _, cx| {
+                let still_editing = this
+                    .projects
+                    .editing
+                    .as_ref()
+                    .is_some_and(|e| e.input == input);
+                match result {
+                    Ok(value) => {
+                        if let Some(project) = Project::decode(&value["project"]) {
+                            this.replace_project(project);
+                            if still_editing {
+                                if input.read(cx).value().as_ref() == draft.as_str() {
+                                    this.projects.editing = None;
+                                } else if let Some(editing) = this.projects.editing.as_mut() {
+                                    editing.baseline = draft;
+                                    editing.saving = false;
+                                }
+                            }
+                        } else {
+                            if let Some(editing) = this.projects.editing.as_mut().filter(|e| e.input == input) {
+                                editing.saving = false;
+                            }
+                            this.show_error("The runner did not confirm the project update. Your text is still in the editor.".to_owned(), cx);
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(editing) = this.projects.editing.as_mut().filter(|e| e.input == input) {
+                            editing.saving = false;
+                        }
+                        this.show_error(
+                            format!("{} Your text is still in the editor.", error.message),
+                            cx,
+                        );
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // ---- For the specs ----

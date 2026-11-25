@@ -16,6 +16,7 @@ pub mod connection;
 pub mod connectors;
 pub mod context_breakdown;
 pub mod convex_panel;
+pub mod coordinators;
 pub mod crash_report;
 pub mod den;
 pub mod devices;

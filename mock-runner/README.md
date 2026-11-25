@@ -16,6 +16,9 @@ app/Tools scripts point here).
 - `make-synthetic.mjs`: makes the long synthetic threads for perf runs.
 - Your own fixtures (`tb export` writes a real thread to `.fixtures/threads/<id>`
   at the repo's top) are private and gitignored: pass them with `--fixtures`.
+- `TB_MOCK_COORDINATORS=1` adds the coordinator experiment and a project home
+  for Threadbear, with synthetic helper conversations. `mock.coordinatorFinish`
+  completes its first task and updates the shared project state.
 
 It imports a few of the runner's own files (`../runner/src/`), so a change there
 runs the desktop checks too (.github/workflows/desktop.yml).

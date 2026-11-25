@@ -55,6 +55,8 @@ mod composer_spelling;
 mod composer_url;
 mod confetti;
 mod connectors_panel;
+mod coordinator_home;
+mod coordinators;
 mod crash_reporting;
 mod deep_links;
 mod ding;

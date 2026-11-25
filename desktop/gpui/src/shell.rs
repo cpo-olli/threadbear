@@ -724,9 +724,13 @@ impl Threadbear {
         if !Self::is_pane_section(panel) {
             return true;
         }
-        // A project's page has no Highlights or Files (they're a thread's),
-        // and only the panels its folders give (`pane_thread`).
-        let project_page = self.projects.open.is_some();
+        // An ordinary project page has only its folders' panels. A
+        // coordinator home has a real thread and its living Highlights.
+        let project_page = self.projects.open.is_some()
+            && self
+                .open_project()
+                .and_then(|p| self.coordinator_for_project(&p.id))
+                .is_none();
         let Some(thread) = self.pane_thread() else {
             return !project_page;
         };
@@ -2417,6 +2421,29 @@ impl Threadbear {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if section == HIGHLIGHTS {
+            if let Some(project) = self.open_project().cloned() {
+                if let Some(coordinator) = self.coordinator_for_project(&project.id).cloned() {
+                    let previewing = self
+                        .side
+                        .read(cx)
+                        .previews
+                        .get(&coordinator.thread_id)
+                        .is_some_and(|preview| preview.from == section);
+                    if !previewing {
+                        self.side.update(cx, |side, _| {
+                            side.drawn.insert(section.to_owned(), "project".to_owned());
+                        });
+                        return self.render_coordinator_document(
+                            &project,
+                            &coordinator,
+                            window,
+                            cx,
+                        );
+                    }
+                }
+            }
+        }
         let side = self.side.clone();
         let view = self
             .side_views
