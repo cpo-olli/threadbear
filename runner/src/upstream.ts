@@ -834,8 +834,9 @@ export class Upstream {
           settled = !changed && this.signersHash(signers) === keysBefore;
         }
         if (!settled) throw new Error('the release keys kept changing while the check ran; it looks again next time');
-        for (const oid of this.lapsing) this.lapsed.add(oid);
-        this.lapsing.clear();
+        // Only once their revocations were read: not after another runner
+        // held the key lock (keysBusy), which left them unread.
+        if (!this.keysBusy) for (const oid of this.lapsing) this.lapsed.add(oid);
       } finally {
         fs.rmSync(work, { recursive: true, force: true });
       }
@@ -922,7 +923,11 @@ export class Upstream {
   // so a revocation in one can't be passed over with it (Gemini's review).
   private lapsed = new Set<string>();
   private lapsing = new Set<string>();
+  private keysBusy = false;
   private async stageReleases(checkout: string, signers: string, work: string, from: string): Promise<string | undefined> {
+    // Each check's own (checkNow): none left from one that failed.
+    this.lapsing.clear();
+    this.keysBusy = false;
     const listed = await this.git(checkout, ['ls-remote', this.uploadPack, from, 'refs/heads/main', `refs/tags/${TAG_PREFIX}*`], this.remote({ timeoutMs: this.fetchTimeoutMs }));
     // Upstream's main: no main, no release can count (STAGED_MAIN).
     const mainOid = listed.split('\n').map((l) => l.split('\t')).find(([oid, ref]) => ref === 'refs/heads/main' && oid && OBJECT_ID.test(oid))?.[0];
@@ -1119,7 +1124,10 @@ export class Upstream {
         change = { added: [...change.added, ...c.added], revoked: [...change.revoked, ...c.revoked], waiting: onlyRevoke ? change.waiting : c.waiting, refused: [...change.refused, ...c.refused] };
       } catch (e) {
         // Another runner is at it; the next check reads the release again.
-        if (e instanceof KeysBusy) return false;
+        if (e instanceof KeysBusy) {
+          this.keysBusy = true;
+          return false;
+        }
         throw e;
       }
     }
@@ -1433,11 +1441,10 @@ export class Upstream {
     const why = await this.checksSay(checkout, tip);
     // The tip held by a red check: the newest settled commit since the last
     // release that's green on everything goes out instead (newestGreen).
-    let target = !why ? tip : this.lastSaid ? await this.newestGreen(checkout, tip, last, now, asked ? 0 : SETTLE_MS).catch(() => undefined) : undefined;
-    // Nothing green since the last release, and it's a weekly key's whose
-    // week is ending: it goes out again, so forks still have one to take
-    // (Codex's review, 25 Nov 2026).
-    if (why && !target && last && (await this.lastLapsing(checkout, last, now))) target = await this.git(checkout, ['rev-parse', `refs/tags/${last}^{commit}`]).catch(() => undefined);
+    // Not the last release's commit again while main is red: that would trust
+    // a tag nobody checked here, and could take today's name from a commit
+    // about to go green (Codex's and Gemini's reviews, 25 Nov 2026).
+    const target = !why ? tip : this.lastSaid ? await this.newestGreen(checkout, tip, last, now, asked ? 0 : SETTLE_MS).catch(() => undefined) : undefined;
     if (why && !target) {
       this.hold({ commit: tip, why, at: new Date(now).toISOString() });
       return undefined;
