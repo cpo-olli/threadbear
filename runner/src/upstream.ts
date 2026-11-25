@@ -810,6 +810,9 @@ export class Upstream {
       let release: UpstreamRelease | undefined;
       try {
         const staged = await this.stageReleases(checkout, signers, path.join(work, 'git'), from);
+        // What this fork had before: older releases' revocations were read
+        // when they were the newest (keyChanges).
+        const keptBefore = [...(await this.refs(checkout, REF_NS)).keys()].filter((n) => RELEASE_NAME.test(n)).sort().at(-1) ?? '';
         await this.promote(checkout, signers, staged);
         // A release can change which keys count (keyChanges), and so can
         // another runner's check meanwhile (a handover): then what it found
@@ -826,7 +829,7 @@ export class Upstream {
           const keysBefore = this.signersHash(signers);
           this.newestVerified = undefined;
           release = await this.newestSigned(checkout, signers, staged);
-          const changed = release ? await this.keyChanges(checkout, signers, staged) : false;
+          const changed = release ? await this.keyChanges(checkout, signers, staged, keptBefore) : false;
           settled = !changed && this.signersHash(signers) === keysBefore;
         }
         if (!settled) throw new Error('the release keys kept changing while the check ran; it looks again next time');
@@ -1067,7 +1070,7 @@ export class Upstream {
   // a week and then counts, one in scripts/release-keys-revoked stops
   // counting at once. Read from the commit the signature covers.
   // Whether the keys that count changed.
-  private async keyChanges(checkout: string, signers: string, staged?: string): Promise<boolean> {
+  private async keyChanges(checkout: string, signers: string, staged?: string, keptBefore = ''): Promise<boolean> {
     const newest = this.newestVerified;
     if (!newest) return false;
     // The revocations in every other release this check fetched that's on
@@ -1076,7 +1079,7 @@ export class Upstream {
     // 2026). Revoking only ever takes keys away, so an older release's
     // can't do harm; announcing is the newest's alone.
     const keptOid = await this.git(checkout, ['rev-parse', '--verify', '--quiet', REF_NS + newest.tag.slice(TAG_PREFIX.length)]).catch(() => '');
-    const others = staged ? await this.otherReleases(staged, signers, keptOid) : [];
+    const others = staged ? await this.otherReleases(staged, signers, keptOid, keptBefore) : [];
     let change: ReturnType<typeof applyKeyChanges> = { added: [], revoked: [], waiting: [], refused: [] };
     for (const [signed, cwd, onlyRevoke] of [...others.map((o) => [o, staged!, true] as const), [newest, checkout, false] as const]) {
       const signer = signerKey(signed.signature);
@@ -1100,12 +1103,13 @@ export class Upstream {
     return change.added.length > 0 || change.revoked.length > 0;
   }
 
-  // The fetched releases other than the tag object `except` (the one kept)
-  // that verify and are on upstream's main, oldest first: all of them, as
-  // what a check stages is bounded already. By object, not name: a same
+  // The fetched releases other than the tag object `except` (the one kept),
+  // named no earlier than `after` (the newest this fork had), that verify
+  // and are on upstream's main, oldest first: all of them, as what a check
+  // stages is bounded already. By object, not name: a same
   // day's release that replaced a bad one counts too (Gemini's review).
-  private async otherReleases(staged: string, signers: string, except: string): Promise<(SignedTag & { tag: string })[]> {
-    const names = [...(await this.refs(staged, STAGED_NS))].filter(([n, ref]) => RELEASE_NAME.test(n) && ref.oid !== except).sort(([x], [y]) => (x < y ? 1 : -1));
+  private async otherReleases(staged: string, signers: string, except: string, after: string): Promise<(SignedTag & { tag: string })[]> {
+    const names = [...(await this.refs(staged, STAGED_NS))].filter(([n, ref]) => RELEASE_NAME.test(n) && n >= after && ref.oid !== except).sort(([x], [y]) => (x < y ? 1 : -1));
     const out: (SignedTag & { tag: string })[] = [];
     for (const [n, ref] of names) {
       const signed = await this.verified(staged, ref, TAG_PREFIX + n, signers);
