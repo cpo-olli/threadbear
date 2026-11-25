@@ -1423,7 +1423,11 @@ export class Upstream {
     const why = await this.checksSay(checkout, tip);
     // The tip held by a red check: the newest settled commit since the last
     // release that's green on everything goes out instead (newestGreen).
-    const target = !why ? tip : this.lastSaid ? await this.newestGreen(checkout, tip, last, now, asked ? 0 : SETTLE_MS).catch(() => undefined) : undefined;
+    let target = !why ? tip : this.lastSaid ? await this.newestGreen(checkout, tip, last, now, asked ? 0 : SETTLE_MS).catch(() => undefined) : undefined;
+    // Nothing green since the last release, and it's a weekly key's whose
+    // week is ending: it goes out again, so forks still have one to take
+    // (Codex's review, 25 Nov 2026).
+    if (why && !target && last && (await this.lastLapsing(checkout, last, now))) target = await this.git(checkout, ['rev-parse', `refs/tags/${last}^{commit}`]).catch(() => undefined);
     if (why && !target) {
       this.hold({ commit: tip, why, at: new Date(now).toISOString() });
       return undefined;
