@@ -406,7 +406,7 @@ impl Threadbear {
         crate::terminal::install(&cx.entity(), cx);
         // A key with ⌘ held puts the keys shown beside the buttons away.
         crate::key_hints::install(cx.entity().downgrade(), cx);
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search threads"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search threads (⌘P)"));
         // The filter is worked out at render, so a change only needs a redraw.
         let searching = cx.subscribe(&search, |_, _, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
