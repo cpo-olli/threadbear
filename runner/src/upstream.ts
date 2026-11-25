@@ -829,10 +829,13 @@ export class Upstream {
           const keysBefore = this.signersHash(signers);
           this.newestVerified = undefined;
           release = await this.newestSigned(checkout, signers, staged);
-          const changed = release ? await this.keyChanges(checkout, signers, staged, keptBefore) : false;
+          // Revocations in what was fetched count even when no release does.
+          const changed = await this.keyChanges(checkout, signers, staged, keptBefore);
           settled = !changed && this.signersHash(signers) === keysBefore;
         }
         if (!settled) throw new Error('the release keys kept changing while the check ran; it looks again next time');
+        for (const oid of this.lapsing) this.lapsed.add(oid);
+        this.lapsing.clear();
       } finally {
         fs.rmSync(work, { recursive: true, force: true });
       }
@@ -915,7 +918,10 @@ export class Upstream {
   // checkNow deletes the folder when the check ends, whatever happened, so
   // what didn't verify, and a fetch cut short, leaves nothing behind.
   // Weekly keys' tags whose week ended before this fork saw them (promote).
+  // Set aside only once a check has read their revocations (checkNow),
+  // so a revocation in one can't be passed over with it (Gemini's review).
   private lapsed = new Set<string>();
+  private lapsing = new Set<string>();
   private async stageReleases(checkout: string, signers: string, work: string, from: string): Promise<string | undefined> {
     const listed = await this.git(checkout, ['ls-remote', this.uploadPack, from, 'refs/heads/main', `refs/tags/${TAG_PREFIX}*`], this.remote({ timeoutMs: this.fetchTimeoutMs }));
     // Upstream's main: no main, no release can count (STAGED_MAIN).
@@ -1058,7 +1064,7 @@ export class Upstream {
         // One whose week is over never will be: passed over from now on, so
         // a run of them can't hold every check's places (Codex's and
         // Gemini's reviews).
-        if (now >= cert.validBefore) this.lapsed.add(ref.oid);
+        if (now >= cert.validBefore) this.lapsing.add(ref.oid);
         continue;
       }
       if (!(await this.onUpstreamMain(staged, signed.commit))) {
@@ -1089,16 +1095,15 @@ export class Upstream {
   // Whether the keys that count changed.
   private async keyChanges(checkout: string, signers: string, staged?: string, keptBefore = ''): Promise<boolean> {
     const newest = this.newestVerified;
-    if (!newest) return false;
     // The revocations in every other release this check fetched that's on
     // upstream's main too: a newer one signed by a key that's since been
     // revoked mustn't hide the release revoking it (Codex's review, 25 Nov
     // 2026). Revoking only ever takes keys away, so an older release's
     // can't do harm; announcing is the newest's alone.
-    const keptOid = await this.git(checkout, ['rev-parse', '--verify', '--quiet', REF_NS + newest.tag.slice(TAG_PREFIX.length)]).catch(() => '');
+    const keptOid = newest ? await this.git(checkout, ['rev-parse', '--verify', '--quiet', REF_NS + newest.tag.slice(TAG_PREFIX.length)]).catch(() => '') : '';
     const others = staged ? await this.otherReleases(staged, signers, keptOid, keptBefore) : [];
     let change: ReturnType<typeof applyKeyChanges> = { added: [], revoked: [], waiting: [], refused: [] };
-    for (const [signed, cwd, onlyRevoke] of [...others.map((o) => [o, staged!, true] as const), [newest, checkout, false] as const]) {
+    for (const [signed, cwd, onlyRevoke] of [...others.map((o) => [o, staged!, true] as const), ...(newest ? [[newest, checkout, false] as const] : [])]) {
       // An older release revoked something: look again before the newest
       // says anything, as it may be signed by what was just revoked
       // (Gemini's review, 25 Nov 2026). checkNow sweeps and picks again.
@@ -1118,7 +1123,7 @@ export class Upstream {
         throw e;
       }
     }
-    const signed = newest;
+    const signed = { tag: newest?.tag ?? others.at(-1)?.tag ?? '' };
     for (const k of change.revoked) this.deps.log.warn('a release revoked a release key; it no longer counts', { key: k.slice(0, 60), tag: signed.tag });
     for (const k of change.added) this.deps.log.warn('a new release key now counts, announced a week ago by a pinned key', { key: k.slice(0, 60), tag: signed.tag });
     for (const k of change.refused) this.deps.log.warn("a release tried to revoke a key it can't (only that key or a newer one can)", { key: k.slice(0, 60), tag: signed.tag });
@@ -1419,7 +1424,12 @@ export class Upstream {
     // that key's week ends within SIGN_MARGIN_MS, when the same commit goes
     // out again under today's name, so a fork that missed it still has one
     // it can take (Codex's and Gemini's reviews).
-    if (last && (await this.isAncestor(checkout, tip, last)) && !(await this.lastLapsing(checkout, last, now))) return this.hold(undefined);
+    // Only main's tip itself, never one behind it (a tag made on another
+    // Mac): that would take forks back (Gemini's review).
+    if (last && (await this.isAncestor(checkout, tip, last))) {
+      const same = tip === (await this.git(checkout, ['rev-parse', `refs/tags/${last}^{commit}`]).catch(() => ''));
+      if (!same || !(await this.lastLapsing(checkout, last, now))) return this.hold(undefined);
+    }
     const why = await this.checksSay(checkout, tip);
     // The tip held by a red check: the newest settled commit since the last
     // release that's green on everything goes out instead (newestGreen).

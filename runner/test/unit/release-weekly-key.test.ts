@@ -8,7 +8,7 @@ import path from 'node:path';
 import { FakeClock } from '../../src/clock.ts';
 import { applyKeyChanges, certVerifyArgs, keyFilesHash, KEYS_EXTENSION, keyStatePath, readRevoked, readWeeklyRevoked, revokedPath, signatureCert, signerKey, weeklyRevokedPath, withAuthorities } from '../../src/release-keys.ts';
 import { currentCert, delegatePaths, readDelegateState, renewDelegate, usableCert } from '../../src/release-delegate.ts';
-import { gitAsync, type GitOptions } from '../../src/upstream.ts';
+import { gitAsync, signersPath, type GitOptions } from '../../src/upstream.ts';
 import { GIT_ENV, commit, git, key, pubOf, release, upstreamFor, world } from '../helpers/upstream-harness.ts';
 
 type World = ReturnType<typeof world>;
@@ -461,4 +461,26 @@ test("Mike's runner puts a quiet main out again before its weekly key's release 
   assert.equal(tag, `release/${new Date(today).toISOString().slice(0, 10)}`, up.status().held?.why ?? '');
   assert.equal(git(w.mike, 'rev-parse', `${tag}^{commit}`), git(w.mike, 'rev-parse', `${name}^{commit}`), 'the same commit');
   assert.ok(signatureCert(armorOf(git(w.mike, 'cat-file', 'tag', tag!))), 'by the weekly key in place, with its week ahead');
+});
+
+// Gemini's tenth look: weekly releases whose week is over still have their
+// revocations read, even when none of them can be taken.
+test("a revocation in weekly releases whose week is over still counts", async () => {
+  const w = world();
+  const next = key(w.root, 'next');
+  fs.appendFileSync(signersPath(w.home), fs.readFileSync(next.signers, 'utf8'));
+  commitFile(w, 'scripts/release-signers', fs.readFileSync(w.mikeKey.signers, 'utf8') + fs.readFileSync(next.signers, 'utf8'), 'A second release key');
+  commitFile(w, 'scripts/release-keys-revoked', `${pubOf(w.mikeKey)}\n`, 'Revoke the first');
+  const k = weekly(w, 'week', '20261102Z:20261110Z', next.priv);
+  for (let day = 3; day <= 6; day++) {
+    commit(w.mike, `d${day}.txt`, `Day ${day}`);
+    certTag(w.mike, `release/2026-11-0${day}`, k.cert, `2026-11-0${day}T10:00:00Z`);
+  }
+  // The revoked key, leaked, signs a newer release itself.
+  commit(w.mike, 'bad.txt', 'Something bad');
+  git(w.mike, '-c', 'gpg.format=ssh', '-c', `user.signingkey=${w.mikeKey.priv}`, 'tag', '-s', '-m', 'Threadbear', 'release/2026-11-20');
+  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
+  const up = forkAt(w, '2026-11-20T12:00:00Z');
+  for (let i = 0; i < 3; i++) assert.notEqual((await up.check()).release?.tag, 'release/2026-11-20', `check ${i + 1}`);
+  assert.ok(readRevoked(w.home).includes(pubOf(w.mikeKey)));
 });
