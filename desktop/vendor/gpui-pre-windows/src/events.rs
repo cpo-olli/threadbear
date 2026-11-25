@@ -1943,7 +1943,9 @@ fn pointer_left_to(
 
 #[cfg(test)]
 mod pointer_left_tests {
-    use super::*;
+    // Not `super::*`: gpui's `test` macro would take over `#[test]`.
+    use super::{Under, pointer_left_to};
+    use windows::Win32::Foundation::{POINT, RECT};
 
     const CLIENT: RECT = RECT {
         left: 0,
