@@ -1351,6 +1351,9 @@ async function main(): Promise<void> {
   // another Mac (files.ts).
   Object.assign(methods, filesMethods());
   methods['upstream.check'] = async () => ({ upstream: await upstream.check() });
+  // Mike's runner: today's release, tagged and signed now, Touch ID asked
+  // at once (`tb updates publish`; publishOnce's `now`).
+  methods['upstream.publish'] = async () => ({ tag: await upstream.publishOnce({ now: true }), upstream: upstream.status() });
   // The Updates panel's "Not in the new app yet" (docs/protocol/updates.md, "Your
   // changes to the old app").
   const swiftCommit = (p: unknown): string => {

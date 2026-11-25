@@ -1248,18 +1248,33 @@ export class Upstream {
 
   // Mike's runner: tags main's tip as today's release when it's moved since
   // the last one and has settled (above). Returns the tag it made.
-  async publishOnce(): Promise<string | undefined> {
+  // `now` is Mike asking for it (`tb updates publish`): it doesn't wait for
+  // main or the runner to sit still for an hour, and asks for Touch ID
+  // straight away, as he's at the Mac to ask. GitHub's checks still decide
+  // which commit goes: the tip if it's green, or else the newest one that
+  // is (newestGreen). Added 25 Nov 2026, when a busy main kept a signed
+  // release from going out for three days.
+  publishOnce(opts: { now?: boolean } = {}): Promise<string | undefined> {
+    // The hourly look and Mike's ask never tag at once.
+    const run = (this.publishing ?? Promise.resolve()).catch(() => undefined).then(() => this.publishNow(opts));
+    this.publishing = run;
+    return run;
+  }
+
+  private publishing?: Promise<unknown>;
+
+  private async publishNow({ now: asked = false }: { now?: boolean }): Promise<string | undefined> {
     const { checkout, publish } = this.deps;
     if (!checkout || !publish?.publish) return undefined;
     if (!publish.signingKey || !fs.existsSync(publish.signingKey)) {
       this.deps.log.warn('releases.publish is on but releases.signingKey is missing', { signingKey: publish.signingKey });
       return undefined;
     }
-    if (!(this.deps.runningMainSettled?.() ?? false)) return undefined;
+    if (!asked && !(this.deps.runningMainSettled?.() ?? false)) return undefined;
     const now = this.deps.clock.now();
     const tip = await this.git(checkout, ['rev-parse', 'refs/heads/main']);
     const committed = Number(await this.git(checkout, ['log', '-1', '--format=%ct', tip])) * 1000;
-    if (now - committed < SETTLE_MS) return undefined;
+    if (!asked && now - committed < SETTLE_MS) return undefined;
     // What it tags and signs is read as its ids name it, or not at all.
     const substituted = await this.substitutes(checkout);
     if (substituted) {
@@ -1305,18 +1320,18 @@ export class Upstream {
     const why = await this.checksSay(checkout, tip);
     // The tip held by a red check: the newest settled commit since the last
     // release that's green on everything goes out instead (newestGreen).
-    const target = !why ? tip : this.lastSaid ? await this.newestGreen(checkout, tip, last, now).catch(() => undefined) : undefined;
+    const target = !why ? tip : this.lastSaid ? await this.newestGreen(checkout, tip, last, now, asked ? 0 : SETTLE_MS).catch(() => undefined) : undefined;
     if (why && !target) {
       this.hold({ commit: tip, why, at: new Date(now).toISOString() });
       return undefined;
     }
     if (why) this.deps.log.info('main is held, so the newest commit green on everything goes out', { tip, commit: target, why });
     this.hold(undefined);
-    return this.tagRelease(checkout, target!, last, tag, now);
+    return this.tagRelease(checkout, target!, last, tag, now, asked);
   }
 
   // Tags `tip` as today's release `tag`, signed, and pushes it.
-  private async tagRelease(checkout: string, tip: string, last: string | undefined, tag: string, now: number): Promise<string | undefined> {
+  private async tagRelease(checkout: string, tip: string, last: string | undefined, tag: string, now: number, asked = false): Promise<string | undefined> {
     const { publish } = this.deps;
     if (!publish?.signingKey) return undefined;
 
@@ -1337,7 +1352,7 @@ export class Upstream {
     // given TOUCH_SIGN_TIMEOUT_MS, and held for the next hourly look if he
     // doesn't touch it. Nothing waits on it but this look.
     const touch = touchKey(publish.signingKey);
-    if (touch && !(await (this.deps.atMac?.() ?? Promise.resolve(false)))) {
+    if (touch && !asked && !(await (this.deps.atMac?.() ?? Promise.resolve(false)))) {
       this.hold({ commit: tip, why: 'waiting for you at the Mac to sign it with Touch ID', at: new Date(now).toISOString() });
       return undefined;
     }
@@ -1526,7 +1541,7 @@ export class Upstream {
   // It's the same bar the Xcode 26 lesson set (release/2026-11-04 to -06
   // went out unchecked), only on an older commit. One GitHub request a
   // workflow, as the hourly look's are counted (60 an hour without a token).
-  private async newestGreen(checkout: string, tip: string, last: string | undefined, now: number): Promise<string | undefined> {
+  private async newestGreen(checkout: string, tip: string, last: string | undefined, now: number, settle = SETTLE_MS): Promise<string | undefined> {
     const key = repoKey(this.origin ?? '');
     if (!key.startsWith('github.com/')) return undefined;
     const repo = key.slice('github.com/'.length);
@@ -1534,7 +1549,7 @@ export class Upstream {
       .split('\n')
       .map((l) => l.trim().split(' '))
       .filter((p): p is [string, string] => p.length === 2 && p[0] !== tip)
-      .filter(([, ct]) => now - Number(ct) * 1000 >= SETTLE_MS);
+      .filter(([, ct]) => now - Number(ct) * 1000 >= settle);
     if (!line.length) return undefined;
     const histories = new Map<string, CiRun[]>();
     const historyOf = async (file: string) => {

@@ -198,6 +198,14 @@ type UpstreamStatus = {
 `upstream.check` fetches first and then returns the same (`tb updates
 [check]`). `runner.status` carries it as `upstream`.
 
+`upstream.publish` (Mike's runner, `tb updates publish`) tags and signs
+today's release now, without the hour main and the runner must otherwise
+sit still, and with a Touch ID key asks at once rather than waiting to see
+him at the Mac. GitHub's checks still pick the commit: the tip if green,
+else the newest green one since the last release. It returns `{ tag?:
+string, upstream: UpstreamStatus }`: no `tag` when nothing went out, with
+`upstream.held` saying why.
+
 After each check that finds a release main doesn't have, the runner may
 start a thread to bring it in (`runner/src/bring-in.ts`), as Bring Them In
 would: titled "Bring in Mike's release of 6 Nov", in the release's checkout,
