@@ -297,6 +297,8 @@ export type ThreadSummary = {
   // it's still archived by Threadbear (docs/protocol/threads.md, "Inbox guess").
   quietlyArchived?: { at: string; why: string };
   starredAt?: string; // in the Starred section above the Inbox, unless archived
+  /** This thread coordinates the project; absent for ordinary threads. */
+  coordinatorProjectId?: string;
   preview: string;
   lastSeq: number;
   lastSeenSeq: number;

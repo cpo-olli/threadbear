@@ -239,6 +239,10 @@ type ThreadSummary = {
                         // line on why he didn't need to see it. Only while
                         // archivedAt is set and archivedBy is "threadbear"
                         // (threads.md, "Inbox guess")
+  coordinatorProjectId?: string // Optional project coordinator. Nonempty project id;
+                        // shown under Coordinators before Starred, even asleep.
+                        // Archived still wins. Missing or malformed: ordinary thread.
+                        // Mirrored in thread/index rows from backend API 102.
   starredAt?: string    // Mike starred it, at this time: it stays in the
                         // Starred section above the Inbox, hibernating or
                         // not, oldest star first. Kept while archived, when

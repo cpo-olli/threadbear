@@ -173,8 +173,9 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 101;
+export const BACKEND_API_VERSION = 102;
 export const INDEX_POOL_API_VERSION = 101;
+export const COORDINATORS_API_VERSION = 102;
 // From this one sync:removeThreads takes the runner's id and leaves a row
 // that's another runner's alone (a thread moved away), whatever the key.
 export const REMOVE_OWN_ROWS_API_VERSION = 92;
@@ -523,6 +524,7 @@ export type ThreadDoc = {
   keywords?: string;
   archivedAt?: string;
   starredAt?: string;
+  coordinatorProjectId?: string;
   costUsd?: number;
   projects?: { id: string; title: string }[];
   working?: string;
@@ -1004,9 +1006,9 @@ export function defaultRunnerName(hostname = os.hostname()): string {
 // Which of the phone's lists a thread's in. A starred one that's hibernating
 // stays in the inbox list: the phone has Starred at the top of its inbox, and
 // doesn't load Hibernating at all while that's folded.
-function threadView(t: Pick<ThreadSummary, 'archivedAt' | 'snoozedUntil' | 'starredAt'> & { waitState?: string }, now: number): ThreadDoc['view'] {
+function threadView(t: Pick<ThreadSummary, 'archivedAt' | 'snoozedUntil' | 'starredAt' | 'coordinatorProjectId'> & { waitState?: string }, now: number): ThreadDoc['view'] {
   if (t.archivedAt) return 'den';
-  if (t.starredAt) return 'inbox';
+  if (t.starredAt || (typeof t.coordinatorProjectId === 'string' && t.coordinatorProjectId.trim())) return 'inbox';
   // Waiting on its own work: drawn under Running, so it's with the inbox's rows.
   if (t.waitState === 'onThreads' || t.waitState === 'landing' || t.waitState === 'appRestart') return 'inbox';
   return t.snoozedUntil && Date.parse(t.snoozedUntil) > now ? 'hibernating' : 'inbox';
@@ -1066,6 +1068,7 @@ export function toThreadDoc(t: ThreadSummary, runnerId: string, now: number, pen
   if (t.keywords) doc.keywords = t.keywords;
   if (t.archivedAt) doc.archivedAt = t.archivedAt;
   if (t.starredAt) doc.starredAt = t.starredAt;
+  if (typeof t.coordinatorProjectId === 'string' && t.coordinatorProjectId.trim()) doc.coordinatorProjectId = t.coordinatorProjectId;
   // To the cent: a running thread's cost moves every turn and the phone
   // doesn't need a write for the fourth decimal.
   if (t.costUsd !== undefined) doc.costUsd = Math.round(t.costUsd * 100) / 100;
@@ -1185,7 +1188,7 @@ function phoneAnswers(raw: unknown): AskAnswer[] | undefined {
 export function forBackend(d: ThreadDoc, v: number, now: number): ThreadDoc {
   const asks = d.asks !== undefined || d.asksSeq !== undefined || d.next !== undefined;
   const sections = d.needs !== undefined || d.pendingReviews !== undefined || d.waitingForRoom !== undefined;
-  if ((v >= SHARE_API_VERSION || !d.share) && (v >= WOKE_API_VERSION || !d.woke) && (v >= ASKS_API_VERSION || !asks) && (v >= OPTION_NOTES_API_VERSION || !d.asks?.some((a) => a.optionNotes)) && (v >= LOOSE_ENDS_API_VERSION || !d.looseEnds) && (v >= RELAY_CARDS_API_VERSION || (!d.review && !d.cardTurn)) && (v >= SECTIONS_API_VERSION || !sections) && (v >= STARTED_BY_API_VERSION || !d.startedBy) && (v >= STARS_API_VERSION || !d.starredAt) && (v >= LINKS_API_VERSION || !d.links) && (v >= ASKED_API_VERSION || !d.asked) && (v >= KEYWORDS_API_VERSION || !d.keywords) && (v >= WAKE_NOTE_API_VERSION || !d.wakeNote) && (v >= NETWORK_WAIT_API_VERSION || !d.waitingForNetwork) && (v >= WAIT_STATE_API_VERSION || !d.waitState) && (v >= SECRETS_API_VERSION || d.pendingApproval?.kind !== 'secret') && (v >= RELAY_API_VERSION || d.pendingApproval?.seq === undefined) && (v >= PLAN_API_VERSION || d.pendingApproval?.kind !== 'approval' || d.pendingApproval.planSeq === undefined)) return d;
+  if ((v >= COORDINATORS_API_VERSION || !d.coordinatorProjectId) && (v >= SHARE_API_VERSION || !d.share) && (v >= WOKE_API_VERSION || !d.woke) && (v >= ASKS_API_VERSION || !asks) && (v >= OPTION_NOTES_API_VERSION || !d.asks?.some((a) => a.optionNotes)) && (v >= LOOSE_ENDS_API_VERSION || !d.looseEnds) && (v >= RELAY_CARDS_API_VERSION || (!d.review && !d.cardTurn)) && (v >= SECTIONS_API_VERSION || !sections) && (v >= STARTED_BY_API_VERSION || !d.startedBy) && (v >= STARS_API_VERSION || !d.starredAt) && (v >= LINKS_API_VERSION || !d.links) && (v >= ASKED_API_VERSION || !d.asked) && (v >= KEYWORDS_API_VERSION || !d.keywords) && (v >= WAKE_NOTE_API_VERSION || !d.wakeNote) && (v >= NETWORK_WAIT_API_VERSION || !d.waitingForNetwork) && (v >= WAIT_STATE_API_VERSION || !d.waitState) && (v >= SECRETS_API_VERSION || d.pendingApproval?.kind !== 'secret') && (v >= RELAY_API_VERSION || d.pendingApproval?.seq === undefined) && (v >= PLAN_API_VERSION || d.pendingApproval?.kind !== 'approval' || d.pendingApproval.planSeq === undefined)) return d;
   const out = { ...d };
   if (v < SECTIONS_API_VERSION) {
     delete out.needs;
@@ -1211,6 +1214,10 @@ export function forBackend(d: ThreadDoc, v: number, now: number): ThreadDoc {
   if (v < WAKE_NOTE_API_VERSION) delete out.wakeNote;
   if (v < WAIT_STATE_API_VERSION && out.waitState) {
     delete out.waitState;
+    out.view = threadView(out, now);
+  }
+  if (v < COORDINATORS_API_VERSION && out.coordinatorProjectId) {
+    delete out.coordinatorProjectId;
     out.view = threadView(out, now);
   }
   if (v < STARS_API_VERSION && out.starredAt) {
@@ -1809,6 +1816,7 @@ export class ConvexSync {
         takesMode: () => (this.backendApiVersion ?? 0) >= INDEX_MODE_API_VERSION,
         takesWaitState: () => (this.backendApiVersion ?? 0) >= WAIT_STATE_API_VERSION,
         takesPool: () => (this.backendApiVersion ?? 0) >= INDEX_POOL_API_VERSION,
+        takesCoordinator: () => (this.backendApiVersion ?? 0) >= COORDINATORS_API_VERSION,
         takesSince: () => (this.backendApiVersion ?? 0) >= INDEX_SINCE_API_VERSION,
         takesOrder: () => (this.backendApiVersion ?? 0) >= RUNNER_ORDER_API_VERSION,
         takesServices: () => this.virtualRunnersReady(),
@@ -1940,7 +1948,7 @@ export class ConvexSync {
       const card = (t: ThreadSummary) => Boolean(t.asks?.length) || (t.needs === 'nothing' && t.status === 'idle' && !t.archivedAt);
       // Likewise needs, reviews and waiting for room, for the phone's sections.
       const sections = (t: ThreadSummary) => Boolean(t.needs || t.pendingReviews || t.waitingForRoom);
-      for (const t of this.deps.runner.list(ALL)) if (t.share || (t.woke && v >= WOKE_API_VERSION) || (t.startedBy && v >= STARTED_BY_API_VERSION) || (t.starredAt && v >= STARS_API_VERSION) || (v >= LINKS_API_VERSION && t.actions?.some((a) => a.kind === 'url')) || (v >= ASKS_API_VERSION && card(t)) || (v >= SECTIONS_API_VERSION && sections(t)) || (v >= ASKED_API_VERSION && t.asked && !t.archivedAt) || (v >= KEYWORDS_API_VERSION && t.keywords) || (v >= NETWORK_WAIT_API_VERSION && t.waitingForNetwork) || (v >= WAKE_NOTE_API_VERSION && wakeNote(t)) || (v >= WAIT_STATE_API_VERSION && t.waitState && !t.archivedAt)) this.mark(t);
+      for (const t of this.deps.runner.list(ALL)) if ((t.coordinatorProjectId && v >= COORDINATORS_API_VERSION) || t.share || (t.woke && v >= WOKE_API_VERSION) || (t.startedBy && v >= STARTED_BY_API_VERSION) || (t.starredAt && v >= STARS_API_VERSION) || (v >= LINKS_API_VERSION && t.actions?.some((a) => a.kind === 'url')) || (v >= ASKS_API_VERSION && card(t)) || (v >= SECTIONS_API_VERSION && sections(t)) || (v >= ASKED_API_VERSION && t.asked && !t.archivedAt) || (v >= KEYWORDS_API_VERSION && t.keywords) || (v >= NETWORK_WAIT_API_VERSION && t.waitingForNetwork) || (v >= WAKE_NOTE_API_VERSION && wakeNote(t)) || (v >= WAIT_STATE_API_VERSION && t.waitState && !t.archivedAt)) this.mark(t);
       this.scheduleFlush();
     }
     // The pictures wait for the first heartbeat to say the backend takes them.

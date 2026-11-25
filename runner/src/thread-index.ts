@@ -35,6 +35,7 @@ export type IndexRow = {
   snoozedUntil?: string;
   archivedAt?: string;
   starredAt?: string;
+  coordinatorProjectId?: string;
   startedBy?: { kind: string; label: string; icon?: string; threadTitle?: string; why?: string };
   asked?: string;
   keywords?: string;
@@ -108,7 +109,7 @@ export function boxReachable(state: unknown): boolean {
 const WATCH_CHECK_MS = 15_000;
 const UNWATCH_AFTER_MS = 2 * 60_000;
 
-export function toIndexRow(t: ThreadSummary, withStartedBy = true, withStars = true, withAsked = true, withKeywords = true, withMode = true, withWaitState = true, withPool = true): IndexRow {
+export function toIndexRow(t: ThreadSummary, withStartedBy = true, withStars = true, withAsked = true, withKeywords = true, withMode = true, withWaitState = true, withPool = true, withCoordinator = true): IndexRow {
   const row: IndexRow = {
     threadId: t.id,
     title: t.title,
@@ -123,6 +124,7 @@ export function toIndexRow(t: ThreadSummary, withStartedBy = true, withStars = t
     lastActivityAt: t.lastActivityAt,
   };
   if (withPool && t.poolId) row.poolId = t.poolId;
+  if (withCoordinator && typeof t.coordinatorProjectId === 'string' && t.coordinatorProjectId.trim()) row.coordinatorProjectId = t.coordinatorProjectId;
   if (t.model) row.model = t.model;
   if (t.snoozedUntil) row.snoozedUntil = t.snoozedUntil;
   if (t.archivedAt) row.archivedAt = t.archivedAt;
@@ -174,6 +176,7 @@ export class ThreadIndex {
     // Whether it knows `waitState` (API 99).
     takesWaitState?: () => boolean;
     takesPool?: () => boolean;
+    takesCoordinator?: () => boolean;
     // Whether the backend can answer with only the rows changed since the
     // last answer (API 29). Without it, every re-run reads every row.
     takesSince?: () => boolean;
@@ -544,7 +547,7 @@ export class ThreadIndex {
   }
 
   private mark(t: ThreadSummary): void {
-    const row = toIndexRow(t, this.deps.takesStartedBy?.() ?? true, this.deps.takesStars?.() ?? true, this.deps.takesAsked?.() ?? true, this.deps.takesKeywords?.() ?? true, this.deps.takesMode?.() ?? true, this.deps.takesWaitState?.() ?? true, this.deps.takesPool?.() ?? true);
+    const row = toIndexRow(t, this.deps.takesStartedBy?.() ?? true, this.deps.takesStars?.() ?? true, this.deps.takesAsked?.() ?? true, this.deps.takesKeywords?.() ?? true, this.deps.takesMode?.() ?? true, this.deps.takesWaitState?.() ?? true, this.deps.takesPool?.() ?? true, this.deps.takesCoordinator?.() ?? true);
     if (this.sent.get(t.id) === writeKey(row)) {
       this.dirty.delete(t.id);
       return;

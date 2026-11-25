@@ -265,6 +265,7 @@ public struct PhoneThread: Codable, Sendable, Hashable, Identifiable {
     @OptionalFlexibleDate public var archivedAt: Date?
     /// Mike starred it: the Starred section at the top (backend API 27).
     @OptionalFlexibleDate public var starredAt: Date?
+    @OptionalCoordinatorProject public var coordinatorProjectId: String?
     public var costUsd: Double?
     public var projects: [ProjectRef]?
     /// The working line ("Running npm test"), while a turn or background
@@ -323,8 +324,9 @@ public struct PhoneThread: Codable, Sendable, Hashable, Identifiable {
         pendingApproval: PendingApproval? = nil, earliestSeq: Double? = nil,
         asks: [PhoneAsk]? = nil, asksSeq: Double? = nil, next: [String]? = nil,
         needs: String? = nil, pendingReviews: Double? = nil, waitingForRoom: PhoneWaitingForRoom? = nil,
-        links: [PhoneLink]? = nil, asked: String? = nil, looseEnds: [PhoneLooseEnd]? = nil, waitState: String? = nil
+        links: [PhoneLink]? = nil, asked: String? = nil, looseEnds: [PhoneLooseEnd]? = nil, waitState: String? = nil, coordinatorProjectId: String? = nil
     ) {
+        self._coordinatorProjectId = OptionalCoordinatorProject(wrappedValue: coordinatorProjectId)
         self.waitState = waitState
         self.looseEnds = looseEnds
         self.asked = asked
@@ -1183,5 +1185,37 @@ public enum ThreadChange: Sendable, Hashable {
         case let .rename(title): ["title": .string(title)]
         case let .star(on): ["star": .bool(on)]
         }
+    }
+}
+
+
+/// An optional routing hint must not make an otherwise readable thread disappear.
+@propertyWrapper
+public struct OptionalCoordinatorProject: Codable, Sendable, Hashable {
+    public var wrappedValue: String?
+
+    public init(wrappedValue: String?) {
+        self.wrappedValue = wrappedValue.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+    }
+
+    public init(from decoder: Decoder) throws {
+        self.init(wrappedValue: try? decoder.singleValueContainer().decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(wrappedValue)
+    }
+}
+
+extension KeyedDecodingContainer {
+    public func decode(_ type: OptionalCoordinatorProject.Type, forKey key: Key) throws -> OptionalCoordinatorProject {
+        try decodeIfPresent(type, forKey: key) ?? OptionalCoordinatorProject(wrappedValue: nil)
+    }
+}
+
+extension KeyedEncodingContainer {
+    public mutating func encode(_ value: OptionalCoordinatorProject, forKey key: Key) throws {
+        if let id = value.wrappedValue { try encode(id, forKey: key) }
     }
 }

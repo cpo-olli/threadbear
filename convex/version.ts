@@ -493,4 +493,6 @@
 //    an older runner starts them unstarred.
 // 101: sidebar rows carry poolId and heartbeats carry effective usagePools,
 //    read owner-only by relay:remotePools, so Usage follows a remote thread's pool.
-export const API_VERSION = 101;
+// 102: thread and sidebar rows carry optional coordinatorProjectId. Clients
+//    show it in Coordinators before Starred; archived still wins.
+export const API_VERSION = 102;

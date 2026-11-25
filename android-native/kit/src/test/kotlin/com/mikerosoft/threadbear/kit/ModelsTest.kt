@@ -18,6 +18,15 @@ class ModelsTest {
          "pendingApproval":{"approvalId":"q1","kind":"question","questions":[{"question":"Which?","options":[{"label":"A"},{"label":"B","description":"bee"}]}]}}
     """
 
+    @Test fun badCoordinatorMetadataKeepsTheOrdinaryThread() {
+        for (hint in listOf("null", "12", "{}", "\"\"", "\"  \"")) {
+            val t = PhoneThread.read(obj(row.replace("\"threadId\":", "\"coordinatorProjectId\":$hint,\"threadId\":")))
+            assertNull(t.coordinatorProjectId)
+            assertEquals("t", t.threadId)
+        }
+        assertNull(PhoneThread.read(obj(row)).coordinatorProjectId)
+    }
+
     @Test fun threadRowsDecodeWithTheirCards() {
         val t = PhoneThread.read(obj(row))
         assertEquals(0, t.asks?.first()?.suggestedIndex)
