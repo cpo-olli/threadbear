@@ -106,7 +106,7 @@ type VirtualRunner = { id: string, name: string, provider: string }
 // rpcUrl and tokenFile were the direct link between Macs (step 6 part 2),
 // taken out 13 Nov 2026. An app ignores them if an older runner sends them.
 type RemoteThread = { runnerId: string, threadId: string, title, cwd,
-  accountId, provider, model?, status: ThreadStatus, needsYou: boolean,
+  accountId, poolId?: string, provider, model?, status: ThreadStatus, needsYou: boolean,
   unread: boolean, preview, createdAt, lastActivityAt, snoozedUntil?,
   archivedAt? }
 ```
@@ -317,7 +317,19 @@ only way the app opens another runner's thread.
   that runner has made it, which this runner then answers for until the
   sidebar list has it. `remoteThreads.logins { runnerId }` gives that runner's
   logins for the pickers, from the backend's `accounts` rows (no pools;
-  `defaults.cwd` is the folder of its newest thread).
+  `defaults.cwd` is the folder of its newest thread). Since API 101 it also
+  gives `usagePools?: Pool[]`, that runner's effective pools from its
+  latest heartbeat, for Usage. `pools` stays empty because remote creation uses a login.
+Since backend API 101, sidebar rows carry `poolId` when the owning runner
+uses a pool for the thread. The desktop Usage pot follows that pool on the
+owning runner; absent on older rows, it follows `accountId`. Runners leave
+this field out when writing to a backend older than 101.
+The API 101 heartbeat also carries `usagePools?: { id, title, accountIds }[]`,
+from the owning runner's effective pools, including its local defaults.
+`relay:remotePools` reads only that runner's snapshot for the owner key;
+absent before its first API 101 heartbeat. It does not infer membership from
+another runner's accounts or shared pools.
+
 - **Pictures** (backend API 63, 8 Nov 2026). A `threads.send` or
   `threads.create` for another runner can carry `images`, as for this one:
   the `ImageRef`s `media.import` made, in this runner's `inbox/`. A picture

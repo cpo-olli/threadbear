@@ -904,6 +904,7 @@ async function main(): Promise<void> {
             listProjects: () => projects.list({ archived: true }),
             listSchedules: () => scheduler.list(),
             listAccounts: () => runner.hello().accounts,
+            listPools: () => runner.listPools(),
           }),
       buttons: (id) => runner.listButtons(id).buttons,
     },

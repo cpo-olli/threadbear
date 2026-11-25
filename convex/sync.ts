@@ -6,7 +6,7 @@ import { ConvexError, v } from 'convex/values';
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
-import { messageButton, threadFields, updateFailedValidator, views } from './schema';
+import { messageButton, threadFields, updateFailedValidator, usagePool, views } from './schema';
 import { API_VERSION } from './version';
 import { endpointProblem } from './webPushEndpoint';
 import { clear, command, machines } from './machines';
@@ -1464,6 +1464,7 @@ export const heartbeat = mutation({
       startedAt: v.string(),
       draining: v.boolean(),
       threadCount: v.number(),
+      usagePools: v.optional(v.array(usagePool)),
       icon: v.optional(v.string()),
       rpcUrl: v.optional(v.string()),
       pressure: v.optional(v.union(v.literal('memory'), v.literal('disk'))),
@@ -1499,6 +1500,7 @@ export const heartbeat = mutation({
   handler: async (ctx, { key, runner, held }) => {
     const caller = await runnerAuth(ctx, key, 'heartbeat', { housekeeping: held === true });
     runner = clean(runner);
+    if (runner.usagePools) runner.usagePools = runner.usagePools.slice(0, 50).map((p) => ({ id: cutBytes(p.id, 128), title: cutBytes(p.title, 200), accountIds: p.accountIds.slice(0, 50).map((id) => cutBytes(id, 128)) }));
     // A runner key heartbeats as its own runner only: the row has the
     // rpcUrl other Macs' apps dial.
     await actAs(ctx, caller, runner.runnerId);
@@ -4150,6 +4152,7 @@ const indexDoc = v.object({
   title: v.string(),
   cwd: v.string(),
   accountId: v.string(),
+  poolId: v.optional(v.string()), // since API 101
   provider: v.string(),
   model: v.optional(v.string()),
   status: v.string(),

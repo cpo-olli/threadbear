@@ -4551,3 +4551,17 @@ test("a thread Mike puts away doesn't need him on the phone's row, and does agai
   assert.deepEqual([last().view, last().needsYou], ['den', false]);
   await sync.stop();
 });
+
+test('heartbeats mirror effective pools only after the backend can take them', async () => {
+  for (const apiVersion of [100, 101]) {
+    const { h, sync, calls } = setup({ answer: (fn) => fn === 'sync:heartbeat' ? { apiVersion } : null });
+    h.cfg.pools = [{ id: 'custom', title: 'Custom', accountIds: ['claude-3'] }];
+    sync.start();
+    await tick();
+    h.clock.advance(HEARTBEAT_MS);
+    await tick();
+    const runner = calls.filter((c) => c.fn === 'sync:heartbeat').at(-1)!.args.runner as { usagePools?: unknown[] };
+    assert.deepEqual(runner.usagePools, apiVersion >= 101 ? [{ id: 'custom', title: 'Custom', accountIds: ['claude-3'] }] : undefined);
+    await sync.stop();
+  }
+});

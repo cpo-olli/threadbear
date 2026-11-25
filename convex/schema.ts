@@ -41,6 +41,8 @@ export const messageButton = v.object({
   failed: v.optional(v.string()),
 });
 
+export const usagePool = v.object({ id: v.string(), title: v.string(), accountIds: v.array(v.string()) });
+
 export const threadFields = {
   threadId: v.string(),
   runnerId: v.string(),
@@ -248,6 +250,7 @@ export const appSchema = defineSchema({
     startedAt: v.string(),
     draining: v.boolean(),
     threadCount: v.number(),
+    usagePools: v.optional(v.array(usagePool)), // since API 101
     // Whether Mike is at this Mac (the Mac app connected and the keyboard or
     // mouse used in the last two minutes), from sync:setPresence (API 3).
     // Only believed while lastSeenAt is recent: a sleeping Mac counts as away.
@@ -511,6 +514,7 @@ export const appSchema = defineSchema({
     title: v.string(),
     cwd: v.string(),
     accountId: v.string(),
+    poolId: v.optional(v.string()), // since API 101
     provider: v.string(),
     model: v.optional(v.string()),
     status: v.string(),

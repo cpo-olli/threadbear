@@ -36,7 +36,7 @@ import { makeFunctionReference } from 'convex/server';
 import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
 import { agentsStillWorking, ARCHIVE_VERDICTS, ErrorCode, isEffortLevel, remoteCreateModeOf } from './protocol.ts';
-import type { Account, ArchiveVerdict, ApprovalDecision, ApprovalOption, AskAnswer, DesignReview, EffortLevel, ReviewDraft, ImageRef, LabReviewLedger, OpenAsk, PermissionMode, PersistedEvent, Project, Question, ReplyButton, Schedule, ThreadSummary } from './protocol.ts';
+import type { Account, ArchiveVerdict, ApprovalDecision, ApprovalOption, AskAnswer, DesignReview, EffortLevel, ReviewDraft, ImageRef, LabReviewLedger, OpenAsk, PermissionMode, PersistedEvent, Pool, Project, Question, ReplyButton, Schedule, ThreadSummary } from './protocol.ts';
 import { REMOTE_ALLOW_REFUSED, remoteAllowRefused, remoteCardShowsAll, summaryField } from './tools.ts';
 import type { Notification } from './runner.ts';
 import type { ScheduleBackend, StoredSchedule } from './schedules.ts';
@@ -173,7 +173,8 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 100;
+export const BACKEND_API_VERSION = 101;
+export const INDEX_POOL_API_VERSION = 101;
 // From this one sync:removeThreads takes the runner's id and leaves a row
 // that's another runner's alone (a thread moved away), whatever the key.
 export const REMOVE_OWN_ROWS_API_VERSION = 92;
@@ -657,6 +658,7 @@ type Host = {
   listProjects?: () => Project[];
   listSchedules?: () => Schedule[];
   listAccounts?: () => Account[];
+  listPools?: () => { pools: Pool[] };
   // The thread's reply buttons (buttons.list); absent in small tests, and
   // then no row carries any.
   buttons?: (threadId: string) => ReplyButton[];
@@ -1806,6 +1808,7 @@ export class ConvexSync {
         takesKeywords: () => (this.backendApiVersion ?? 0) >= KEYWORDS_API_VERSION,
         takesMode: () => (this.backendApiVersion ?? 0) >= INDEX_MODE_API_VERSION,
         takesWaitState: () => (this.backendApiVersion ?? 0) >= WAIT_STATE_API_VERSION,
+        takesPool: () => (this.backendApiVersion ?? 0) >= INDEX_POOL_API_VERSION,
         takesSince: () => (this.backendApiVersion ?? 0) >= INDEX_SINCE_API_VERSION,
         takesOrder: () => (this.backendApiVersion ?? 0) >= RUNNER_ORDER_API_VERSION,
         takesServices: () => this.virtualRunnersReady(),
@@ -4292,6 +4295,9 @@ export class ConvexSync {
       startedAt: this.deps.startedAt,
       draining: false,
       threadCount: this.deps.runner.list(ALL).length,
+      ...((this.backendApiVersion ?? 0) >= INDEX_POOL_API_VERSION && this.deps.runner.listPools
+        ? { usagePools: this.deps.runner.listPools().pools.map(({ id, title, accountIds }) => ({ id, title, accountIds })) }
+        : {}),
       ...(this.deps.config.icon && (this.backendApiVersion ?? 0) >= RUNNER_ICON_API_VERSION ? { icon: this.deps.config.icon } : {}),
       ...(this.stats?.pressure && (this.backendApiVersion ?? 0) >= RUNNER_STATS_API_VERSION ? { pressure: this.stats.pressure } : {}),
       ...followProblem,

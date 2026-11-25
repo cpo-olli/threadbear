@@ -207,30 +207,61 @@ impl Threadbear {
         cx.notify();
     }
 
-    /// The login the next new thread would use (`newThreadAccountId`), and
-    /// how full the pot is for it: this Mac's logins, or the other runner's a
-    /// draft is set to start on.
-    fn next_thread_room(&self) -> (f64, Option<String>) {
-        let Some(logins) = self.new_thread_logins() else {
-            return (0., None);
+    /// The open thread's runner and pool; without a thread, the new draft's login.
+    fn honey_icon(&self) -> rules::HoneyIcon {
+        let thread = self.selected.as_ref().and_then(|id| self.threads.get(id));
+        let (logins, pool, account, runner) = if let Some(thread) = thread {
+            let logins = match thread.runner_id.as_deref() {
+                Some(runner) => self.remote.logins.get(runner),
+                None => Some(&self.logins),
+            };
+            (
+                logins,
+                thread.pool_id.clone(),
+                thread.account_id.clone(),
+                thread.runner_id.as_deref(),
+            )
+        } else {
+            let logins = self.new_thread_logins();
+            let account = logins
+                .map(|l| self.with_draft(l, |d| d.account_id()))
+                .unwrap_or_default();
+            (
+                logins,
+                None,
+                account,
+                self.new_thread.picks.runner.as_deref(),
+            )
         };
-        let id = self.with_draft(logins, |d| d.account_id());
-        let level = rules::honey_level(logins.account(&id).and_then(rules::usage).as_ref());
-        (level, Some(id))
+        let mut icon = logins.map_or_else(
+            || rules::HoneyIcon {
+                level: 0.,
+                login: None,
+                tip: "Usage\nWaiting for this runner's usage".to_owned(),
+            },
+            |l| {
+                rules::thread_honey(
+                    l.usage_pools.as_deref().unwrap_or(&l.pools),
+                    &l.accounts,
+                    pool.as_deref(),
+                    &account,
+                    now_ms(),
+                    &Local,
+                )
+            },
+        );
+        // The same login id on two runners is not the same allowance resetting.
+        icon.login = icon.login.map(|login| match runner {
+            Some(runner) => format!("{runner}/{login}"),
+            None => login,
+        });
+        icon
     }
 
-    /// The activity bar's Usage icon: the pot filled to the room left, and its
-    /// tooltip, each pool's best room (Mike, 28 Oct).
     pub(crate) fn honey_pot(&mut self) -> (AnyElement, String) {
-        let (level, login) = self.next_thread_room();
-        self.usage.pot.see(level, login);
-        let tip = rules::icon_tooltip_with_sign_ins(
-            &rules::groups(&self.logins.pools, &self.logins.accounts),
-            &self.logins.accounts,
-            now_ms(),
-            &Local,
-        );
-        (self.usage.pot.element(), tip)
+        let icon = self.honey_icon();
+        self.usage.pot.see(icon.level, icon.login);
+        (self.usage.pot.element(), icon.tip)
     }
 
     /// The panel in the dock: its own view, drawn again only when it has to
@@ -396,7 +427,7 @@ impl Threadbear {
         let zone = Local;
         let accounts = &self.logins.accounts;
         let stats = self.usage.stats.as_ref();
-        let (level, login) = self.next_thread_room();
+        let icon = self.honey_icon();
         let mut notes = Vec::new();
         if rules::needs_newer_runner(accounts) {
             notes.push(rules::NEWER_RUNNER);
@@ -408,9 +439,9 @@ impl Threadbear {
             "shown": self.dock.read(cx).is_showing(shell::USAGE),
             "lines": rules::lines_named(&self.logins.pools, accounts, stats, now, &zone, |p| self.logins.provider_title(p)),
             "icon": {
-                "percent": (level * 100.).round() as i64,
-                "login": login,
-                "tip": rules::icon_tooltip_with_sign_ins(&rules::groups(&self.logins.pools, accounts), accounts, now, &zone),
+                "percent": (icon.level * 100.).round() as i64,
+                "login": icon.login,
+                "tip": icon.tip,
                 "dot": rules::sign_in_needed(accounts, now),
             },
             "tiles": stats.map(|s| rules::tiles(s, accounts, now, &zone).iter().map(|t| json!({ "title": t.title, "value": t.value, "detail": t.detail })).collect::<Vec<_>>()).unwrap_or_default(),

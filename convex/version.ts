@@ -491,4 +491,6 @@
 // 100: an owned schedule can carry `starThreads`: each thread it starts
 //    begins starred. A runner sends it only to a backend of 100 or later;
 //    an older runner starts them unstarred.
-export const API_VERSION = 100;
+// 101: sidebar rows carry poolId and heartbeats carry effective usagePools,
+//    read owner-only by relay:remotePools, so Usage follows a remote thread's pool.
+export const API_VERSION = 101;

@@ -18,7 +18,7 @@ import { docBytes, isThreadId, mayTouch, ownThreadOnly } from './runnerAccess';
 import { queued, request as requestMachine } from './machines';
 import { requestStateFrom } from './requestStates';
 import { steppingFor } from './stepping';
-import { messageButton } from './schema';
+import { messageButton, usagePool } from './schema';
 import { deleteIfUnused, MAX_COMMAND_FILES, MAX_RUNNER_UPLOAD_BYTES, storageInUse } from './sync';
 import { UPLOAD_CLAIM_MS, newClaim } from './uploads';
 
@@ -556,6 +556,17 @@ export const remoteAccounts = query({
       out.push(rest);
     }
     return out;
+  },
+});
+
+// The owning runner's effective pools, including local/default membership.
+export const remotePools = query({
+  args: { key: v.string(), runnerId: v.string() },
+  returns: v.union(v.null(), v.array(usagePool)),
+  handler: async (ctx, { key, runnerId }) => {
+    await runnerAuth(ctx, key, 'remotePools');
+    const runner = await ctx.db.query('runners').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).unique();
+    return runner?.usagePools ?? null;
   },
 });
 

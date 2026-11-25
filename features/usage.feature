@@ -109,6 +109,21 @@ Feature: The Usage panel and its honey pot
     When "claude-main"'s week resets
     Then the honey pot is 100% full, for "claude-main"
 
+  @rail.honeypot @swift-pending
+  Scenario: Switching threads makes the pot follow each thread's pool
+    When a usage thread "Pool allowance" uses "claude-4" in pool "claude"
+    And I open the thread "Pool allowance"
+    Then the honey pot is 78% full, for "claude-main"
+    And the honey pot's first allowance is "Claude: 78% left"
+    When a usage thread "Work allowance" uses "claude-2" in pool "work"
+    And I open the thread "Work allowance"
+    Then the honey pot is 95% full, for "claude-2"
+    And the honey pot's first allowance is "Work: 95% left"
+    When I open the thread "Pool allowance"
+    And "claude-main" is down to 5% of its week
+    Then the honey pot is 12% full, for "claude-3"
+    And the honey pot's first allowance is "Claude: 12% left"
+
   # From Claude Code 2.1.325 a sign-in ends 28 days after it was made, and
   # claude-1's ended unnoticed on 14 Nov 2026. The frozen Swift app has none of it.
   @usage.sign-in @swift-pending

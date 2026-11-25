@@ -45,7 +45,7 @@ import type { Notification } from './runner.ts';
 import type { RemoteThread, RemoteThreads } from './thread-index.ts';
 import type { Download, Post, Subscribe, Upload } from './sync.ts';
 import { picturesSaid, withoutCountLine } from './pictures.ts';
-import { ErrorCode, RpcError, remoteCreateMode, type AskAnswer, type LabReviewLedger } from './protocol.ts';
+import { ErrorCode, RpcError, remoteCreateMode, type Account, type AskAnswer, type LabReviewLedger } from './protocol.ts';
 import { seal } from './secrets.ts';
 
 export const SCALE = 8;
@@ -724,7 +724,7 @@ export class Relay {
       lastSeenSeq: 0,
       runnerId: t.runnerId,
     };
-    for (const k of ['model', 'createdAt', 'lastActivityAt', 'snoozedUntil', 'archivedAt', 'starredAt', 'startedBy', 'asked', 'keywords', 'waitState'] as const) {
+    for (const k of ['poolId', 'model', 'createdAt', 'lastActivityAt', 'snoozedUntil', 'archivedAt', 'starredAt', 'startedBy', 'asked', 'keywords', 'waitState'] as const) {
       if (t[k] !== undefined) thread[k] = t[k];
     }
     // Its real access, or "unknown" from a runner that doesn't say: never
@@ -1738,6 +1738,7 @@ export class Relay {
           const patch: Partial<RemoteThread> = {};
           if (typeof applied.accountId === 'string') patch.accountId = applied.accountId;
           else if (typeof change.accountId === 'string') patch.accountId = change.accountId;
+          if (change.accountId !== undefined) patch.poolId = undefined;
           if ('model' in applied) patch.model = typeof applied.model === 'string' ? applied.model : undefined;
           this.remember(threadId, patch);
           return { thread: this.summary(threadId) };
@@ -1905,11 +1906,12 @@ export class Relay {
   }
 
   /** Another runner's logins for the new-thread pickers, from the backend's accounts rows. */
-  async logins(runnerId: string): Promise<{ accounts: unknown[]; pools: unknown[]; defaults: Record<string, unknown> }> {
-    const rows = (await this.read('relay:remoteAccounts', { runnerId })) as { id: string; provider: string; runnerId?: string }[];
+  async logins(runnerId: string): Promise<{ accounts: unknown[]; pools: unknown[]; usagePools?: unknown[]; defaults: Record<string, unknown> }> {
+    const rows = (await this.read('relay:remoteAccounts', { runnerId })) as (Account & { runnerId?: string })[];
     const accounts = rows.map(({ runnerId: _r, ...a }) => ({ ...a, configDir: '' }));
     const recent = this.deps.remote().threads.filter((t) => t.runnerId === runnerId).sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))[0];
-    return { accounts, pools: [], defaults: { cwd: recent?.cwd ?? '', accountId: recent?.accountId ?? accounts[0]?.id ?? '', models: {}, efforts: {} } };
+    const usagePools = (this.src().apiVersion ?? 0) >= 101 ? await this.read('relay:remotePools', { runnerId }) : undefined;
+    return { accounts, pools: [], ...(Array.isArray(usagePools) ? { usagePools } : {}), defaults: { cwd: recent?.cwd ?? '', accountId: recent?.accountId ?? accounts[0]?.id ?? '', models: {}, efforts: {} } };
   }
 }
 

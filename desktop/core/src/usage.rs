@@ -1227,14 +1227,74 @@ fn tooltip_line<Tz: TimeZone>(group: &Group, now: i64, zone: &Tz) -> Option<Stri
 
 // ---- The honey pot (HoneyLevel) ----
 
-/// How full the honey pot is, 0 to 1: the room left on the login the next
-/// new thread would use, the tighter of its 5-hour and weekly windows.
+/// One login's fill level, 0 to 1: the tighter of its 5-hour and weekly
+/// windows. A pool uses the best available login's level.
 /// Unknown or at its limit is an empty pot; the tooltip and the panel say
 /// the rest.
 pub fn honey_level(usage: Option<&Usage>) -> f64 {
     match usage {
         Some(u) if !u.blocked => room(u).map_or(0., |r| (r / 100.).clamp(0., 1.)),
         _ => 0.,
+    }
+}
+
+/// The pot and its tooltip share the same accounts and pool ordering.
+pub struct HoneyIcon {
+    pub level: f64,
+    pub login: Option<String>,
+    pub tip: String,
+}
+
+pub fn thread_honey<Tz: TimeZone>(
+    pools: &[Pool],
+    accounts: &[Account],
+    pool_id: Option<&str>,
+    account_id: &str,
+    now: i64,
+    zone: &Tz,
+) -> HoneyIcon {
+    let mut groups = groups(pools, accounts);
+    let group = pool_id.and_then(|id| groups.iter().position(|g| g.pool.is_some() && g.id == id));
+    if let Some(index) = group {
+        let selected = groups.remove(index);
+        groups.insert(0, selected);
+    }
+    let pool = pool_id.and_then(|id| pools.iter().find(|p| p.id == id));
+    let best = accounts
+        .iter()
+        .filter(|a| pool.map_or(a.id == account_id, |p| p.account_ids.contains(&a.id)))
+        .filter(|a| !a.signed_out)
+        .max_by(|a, b| honey_level(usage(a).as_ref()).total_cmp(&honey_level(usage(b).as_ref())));
+    // A pinned login can have less room than the pools it belongs to.
+    if group.is_none() {
+        let title = login_name(account_id, accounts);
+        groups.insert(
+            0,
+            Group {
+                id: account_id.to_owned(),
+                title,
+                pool: None,
+                providers: vec![ProviderLogins {
+                    provider: String::new(),
+                    accounts: best.into_iter().collect(),
+                }],
+            },
+        );
+    }
+    let mut tip = icon_tooltip_with_sign_ins(&groups, accounts, now, zone);
+    if let Some(group) = groups
+        .first()
+        .filter(|g| tooltip_line(g, now, zone).is_none())
+    {
+        tip.insert_str(
+            "Usage".len(),
+            &format!("\n{}: usage not available", group.title),
+        );
+    }
+    HoneyIcon {
+        level: best.map_or(0., |a| honey_level(usage(a).as_ref())),
+        login: best.map(|a| a.id.clone()),
+        tip,
     }
 }
 
@@ -2337,6 +2397,48 @@ mod tests {
             account_ids: logins.iter().map(|l| l.to_string()).collect(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn honey_follows_the_pool_and_keeps_its_tooltip_first() {
+        let mut accounts = vec![
+            login("low", "claude", None, 20., false, None),
+            login("high", "claude", Some(60.), 90., false, None),
+            login("work", "claude", None, 95., false, None),
+        ];
+        let pools = vec![
+            pool("main", "Main", &["low", "high"]),
+            pool("work", "Work", &["work"]),
+        ];
+        let icon = thread_honey(&pools, &accounts, Some("main"), "low", at(13, 0), &zone());
+        assert_eq!(icon.level, 0.6);
+        assert_eq!(icon.login.as_deref(), Some("high"));
+        assert_eq!(icon.tip.lines().nth(1), Some("Main: 60% left"));
+        let icon = thread_honey(&pools, &accounts, Some("work"), "work", at(13, 0), &zone());
+        assert_eq!(icon.level, 0.95);
+        assert_eq!(icon.tip.lines().nth(1), Some("Work: 95% left"));
+        let pinned = thread_honey(&pools, &accounts, None, "low", at(13, 0), &zone());
+        assert_eq!(pinned.level, 0.2);
+        let old = thread_honey(&[], &accounts, Some("claude"), "low", at(13, 0), &zone());
+        assert_eq!(old.level, 0.2);
+        assert_eq!(old.tip.lines().nth(1), Some("low: 20% left"));
+        accounts[1].signed_out = true;
+        let icon = thread_honey(&pools, &accounts, Some("main"), "low", at(13, 0), &zone());
+        assert_eq!(icon.level, 0.2);
+        accounts[0].signed_out = true;
+        let icon = thread_honey(&pools, &accounts, Some("main"), "low", at(13, 0), &zone());
+        assert_eq!(icon.level, 0.);
+        assert_eq!(icon.tip.lines().nth(1), Some("Main: usage not available"));
+        accounts[0].signed_out = false;
+        accounts[0].usage.as_mut().unwrap()["blocked"] = json!(true);
+        assert_eq!(
+            thread_honey(&pools, &accounts, Some("main"), "low", at(13, 0), &zone()).level,
+            0.
+        );
+        assert_eq!(
+            thread_honey(&[], &[], Some("main"), "low", at(13, 0), &zone()).level,
+            0.
+        );
     }
 
     // ---- Ported from the Swift app's UsageStatsTests ----

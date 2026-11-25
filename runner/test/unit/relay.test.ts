@@ -84,7 +84,7 @@ test('a tail past what is held asks for the gap; one that overlaps just merges',
 });
 
 type Call = { kind: string; fn: string; args: Record<string, unknown> };
-type HarnessOpts = { paged?: boolean; online?: boolean; row?: () => RelayThreadRow & { share?: unknown }; apiVersion?: number; queueFails?: boolean; uploadMs?: number; rows?: RelayRow[]; readMessages?: (args: Record<string, unknown>) => unknown; pictures?: (args: Record<string, unknown>) => unknown };
+type HarnessOpts = { usagePools?: unknown[]; paged?: boolean; online?: boolean; row?: () => RelayThreadRow & { share?: unknown }; apiVersion?: number; queueFails?: boolean; uploadMs?: number; rows?: RelayRow[]; readMessages?: (args: Record<string, unknown>) => unknown; pictures?: (args: Record<string, unknown>) => unknown };
 function harness(opts: HarnessOpts = {}) {
   const calls: Call[] = [];
   const subs = new Map<string, { args: Record<string, unknown>; onUpdate: (v: unknown) => void; closed: boolean }[]>();
@@ -133,6 +133,7 @@ function harness(opts: HarnessOpts = {}) {
           return `cmd${++commandN}`;
         }
         if (fn === 'relay:pictureUploadUrl') return `https://upload.example/${++uploadN}`;
+        if (fn === 'relay:remotePools') return opts.usagePools ?? null;
         if (fn === 'relay:remoteAccounts') return [{ runnerId: 'mac-mini', id: 'claude-main', provider: 'claude', title: 'Claude' }];
         return null;
       },
@@ -428,15 +429,17 @@ test("a login or model change goes to the thread's runner as one update, once th
   await assert.rejects(old.relay.call(T, 'threads.update', { threadId: T, accountId: 'claude-2' }), /once your Convex backend is updated/);
   assert.ok(!old.calls.some((c) => c.fn === 'relay:queueCommand'), 'nothing queued for a backend that would refuse it');
   const h = harness({ apiVersion: 77 });
+  h.remote.threads[0]!.poolId = 'personal';
   const moved = h.relay.call(T, 'threads.update', { threadId: T, accountId: 'claude-2', model: 'opus', carryOn: true });
   await new Promise((r) => setImmediate(r));
   // That runner put its own default in place of a model its login can't run.
   h.subs.get('relay:commandState')![0]!.onUpdate({ state: 'done', result: { accountId: 'claude-2', model: 'claude-sonnet-5-5' } });
-  const { thread } = (await moved) as { thread: { accountId: string; model?: string } };
+  const { thread } = (await moved) as { thread: { accountId: string; model?: string; poolId?: string } };
   const queued = h.calls.find((c) => c.fn === 'relay:queueCommand')!;
   assert.equal(queued.args.kind, 'update');
   assert.deepEqual(queued.args.args, { accountId: 'claude-2', model: 'opus', carryOn: true });
   assert.equal(thread.accountId, 'claude-2', 'the reply has the new login at once');
+  assert.equal(thread.poolId, undefined, 'a login pick pins it before its sidebar row catches up');
   assert.equal(thread.model, 'claude-sonnet-5-5', 'and the model that runner applied, not the one asked for');
   // An agent's goes as one, so that runner keeps a sandboxed thread in.
   const agent = h.relay.call(T, 'threads.update', { threadId: T, model: 'haiku', byAgent: true });
@@ -1473,4 +1476,23 @@ test("an open thread's summary carries its row's mode, or unknown", async () => 
   h.remote.threads[0]!.permissionMode = 'auto';
   await h.relay.call(T, 'threads.subscribe', { threadId: T, afterSeq: 0 });
   assert.deepEqual(said(), ['unknown', 'auto']);
+});
+
+test('a remote summary keeps its pool for the Usage icon', async () => {
+  const h = harness({ row: () => ({ ...idle, share: { access: 'link', slug: 'abc' } }) });
+  h.remote.threads[0]!.poolId = 'work';
+  await h.relay.call(T, 'threads.subscribe', { threadId: T, afterSeq: 0 });
+  const update = h.published.find((n) => (n as { method: string }).method === 'thread.updated');
+  assert.equal((update as { params: { thread: { poolId?: string } } }).params.thread.poolId, 'work');
+});
+
+test('remote usage uses its effective pools, including local defaults', async () => {
+  const pools = [{ id: 'claude', title: 'Claude', accountIds: ['claude-main', 'claude-other'] }];
+  const h = harness({ apiVersion: 101, usagePools: pools });
+  const logins = await h.relay.logins('mac-mini');
+  assert.deepEqual(logins.pools, [], 'remote creation still picks a login');
+  assert.deepEqual(logins.usagePools, pools);
+  assert.deepEqual(h.calls.find((c) => c.fn === 'relay:remotePools')!.args, { key: 'owner', runnerId: 'mac-mini' });
+  const old = await harness({ apiVersion: 100 }).relay.logins('mac-mini');
+  assert.equal(old.usagePools, undefined);
 });

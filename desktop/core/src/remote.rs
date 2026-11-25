@@ -212,6 +212,10 @@ fn summary(row: &Value) -> Option<ThreadSummary> {
         title: text("title"),
         cwd: text("cwd"),
         account_id: text("accountId"),
+        pool_id: row["poolId"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
         provider,
         model: row["model"]
             .as_str()

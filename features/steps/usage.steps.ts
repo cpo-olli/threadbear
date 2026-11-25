@@ -228,3 +228,11 @@ When("a Gemini login with its plan's usage is added", async function (this: Thre
   };
   await this.app.do({ cmd: 'mock', method: 'accounts', params: { accounts: [...accounts, { id: 'antigravity-main', provider: 'antigravity', title: 'Gemini', plan: 'Google AI Ultra', configDir: '~/.gemini/antigravity-acp', models: [], usage }] } });
 });
+
+When('a usage thread {string} uses {string} in pool {string}', async function (this: ThreadbearWorld, title: string, accountId: string, poolId: string) {
+  await this.app.do({ cmd: 'mock', method: 'thread', params: { id: `usage-${poolId}`, title, accountId, poolId } });
+});
+
+Then("the honey pot's first allowance is {string}", async function (this: ThreadbearWorld, line: string) {
+  await this.until(`the first allowance is ${line}`, (d) => usage(d)?.icon.tip.split('\n')[1] === line);
+});

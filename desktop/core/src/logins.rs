@@ -181,6 +181,8 @@ pub struct RunnerLogins {
     pub accounts: Vec<Account>,
     pub providers: Vec<ProviderInfo>,
     pub pools: Vec<Pool>,
+    /// Remote pools for Usage; remote creation still chooses a login.
+    pub usage_pools: Option<Vec<Pool>>,
     pub defaults: RunnerDefaults,
     /// Sign-in commands declared by this runner, replaced on every hello.
     pub login_commands: HashMap<String, String>,
@@ -208,6 +210,7 @@ impl RunnerLogins {
             accounts: accounts_from(&hello["accounts"]),
             providers: lossy(&hello["providers"]),
             pools: pools_from(&hello["pools"]),
+            usage_pools: hello.get("usagePools").map(pools_from),
             defaults: hello
                 .get("defaults")
                 .cloned()
