@@ -125,8 +125,8 @@ runner from before this check fetched straight into it). A tag object over
 1 MB is never read and doesn't verify. Only tag objects
 whose names are a date (`release/YYYY-MM-DD`, as Mike's runner makes
 them), no later than two days from now and no earlier than the newest
-release already kept, are looked at, newest first, stopping at the first
-that verifies, and at most 20 not read before per check, so a flood of
+release already kept, are looked at (oldest first from it, then the
+newest that verifies of those), and at most 20 not read before per check, so a flood of
 tags upstream costs a check almost nothing. Each tag object's answer is
 remembered while the runner runs; a read or an ssh-keygen that fails to
 run fails the check instead, and is tried again next time. A name in `refs/threadbear/upstream/*` keeps the tag it verified
@@ -170,10 +170,11 @@ authority. Revocations are read from every release a check fetched that
 verifies and is on upstream's main (by tag object, so a same-day
 replacement counts), not just the newest, so a newer release signed by a
 revoked key can't hide the one revoking it; when one does revoke
-something, the check looks again before the newest says anything. And a
-release newer than the one a fork had isn't offered while tags between
-them are still unread (more than one check reads): the check fails and
-looks again in 15 minutes. Mike's runner waits for
+something, the check looks again before the newest says anything. Tags
+are read oldest first from the newest kept (a copy with none kept starts
+16 days back, or with nothing that recent takes the newest), so the
+release a check takes always has every tag between it and what the fork
+had read with it, and a backlog moves on 20 releases a check. Mike's runner waits for
 UTC's day only on its hourly look: `tb updates publish` signs with the
 release key then.
 `release.commit` is the commit

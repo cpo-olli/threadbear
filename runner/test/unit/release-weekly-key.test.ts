@@ -371,3 +371,37 @@ test('a weekly key near its end that Touch ID never renewed starts one starred r
 test('revokedPath is where a fork keeps revoked keys', () => {
   assert.equal(weeklyRevokedPath('/h'), `${revokedPath('/h')}-weekly`);
 });
+
+// Codex's seventh look: a fresh copy, with nothing kept to start from.
+test("a fresh copy doesn't take a revoked weekly key's release either", async () => {
+  const w = world();
+  const leaked = weekly(w, 'leaked', '20261029Z:20261106Z');
+  const b = commit(w.mike, 'b.txt', 'Something bad, never released');
+  commitFile(w, 'scripts/release-keys-revoked', `${leaked.pub}\n`, 'Revoke the leaked weekly key');
+  git(w.mike, '-c', 'gpg.format=ssh', '-c', `user.signingkey=${w.mikeKey.priv}`, 'tag', '-s', '-m', 'Threadbear release/2026-10-29', 'release/2026-10-29');
+  certTag(w.mike, 'release/2026-10-30', leaked.cert, '2026-10-30T10:00:00Z', b);
+  const junk = weekly(w, 'junk', '20261029Z:20261231Z', key(w.root, 'stranger').priv);
+  for (let day = 1; day <= 19; day++) certTag(w.mike, `release/2026-11-${String(day).padStart(2, '0')}`, junk.cert, `2026-11-${String(day).padStart(2, '0')}T10:00:00Z`, b);
+  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
+  const up = upstreamFor(w.theirs, w.home, new FakeClock(Date.parse('2026-11-20T00:00:00Z')));
+  let tag: string | undefined;
+  for (let i = 0; i < 3; i++) {
+    tag = (await up.check()).release?.tag;
+    assert.notEqual(tag, 'release/2026-10-30', `check ${i + 1} offered the revoked key's release`);
+  }
+  assert.equal(tag, 'release/2026-10-29');
+});
+
+test('a copy away for weeks catches up, MAX_READS releases a check', async () => {
+  const w = world();
+  const up = upstreamFor(w.theirs, w.home);
+  assert.equal((await up.check()).release?.tag, 'release/2026-10-01');
+  for (let day = 2; day <= 26; day++) {
+    commit(w.mike, `d${day}.txt`, `Day ${day}`);
+    git(w.mike, '-c', 'gpg.format=ssh', '-c', `user.signingkey=${w.mikeKey.priv}`, 'tag', '-s', '-m', 'Threadbear', `release/2026-10-${String(day).padStart(2, '0')}`);
+  }
+  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
+  const seen: (string | undefined)[] = [];
+  for (let i = 0; i < 3 && seen.at(-1) !== 'release/2026-10-26'; i++) seen.push((await up.check()).release?.tag);
+  assert.equal(seen.at(-1), 'release/2026-10-26', seen.join(', '));
+});

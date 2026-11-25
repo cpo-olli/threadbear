@@ -94,6 +94,8 @@ const MAX_READS = 20;
 // The most releases older than the newest kept that a check fetches, for
 // their notes (notesSince reads nine).
 const MAX_OLDER = 9;
+// How far back a copy with no release kept starts reading (stageReleases).
+const FRESH_LOOKBACK_MS = 16 * 24 * 60 * 60_000;
 
 // A release tag's message lists at most 200 subjects (publishOnce), a few
 // tens of KB; a bigger tag object is turned down unread.
@@ -829,20 +831,6 @@ export class Upstream {
           const keysBefore = this.signersHash(signers);
           this.newestVerified = undefined;
           release = await this.newestSigned(checkout, signers, staged);
-          // Tags newer than what this fork had, older than the one found,
-          // and not read yet (more than a check reads): one could revoke
-          // the key that signed it, so it's neither offered nor kept, and
-          // says nothing about keys, until they've been read; the next
-          // check (in 15 minutes) reads on from the same place (Codex's
-          // reviews, 25 Nov 2026). A fresh copy has nothing to compare
-          // with and takes the newest.
-          const found = release?.tag.slice(TAG_PREFIX.length);
-          if (found && keptBefore && this.unread.some((n) => n >= keptBefore && n < found)) {
-            for (const [name, ref] of await this.refs(checkout, REF_NS)) {
-              if (name > keptBefore) await this.git(checkout, ['update-ref', '-d', REF_NS + name, ref.oid]).catch(() => undefined);
-            }
-            throw new Error('more release tags upstream than one check reads, some older than the newest; it reads the rest before offering it');
-          }
           const changed = release ? await this.keyChanges(checkout, signers, staged, keptBefore) : false;
           settled = !changed && this.signersHash(signers) === keysBefore;
         }
@@ -928,9 +916,7 @@ export class Upstream {
   //    and each candidate is a ref there, refs/incoming/<date>.
   // checkNow deletes the folder when the check ends, whatever happened, so
   // what didn't verify, and a fetch cut short, leaves nothing behind.
-  private unread: string[] = [];
   private async stageReleases(checkout: string, signers: string, work: string, from: string): Promise<string | undefined> {
-    this.unread = [];
     const listed = await this.git(checkout, ['ls-remote', this.uploadPack, from, 'refs/heads/main', `refs/tags/${TAG_PREFIX}*`], this.remote({ timeoutMs: this.fetchTimeoutMs }));
     // Upstream's main: no main, no release can count (STAGED_MAIN).
     const mainOid = listed.split('\n').map((l) => l.split('\t')).find(([oid, ref]) => ref === 'refs/heads/main' && oid && OBJECT_ID.test(oid))?.[0];
@@ -972,9 +958,17 @@ export class Upstream {
     const pinned = this.signersHash(signers);
     const unsigned = (name: string) => this.answers.get(`${pinned} ${offered.get(name)} ${TAG_PREFIX}${name}`) === null;
     const names = [...offered.keys()].filter((n) => n <= latest && !unsigned(n)).sort().reverse();
-    const candidates = [...names.filter((n) => n >= newest).slice(0, MAX_READS), ...names.filter((n) => n < newest).slice(0, MAX_OLDER)];
-    // Newer than what's kept but past this check's reads (checkNow).
-    this.unread = names.filter((n) => n >= newest).slice(MAX_READS);
+    // Oldest first from the newest kept, so a release this check takes has
+    // every tag between it and what the fork had read alongside it: one
+    // revoking the key that signed it can't be pushed past this check's
+    // reads by junk tags (Codex's reviews, 25 Nov 2026), and a backlog
+    // moves on MAX_READS at a time. A fresh copy starts FRESH_LOOKBACK_MS
+    // back (longer than a weekly key lasts), or, with nothing that recent,
+    // takes the newest.
+    const floor = newest || new Date(this.deps.clock.now() - FRESH_LOOKBACK_MS).toISOString().slice(0, 10);
+    const recent = names.filter((n) => n >= floor).reverse();
+    const ahead = recent.length ? recent.slice(0, MAX_READS) : names.filter((n) => n >= newest).slice(0, MAX_READS);
+    const candidates = [...ahead, ...names.filter((n) => n < newest).slice(0, MAX_OLDER)];
     if (candidates.length) await this.fetchStaged(checkout, work, objects, candidates.map((n) => `refs/tags/${TAG_PREFIX}${n}`), from);
     // The ids ls-remote named, where they came (a tag moved in between
     // isn't there, and waits for the next check).

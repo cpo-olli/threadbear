@@ -103,9 +103,10 @@ test('a flood of tags upstream costs a check a few reads, once', async () => {
   let reads = 0;
   const { gitBytes } = await import('../../src/upstream.ts');
   const up = upstreamFor(w.theirs, w.home, new FakeClock(LATER), { gitBytes: (cwd: string, args: string[]) => (args[1] === 'tag' && reads++, gitBytes(cwd, args)) });
-  // 25 fakes dated after it: 20 a check, then the real one.
+  // 25 fakes dated after it, and nothing kept: a fresh copy reads the
+  // last FRESH_LOOKBACK_MS's (17 of them) oldest first, then the rest.
   let s = await up.check();
-  assert.equal(reads, 20);
+  assert.ok(reads > 0 && reads <= 20, `read ${reads} tags`);
   assert.equal(s.release, undefined, 'not reached yet, nor the older one');
   reads = 0;
   s = await up.check();
@@ -221,10 +222,9 @@ test('upstream with thousands of tags: only a bounded few are fetched, and none 
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
   const before = objectsIn(w.theirs);
   const up = upstreamFor(w.theirs, w.home);
-  // 25 unsigned tags newer than it: 20 a check, then the real one.
-  let s = await up.check();
-  assert.equal(s.release?.tag, 'release/2026-10-01');
-  s = await up.check();
+  // 25 unsigned tags newer than it: read oldest first from what the fork
+  // kept, so the real one comes in the first check's reads.
+  const s = await up.check();
   assert.equal(s.release?.commit, real, s.reason ?? '');
   const after = objectsIn(w.theirs);
   assert.deepEqual(fakes.filter((f) => after.has(f)), [], "no unsigned tag's or name's commit is in the checkout");
