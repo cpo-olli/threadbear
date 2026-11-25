@@ -401,8 +401,10 @@ change.
   `terminal.panel`, `terminal.putcommand` and `composer.contextring`
   (partly). Each passes, or Mike drops it. On 25 Nov he counted
   `dock.titlebar`, `dock.frame` and `sidebar.hibernate.pick` as checked by
-  his daily use (their specs are `@manual`, so no run fills them in); the
-  terminal two and the context ring have to pass.
+  his daily use (their specs are `@manual`, so no run fills them in). The
+  terminal two and the context ring passed on the GPUI Mac app the same day
+  (all 20 scenarios, on Tinker Desk); the table still says otherwise until
+  the next full run.
 - People on forks are moved across. Today the Swift app offers it
   (`app/Sources/Threadbear/NewApp.swift`: a window once and a sidebar card,
   whose button starts a thread in the checkout that runs
