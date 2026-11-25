@@ -723,6 +723,13 @@ events from project threads and matching interest keywords are deduplicated and
 batched for ten minutes; progress does not wake it. An explicit timer or a helper
 question wakes it without that batch delay. Sources remain quoted event data.
 
+Queued coordinator updates survive runner recovery. An update already started
+has a durable receipt; a still-queued update remains queued rather than becoming
+an unsent-message note. Runner handover ends coordinator sessions and records
+unfinished work before the replacement takes over the registry. A project with
+an active coordinator cannot be deleted or merged: pause it first. Removal then
+archives its conversation and execution records before removing the identity.
+
 This version watches completed project threads and literal interest keywords.
 It does not yet classify incoming email, Slack or Sentry through the librarian.
 The project document follows the existing canonical project updates in place;
