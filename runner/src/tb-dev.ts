@@ -122,8 +122,10 @@ export async function runDev(client: RunnerClient, cmd: string, args: string[], 
           console.error("This runner can't publish a release on request yet; it picks that up on its next update.");
           return 1;
         }
-        if (f.json) return printJson(p);
         const wk = p.upstream.weeklyKey;
+        // A renewal that worked is a success too, release or not.
+        const ok = Boolean(p.tag || (!p.upstream.held && wk?.until && !wk.error));
+        if (f.json) return (printJson(p), ok ? 0 : 1);
         if (wk?.error) process.stdout.write(`The weekly signing key wasn't renewed: ${wk.error}.\n`);
         else if (wk?.until) process.stdout.write(`The weekly signing key is good until ${new Date(wk.until).toLocaleString()}.\n`);
         if (p.tag) process.stdout.write(`Tagged and pushed ${p.tag}.\n`);
@@ -131,8 +133,7 @@ export async function runDev(client: RunnerClient, cmd: string, args: string[], 
         else if (p.upstream.published) process.stdout.write(`Nothing new to release: the last one is ${p.upstream.published.tag}.\n`);
         else if (wk) process.stdout.write('No release due.\n');
         else process.stdout.write("No release: this runner doesn't publish them (runner.json releases.publish).\n");
-        // A renewal that worked is a success too, release or not.
-        return p.tag || (!p.upstream.held && wk?.until && !wk.error) ? 0 : 1;
+        return ok ? 0 : 1;
       }
       const r = await client.call<{ upstream: UpstreamStatus }>(args[0] === 'check' ? 'upstream.check' : 'upstream.status').catch(quietlyTooOld);
       if (!r) {

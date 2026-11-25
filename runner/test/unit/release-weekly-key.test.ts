@@ -295,7 +295,9 @@ test("a flood of tags that never verify doesn't hide a revocation, not even for 
   certTag(w.mike, 'release/2026-10-30', leaked.cert, '2026-10-30T10:00:00Z', b);
   const stranger = key(w.root, 'stranger');
   const junk = weekly(w, 'junk', '20261029Z:20261231Z', stranger.priv);
-  for (let day = 1; day <= 25; day++) certTag(w.mike, `release/2026-11-${String(day).padStart(2, '0')}`, junk.cert, `2026-11-${String(day).padStart(2, '0')}T10:00:00Z`, b);
+  // Nineteen, so the first check reads them and the revoked key's release,
+  // and not the release revoking it (Codex's review).
+  for (let day = 1; day <= 19; day++) certTag(w.mike, `release/2026-11-${String(day).padStart(2, '0')}`, junk.cert, `2026-11-${String(day).padStart(2, '0')}T10:00:00Z`, b);
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
   let tag: string | undefined;
   for (let i = 0; i < 4 && tag !== 'release/2026-10-29'; i++) {

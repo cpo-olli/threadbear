@@ -829,17 +829,24 @@ export class Upstream {
           const keysBefore = this.signersHash(signers);
           this.newestVerified = undefined;
           release = await this.newestSigned(checkout, signers, staged);
+          // Tags newer than what this fork had, older than the one found,
+          // and not read yet (more than a check reads): one could revoke
+          // the key that signed it, so it's neither offered nor kept, and
+          // says nothing about keys, until they've been read; the next
+          // check (in 15 minutes) reads on from the same place (Codex's
+          // reviews, 25 Nov 2026). A fresh copy has nothing to compare
+          // with and takes the newest.
+          const found = release?.tag.slice(TAG_PREFIX.length);
+          if (found && keptBefore && this.unread.some((n) => n >= keptBefore && n < found)) {
+            for (const [name, ref] of await this.refs(checkout, REF_NS)) {
+              if (name > keptBefore) await this.git(checkout, ['update-ref', '-d', REF_NS + name, ref.oid]).catch(() => undefined);
+            }
+            throw new Error('more release tags upstream than one check reads, some older than the newest; it reads the rest before offering it');
+          }
           const changed = release ? await this.keyChanges(checkout, signers, staged, keptBefore) : false;
           settled = !changed && this.signersHash(signers) === keysBefore;
         }
         if (!settled) throw new Error('the release keys kept changing while the check ran; it looks again next time');
-        // Tags newer than what this fork had, older than the one found, and
-        // not read yet (more than a check reads): one of them could revoke
-        // the key that signed it, so it isn't offered until they've been
-        // read (Codex's review, 25 Nov 2026). A fresh copy has nothing to
-        // compare with and takes the newest.
-        const found = release?.tag.slice(TAG_PREFIX.length);
-        if (found && keptBefore && this.unread.some((n) => n >= keptBefore && n < found)) throw new Error('more release tags upstream than one check reads, some older than the newest; it reads the rest before offering it');
       } finally {
         fs.rmSync(work, { recursive: true, force: true });
       }
