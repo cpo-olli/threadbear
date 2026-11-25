@@ -284,8 +284,10 @@ test("Mike's runner waits for UTC's day rather than ask for Touch ID, unless he 
 
 // Codex's and Gemini's reviews: tags that will never verify mustn't hold
 // every check's places, or a release revoking a key stays out of sight.
-test("a flood of tags that never verify doesn't hide a revocation for long", async () => {
+test("a flood of tags that never verify doesn't hide a revocation, not even for a check", async () => {
   const w = world();
+  const up = upstreamFor(w.theirs, w.home);
+  assert.equal((await up.check()).release?.tag, 'release/2026-10-01', 'what the fork had');
   const leaked = weekly(w, 'leaked', '20261029Z:20261106Z');
   const b = commit(w.mike, 'b.txt', 'Something bad, never released');
   commitFile(w, 'scripts/release-keys-revoked', `${leaked.pub}\n`, 'Revoke the leaked weekly key');
@@ -295,9 +297,11 @@ test("a flood of tags that never verify doesn't hide a revocation for long", asy
   const junk = weekly(w, 'junk', '20261029Z:20261231Z', stranger.priv);
   for (let day = 1; day <= 25; day++) certTag(w.mike, `release/2026-11-${String(day).padStart(2, '0')}`, junk.cert, `2026-11-${String(day).padStart(2, '0')}T10:00:00Z`, b);
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  const up = upstreamFor(w.theirs, w.home);
   let tag: string | undefined;
-  for (let i = 0; i < 4 && tag !== 'release/2026-10-29'; i++) tag = (await up.check()).release?.tag;
+  for (let i = 0; i < 4 && tag !== 'release/2026-10-29'; i++) {
+    tag = (await up.check()).release?.tag;
+    assert.notEqual(tag, 'release/2026-10-30', `check ${i + 1} offered the revoked key's release`);
+  }
   assert.equal(tag, 'release/2026-10-29');
   assert.deepEqual(readWeeklyRevoked(w.home), [leaked.pub]);
 });

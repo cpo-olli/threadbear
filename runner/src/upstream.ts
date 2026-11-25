@@ -48,7 +48,7 @@ import type { Logger } from './log.ts';
 import { IS_WINDOWS } from './platform.ts';
 import { killGroup } from './proc.ts';
 import { delegatePaths, readDelegateState, usableCert, REMIND_AHEAD_MS, RENEW_AHEAD_MS, renewDelegate, SIGN_MARGIN_MS, writeDelegateState } from './release-delegate.ts';
-import { ADD_DELAY_MS, applyKeyChanges, certVerifyArgs, KeysBusy, keysIn, revokedPath, REVOKED_FILE, keyFilesHash, KEYS_EXTENSION, signatureCert, signedWithCert, signerKey, SIGNERS_FILE, weeklyRevokedPath, withAuthorities } from './release-keys.ts';
+import { ADD_DELAY_MS, applyKeyChanges, certVerifyArgs, KeysBusy, keysIn, readWeeklyRevoked, revokedPath, REVOKED_FILE, keyFilesHash, KEYS_EXTENSION, signatureCert, signedWithCert, signerKey, SIGNERS_FILE, weeklyRevokedPath, withAuthorities } from './release-keys.ts';
 import { changelogFor, type ReleaseChangelog } from './changelog.ts';
 import { LISTING_GIT_CONFIG, parseConfigListBytes, repoProofConfig, settable, TRUSTED_SCOPES, untrustedGitEnv } from './safe-git.ts';
 
@@ -833,6 +833,13 @@ export class Upstream {
           settled = !changed && this.signersHash(signers) === keysBefore;
         }
         if (!settled) throw new Error('the release keys kept changing while the check ran; it looks again next time');
+        // Tags newer than what this fork had, older than the one found, and
+        // not read yet (more than a check reads): one of them could revoke
+        // the key that signed it, so it isn't offered until they've been
+        // read (Codex's review, 25 Nov 2026). A fresh copy has nothing to
+        // compare with and takes the newest.
+        const found = release?.tag.slice(TAG_PREFIX.length);
+        if (found && keptBefore && this.unread.some((n) => n >= keptBefore && n < found)) throw new Error('more release tags upstream than one check reads, some older than the newest; it reads the rest before offering it');
       } finally {
         fs.rmSync(work, { recursive: true, force: true });
       }
@@ -914,7 +921,9 @@ export class Upstream {
   //    and each candidate is a ref there, refs/incoming/<date>.
   // checkNow deletes the folder when the check ends, whatever happened, so
   // what didn't verify, and a fetch cut short, leaves nothing behind.
+  private unread: string[] = [];
   private async stageReleases(checkout: string, signers: string, work: string, from: string): Promise<string | undefined> {
+    this.unread = [];
     const listed = await this.git(checkout, ['ls-remote', this.uploadPack, from, 'refs/heads/main', `refs/tags/${TAG_PREFIX}*`], this.remote({ timeoutMs: this.fetchTimeoutMs }));
     // Upstream's main: no main, no release can count (STAGED_MAIN).
     const mainOid = listed.split('\n').map((l) => l.split('\t')).find(([oid, ref]) => ref === 'refs/heads/main' && oid && OBJECT_ID.test(oid))?.[0];
@@ -957,6 +966,8 @@ export class Upstream {
     const unsigned = (name: string) => this.answers.get(`${pinned} ${offered.get(name)} ${TAG_PREFIX}${name}`) === null;
     const names = [...offered.keys()].filter((n) => n <= latest && !unsigned(n)).sort().reverse();
     const candidates = [...names.filter((n) => n >= newest).slice(0, MAX_READS), ...names.filter((n) => n < newest).slice(0, MAX_OLDER)];
+    // Newer than what's kept but past this check's reads (checkNow).
+    this.unread = names.filter((n) => n >= newest).slice(MAX_READS);
     if (candidates.length) await this.fetchStaged(checkout, work, objects, candidates.map((n) => `refs/tags/${TAG_PREFIX}${n}`), from);
     // The ids ls-remote named, where they came (a tag moved in between
     // isn't there, and waits for the next check).
@@ -1082,6 +1093,12 @@ export class Upstream {
     const others = staged ? await this.otherReleases(staged, signers, keptOid, keptBefore) : [];
     let change: ReturnType<typeof applyKeyChanges> = { added: [], revoked: [], waiting: [], refused: [] };
     for (const [signed, cwd, onlyRevoke] of [...others.map((o) => [o, staged!, true] as const), [newest, checkout, false] as const]) {
+      // An older release revoked something: look again before the newest
+      // says anything, as it may be signed by what was just revoked
+      // (Gemini's review, 25 Nov 2026). checkNow sweeps and picks again.
+      if (!onlyRevoke && change.revoked.length) break;
+      const cert = signatureCert(signed.signature);
+      if (cert && readWeeklyRevoked(this.deps.home).includes(cert.key)) continue;
       const signer = signerKey(signed.signature);
       if (!signer) continue;
       // Read object by object, each checked against its id (committedFile).

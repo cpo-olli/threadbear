@@ -169,7 +169,11 @@ only) and is checked against the key a certificate certifies, never its
 authority. Revocations are read from every release a check fetched that
 verifies and is on upstream's main (by tag object, so a same-day
 replacement counts), not just the newest, so a newer release signed by a
-revoked key can't hide the one revoking it. Mike's runner waits for
+revoked key can't hide the one revoking it; when one does revoke
+something, the check looks again before the newest says anything. And a
+release newer than the one a fork had isn't offered while tags between
+them are still unread (more than one check reads): the check fails and
+looks again in 15 minutes. Mike's runner waits for
 UTC's day only on its hourly look: `tb updates publish` signs with the
 release key then.
 `release.commit` is the commit
