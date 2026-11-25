@@ -263,3 +263,7 @@ fn fade(background: Hsla, edge: FadeEdge) -> Div {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "list_wheel_tests.rs"]
+mod wheel_tests;
