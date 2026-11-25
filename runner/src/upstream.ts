@@ -82,7 +82,9 @@ const REF_NS = UPSTREAM_REFS;
 const MAX_SUBJECTS = 50;
 // What a release's name is after release/: the local date it was tagged
 // (tagFor). Nothing else is ever looked at.
-export const RELEASE_NAME = /^\d{4}-\d{2}-\d{2}$/;
+// A month 01-12 and a day 01-31: names like 2026-11-99 would otherwise sort
+// above every real release in their month (Gemini's review, 25 Nov 2026).
+export const RELEASE_NAME = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 // How far past today's date (UTC) a release's date can be: Mike's day can
 // start well before the fork's.
 const FUTURE_SLACK_MS = 2 * 24 * 60 * 60_000;
@@ -1073,7 +1075,8 @@ export class Upstream {
     // revoked mustn't hide the release revoking it (Codex's review, 25 Nov
     // 2026). Revoking only ever takes keys away, so an older release's
     // can't do harm; announcing is the newest's alone.
-    const others = staged ? await this.otherReleases(staged, signers, newest.tag) : [];
+    const keptOid = await this.git(checkout, ['rev-parse', '--verify', '--quiet', REF_NS + newest.tag.slice(TAG_PREFIX.length)]).catch(() => '');
+    const others = staged ? await this.otherReleases(staged, signers, keptOid) : [];
     let change: ReturnType<typeof applyKeyChanges> = { added: [], revoked: [], waiting: [], refused: [] };
     for (const [signed, cwd, onlyRevoke] of [...others.map((o) => [o, staged!, true] as const), [newest, checkout, false] as const]) {
       const signer = signerKey(signed.signature);
@@ -1097,10 +1100,12 @@ export class Upstream {
     return change.added.length > 0 || change.revoked.length > 0;
   }
 
-  // The fetched releases other than `except` that verify and are on
-  // upstream's main, oldest first: at most MAX_READS of the newest.
+  // The fetched releases other than the tag object `except` (the one kept)
+  // that verify and are on upstream's main, oldest first: all of them, as
+  // what a check stages is bounded already. By object, not name: a same
+  // day's release that replaced a bad one counts too (Gemini's review).
   private async otherReleases(staged: string, signers: string, except: string): Promise<(SignedTag & { tag: string })[]> {
-    const names = [...(await this.refs(staged, STAGED_NS))].filter(([n]) => RELEASE_NAME.test(n) && TAG_PREFIX + n !== except).sort(([x], [y]) => (x < y ? 1 : -1)).slice(0, MAX_READS);
+    const names = [...(await this.refs(staged, STAGED_NS))].filter(([n, ref]) => RELEASE_NAME.test(n) && ref.oid !== except).sort(([x], [y]) => (x < y ? 1 : -1));
     const out: (SignedTag & { tag: string })[] = [];
     for (const [n, ref] of names) {
       const signed = await this.verified(staged, ref, TAG_PREFIX + n, signers);
@@ -1251,10 +1256,16 @@ export class Upstream {
     let signed = split && (await sshVerified(split, signers, revokedPath(this.deps.home))) ? split : undefined;
     // A weekly key's release must have the key files its authority vouched
     // for (KEYS_EXTENSION); an object that can't be read fails it for now.
-    if (signed && !(await this.keysVouched(checkout, signed).catch(() => false))) signed = undefined;
-    // A weekly key's tag can fail only for now (dated ahead of this clock),
-    // so a failure is read again next time, bounded like any (MAX_READS).
-    if (signed || !split || !signedWithCert(split.signature)) this.remember(key, signed ?? null);
+    let forNow = false;
+    if (signed && !(await this.keysVouched(checkout, signed).catch(() => ((forNow = true), false)))) signed = undefined;
+    // A weekly key's tag dated ahead of this clock fails only for now too.
+    // Every other failure is remembered, so tags that will never verify
+    // don't hold every check's places (Codex's and Gemini's reviews).
+    if (!signed && split && signedWithCert(split.signature)) {
+      const name = /\ntag ([^\n]+)\n/.exec(split.payload.toString('latin1'))?.[1] ?? '';
+      if (!certVerifyArgs(name, split.date) && certVerifyArgs(name, split.date, Date.parse('9999-12-31T00:00:00Z'))) forNow = true;
+    }
+    if (!forNow) this.remember(key, signed ?? null);
     return signed;
   }
 
@@ -1414,11 +1425,13 @@ export class Upstream {
     // doesn't touch it. Nothing waits on it but this look.
     // Or the weekly key, when it has time left and the last release has
     // the check that takes it, so forks on that release already do.
-    const weekly = await this.weeklyKey(checkout, tip, last, tag, now);
-    if (weekly === 'later') {
+    // Mike asking (tb updates publish) doesn't wait: the release key signs.
+    const maybe = await this.weeklyKey(checkout, tip, last, tag, now);
+    if (maybe === 'later' && !asked) {
       this.hold({ commit: tip, why: "waiting for UTC's day to be today's, so the weekly key can sign it", at: new Date(now).toISOString() });
       return undefined;
     }
+    const weekly = maybe === 'later' ? undefined : maybe;
     const touch = !weekly && touchKey(publish.signingKey);
     if (touch && !asked && !(await (this.deps.atMac?.() ?? Promise.resolve(false)))) {
       this.hold({ commit: tip, why: 'waiting for you at the Mac to sign it with Touch ID', at: new Date(now).toISOString() });

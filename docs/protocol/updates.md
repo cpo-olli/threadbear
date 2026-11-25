@@ -152,8 +152,10 @@ such a signature is checked at the tag's own tagger time
 (`-O verify-time`), which must fall on the UTC day the tag's name says
 and be no more than an hour ahead of the fork's clock, so the
 certificate's week bounds the names it can sign, and a leaked one can't
-name tomorrow's release today (nor one after the fork's UTC day). A
-failure there isn't remembered, as it may pass later. A certificate for
+name tomorrow's release today (nor one after the fork's UTC day). Only
+that failure (dated ahead of the fork's clock), or a key file that can't
+be read yet, isn't remembered, as it may pass later. Release names must
+have a month 01-12 and a day 01-31. A certificate for
 any key type but ed25519 is refused. The certificate carries, in its
 `threadbear-keys@threadbear` extension, the SHA-256 of the
 `scripts/release-signers` and `scripts/release-keys-revoked` its
@@ -165,8 +167,11 @@ from the next. Any release may revoke a key that was never pinned (a
 weekly key), which goes in `<home>/upstream-revoked-weekly` (ed25519 keys
 only) and is checked against the key a certificate certifies, never its
 authority. Revocations are read from every release a check fetched that
-verifies and is on upstream's main, not just the newest, so a newer
-release signed by a revoked key can't hide the one revoking it.
+verifies and is on upstream's main (by tag object, so a same-day
+replacement counts), not just the newest, so a newer release signed by a
+revoked key can't hide the one revoking it. Mike's runner waits for
+UTC's day only on its hourly look: `tb updates publish` signs with the
+release key then.
 `release.commit` is the commit
 the verified tag names, and that is what a bring-in merges. It never
 changes main: bringing a release in is a thread (docs/bringing-in-updates.md).

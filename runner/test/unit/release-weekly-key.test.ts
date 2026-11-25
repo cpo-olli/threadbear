@@ -78,7 +78,7 @@ test("not when the tag's date is outside the certificate, or not the day its nam
   certTag(w.mike, 'release/2026-11-21', k.cert, '2026-11-01T10:00:00Z');
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
   const s = await upstreamFor(w.theirs, w.home).check();
-  assert.equal(s.release?.tag, 'release/2026-10-01');
+  assert.equal(s.release?.tag, 'release/2026-10-01', `${s.state} ${s.reason ?? ''}`);
 });
 
 // Gemini's and Codex's reviews, 25 Nov 2026.
@@ -259,21 +259,53 @@ test("the release key signs instead until forks have the check, when the weekly 
   }
 });
 
-test("Mike's runner waits for UTC's day rather than ask for Touch ID", async () => {
+test("Mike's runner waits for UTC's day rather than ask for Touch ID, unless he asks", async () => {
   const w = world();
   readyToDelegate(w);
-  commit(w.mike, 'b.txt', 'Newer work');
-  git(w.mike, 'push', '-q', 'origin', 'main');
   // A moment whose local day isn't UTC's, if this machine has one: 23:30
   // UTC east of Greenwich, 00:30 UTC west, a day or two back.
   const off = new Date().getTimezoneOffset();
   if (off === 0) return;
   const d = new Date(Date.now() - 2 * 24 * 60 * 60_000);
   const at = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), off < 0 ? 23 : 0, 30);
-  assert.notEqual(new Date(at).toISOString().slice(0, 10), `${new Date(at).getFullYear()}-${String(new Date(at).getMonth() + 1).padStart(2, '0')}-${String(new Date(at).getDate()).padStart(2, '0')}`);
+  // Committed a couple of hours before, so main has settled by then.
+  fs.writeFileSync(path.join(w.mike, 'b.txt'), 'Newer work');
+  git(w.mike, 'add', 'b.txt');
+  const when = `${Math.floor((at - 2 * 60 * 60_000) / 1000)} +0000`;
+  assert.equal(spawnSync('git', ['-C', w.mike, 'commit', '-q', '-m', 'Newer work'], { env: { ...GIT_ENV, GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when } }).status, 0);
+  git(w.mike, 'push', '-q', 'origin', 'main');
   const up = upstreamFor(w.mike, w.home, new FakeClock(at), { publish: { publish: true, signingKey: w.mikeKey.priv, delegate: true }, runningMainSettled: () => true });
-  assert.equal(await up.publishOnce({ now: true }), undefined);
+  assert.equal(await up.publishOnce(), undefined);
   assert.match(up.status().held?.why ?? '', /UTC's day/);
+  const tag = await up.publishOnce({ now: true });
+  assert.ok(tag, up.status().held?.why ?? '');
+  assert.equal(signatureCert(armorOf(git(w.mike, 'cat-file', 'tag', tag))), undefined, 'the release key signed it');
+});
+
+// Codex's and Gemini's reviews: tags that will never verify mustn't hold
+// every check's places, or a release revoking a key stays out of sight.
+test("a flood of tags that never verify doesn't hide a revocation for long", async () => {
+  const w = world();
+  const leaked = weekly(w, 'leaked', '20261029Z:20261106Z');
+  const b = commit(w.mike, 'b.txt', 'Something bad, never released');
+  commitFile(w, 'scripts/release-keys-revoked', `${leaked.pub}\n`, 'Revoke the leaked weekly key');
+  git(w.mike, '-c', 'gpg.format=ssh', '-c', `user.signingkey=${w.mikeKey.priv}`, 'tag', '-s', '-m', 'Threadbear release/2026-10-29', 'release/2026-10-29');
+  certTag(w.mike, 'release/2026-10-30', leaked.cert, '2026-10-30T10:00:00Z', b);
+  const stranger = key(w.root, 'stranger');
+  const junk = weekly(w, 'junk', '20261029Z:20261231Z', stranger.priv);
+  for (let day = 1; day <= 25; day++) certTag(w.mike, `release/2026-11-${String(day).padStart(2, '0')}`, junk.cert, `2026-11-${String(day).padStart(2, '0')}T10:00:00Z`, b);
+  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
+  const up = upstreamFor(w.theirs, w.home);
+  let tag: string | undefined;
+  for (let i = 0; i < 4 && tag !== 'release/2026-10-29'; i++) tag = (await up.check()).release?.tag;
+  assert.equal(tag, 'release/2026-10-29');
+  assert.deepEqual(readWeeklyRevoked(w.home), [leaked.pub]);
+});
+
+test('release names are real months and days', async () => {
+  const { RELEASE_NAME } = await import('../../src/upstream.ts');
+  for (const n of ['2026-11-25', '2026-12-31', '2027-01-01']) assert.ok(RELEASE_NAME.test(n), n);
+  for (const n of ['2026-11-99', '2026-00-05', '2026-13-01', '2026-11-00', '2026-11-32']) assert.equal(RELEASE_NAME.test(n), false, n);
 });
 
 test('renewDelegate makes a key the release key certifies for these key files, checked before it goes in place', async () => {
