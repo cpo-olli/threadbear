@@ -740,10 +740,16 @@ the owning runner.
   `runner/bring-in.json` in the data folder.
   Once a release has landed, that thread offers a check-up for Mike
   (`runner/src/checkup.ts`, `tb checkup`): a short report built from the
-  runner log's own error messages (only those in Mike's code are named),
-  the release tags (and the releases kept under `refs/threadbear/upstream/`;
-  with a release key pinned, each counts only if it verifies against it),
-  which of Mike's patches won't load, and how long `tb land`'s checks took
+  runner log's own error messages (only those in Mike's code are named,
+  grouped into bursts with allowlisted causes such as OS errno codes, error
+  classes, reinstall exit codes, and RPC methods or `runner/src/` stack
+  files that exist in Mike's release; fork-only crashes and methods are
+  counted as other), coarse health flags (whether a release rolled back in
+  `runner/state.json`, whether `run/error-exits.json`'s restart guard
+  tripped, and free disk space only when under 10 GiB), the release tags
+  (and the releases kept under `refs/threadbear/upstream/`; with a release
+  key pinned, each counts only if it verifies against it), which of Mike's
+  patches won't load, and how long `tb land`'s checks took
   (`.git/threadbear-land-times.log`: counts and times, step names only when
   they're `check.sh`'s, never host names). You see the
   draft; only if you say Send does it go, through your `gh`, as a comment on
