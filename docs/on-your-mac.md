@@ -130,9 +130,14 @@ File references are where to look.
   life (`runner/src/win32-helper.ps1`), which lists processes
   (`Get-CimInstance Win32_Process`) and finds who holds a connection
   (`Get-NetTCPConnection`). It also puts each CLI the runner starts in a
-  Job Object of its own (`Local\threadbear-job-<random>`), and ends the job
-  when the CLI exits, so nothing a thread started outlives it, as a CLI's
-  process group does on a Mac. Each start, before it writes its key there, that
+  Job Object of its own (`Local\threadbear-job-<random>`), with what the CLI
+  had already started, gives the CLI a query-only handle to it, sets it to
+  end what's in it when its last handle closes, and ends the job when the
+  CLI exits, so nothing a thread started outlives it, as a CLI's process
+  group does on a Mac. To see who's calling it also reads a connecting
+  process's environment block from its memory (as a debugger does) and lists
+  the Job Objects named `threadbear-job-*` in that process's session's
+  object directory. Each start, before it writes its key there, that
   helper sets `secrets\`'s access list to you and SYSTEM only, inheriting
   nothing from `%LOCALAPPDATA%`, with everything already in it following, in
   place of the Mac's `chmod 700` (`runner/src/win-acl.ts`). The same
@@ -379,7 +384,10 @@ File references are where to look.
   `THREADBEAR_THREAD_KEY` and `THREADBEAR_THREAD_ID` (and their old
   `THREADBARE_` names), keeps nothing from a connection's, and keeps the
   ones its own parents had (a dev runner's starting thread) in memory while
-  it runs, taking them out of its own environment.
+  it runs, taking them out of its own environment. On Windows its helper
+  reads each such process's environment block from its memory (as a
+  debugger does) and lists the Job Objects named `threadbear-job-*` in that
+  process's session, to see which thread's job it's in.
   `tb runner` runs `/bin/ps` (or reads `/proc/<pid>/environ` on Linux) on
   its own parents to see whether it's in a thread's shell
   (`runner/src/tb-connect.ts`).
