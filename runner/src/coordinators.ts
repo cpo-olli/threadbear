@@ -287,6 +287,14 @@ export class Coordinators {
     this.deps.host.publish({ method: 'coordinators.updated', params: { coordinators: this.list() } });
   }
 
+  removeProject(projectId: string): void {
+    const row = this.rows.get(projectId);
+    if (!row) return;
+    if (row.state === 'active') throw bad('Pause this project’s coordinator before deleting or merging the project.');
+    if (this.deps.host.threads.has(row.threadId)) this.deps.host.update({ threadId: row.threadId, archived: true });
+    this.forget(row.threadId);
+  }
+
   session(threadId: string): NativeBoundary | undefined {
     const row = this.forThread(threadId);
     if (!row) return undefined;

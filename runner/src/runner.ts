@@ -1031,7 +1031,8 @@ export class Runner {
     for (const st of this.threads.values()) this.catchUpInboxGuess(st, GUESS_CATCH_UP_MS);
     for (const st of this.threads.values()) {
       try {
-        if (st.rec.queue.some(q => q.reviewId) && this.bucket(st.rec) === 'inbox') this.kickQueue(st);
+        const coordinatorReady = this.coordinators?.forThread(st.rec.id) && !this.coordinators.dispatchRefusal(st.rec.id);
+        if (st.rec.queue.some(q => q.reviewId || (coordinatorReady && q.origin === 'runner')) && this.bucket(st.rec) === 'inbox') this.kickQueue(st);
       } catch (e) {
         this.recoveryFailed(st, e);
       }
@@ -1429,8 +1430,9 @@ export class Runner {
       this.markDirty(st);
       return false;
     }
-    const reviewQueue = rec.queue.filter(q => q.reviewId);
-    rec.queue = rec.queue.filter(q => !q.reviewId);
+    const durable = (q: QueuedSend) => q.reviewId || (this.coordinators?.forThread(rec.id) && q.origin === 'runner');
+    const reviewQueue = rec.queue.filter(durable);
+    rec.queue = rec.queue.filter(q => !durable(q));
     if (rec.queue.length) {
       const texts = rec.queue.map((q) => q.text).filter(Boolean);
       this.emit(st, {
@@ -4374,6 +4376,9 @@ export class Runner {
     this.notify({ method: 'thread.deleted', params: { threadId } });
     return {};
   }
+
+  // Project identity cannot disappear while its coordinator is working.
+  beforeProjectRemoval(projectId: string): void { this.coordinators?.removeProject(projectId); }
 
   // Ticks one of the open card's asks. Nothing goes to the agent: ticks are
   // Mike's own list, and a reply is his to write.

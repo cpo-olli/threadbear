@@ -1535,7 +1535,10 @@ export function buildThreadbearTools(
             throw new Error(`"${p.title}"'s brief changed while this waited for an OK, so nothing changed. Read it again (read_project) and redo the change on what it says now.`);
           }
         }
-        const fields = { title, goals, state, links, folders, notion, ...(parent !== undefined ? { parent: newParent?.id ?? '' } : {}), by: mikeAsked ? ('mike' as const) : ('agent' as const) };
+        const coordinatorEdit = Boolean(opts.coordinators?.()?.forThread(selfId));
+        const fields = { title, goals, state, links, folders, notion, ...(parent !== undefined ? { parent: newParent?.id ?? '' } : {}), by: mikeAsked ? ('mike' as const) : ('agent' as const),
+          ...(coordinatorEdit ? { ifUnchanged: { ...(goals !== undefined ? { goals: p.goals } : {}), ...(state !== undefined ? { state: p.state } : {}), ...(notes !== undefined ? { notes: p.notes } : {}) } } : {}),
+        };
         // New notes and a paragraph on the end are saved as one, as they were
         // judged: saved in two steps, the notes stood for a moment without it.
         const add = appendNote?.trim();

@@ -6,9 +6,12 @@ import { Coordinators, runMove } from '../../src/coordinators.ts';
 import { Projects } from '../../src/projects.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
-import { makeHarness, tick, tmpDir, FakeAccounts, withCodex } from '../helpers/fakes.ts';
+import { makeHarness, tick, tmpDir, FakeAccounts, FakeAdapter, withCodex } from '../helpers/fakes.ts';
+import { Runner } from '../../src/runner.ts';
+import { ThreadStore } from '../../src/store.ts';
 import { CallerGate } from '../../src/rpc-gate.ts';
 import type { Settings } from '../../src/settings.ts';
+import { buildThreadbearTools, type ProjectControl } from '../../src/threadbear-mcp.ts';
 
 function setup(home = tmpDir(), enabled = () => true) {
   const projects = new Projects({ home, clock: new FakeClock(), log: nullLogger });
@@ -225,6 +228,27 @@ test('the shared project editor rejects a stale draft atomically and preserves n
   c.stop();
 });
 
+test('a coordinator project edit compares its source fields on the owning write, even in Full access', async () => {
+  const { c, h, project, projects } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  projects.update(project.id, { notes: 'Original decision' });
+  const pc: ProjectControl = {
+    list: (p) => projects.list(p), get: (id) => projects.get(id), find: (q) => projects.find(q),
+    create: (p) => projects.create(p), editNotes: (id, edits, p) => projects.editNotes(id, edits, p),
+    appendNote: (id, text) => projects.appendNote(id, text), changeMembership: (id, p) => projects.changeMembership(id, p),
+    update: (id, p) => {
+      projects.update(id, { notes: 'A newer decision from another thread' });
+      return projects.update(id, p);
+    },
+  };
+  const tool = buildThreadbearTools(h.runner, coordinator.threadId, () => h.clock.now(), undefined, pc, undefined, { coordinators: () => c }).find((t) => t.name === 'update_project')!;
+  const result = await tool.handler({ project: project.id, notes: 'Would overwrite the newer decision', state: 'Would overwrite too' } as never, {});
+  assert.equal(result.isError, true);
+  assert.equal(projects.get(project.id).project.notes, 'A newer decision from another thread');
+  assert.equal(projects.get(project.id).project.state, '');
+  c.stop();
+});
+
 test('a user timer earlier than a pending event batch takes precedence and delivers the pending events together', async () => {
   const { c, h, project } = setup();
   const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
@@ -331,6 +355,49 @@ test('a started wake is a durable receipt even after it leaves the queue', async
   assert.equal(h.events(coordinator.threadId).filter((e) => e.type === 'user.message' && e.text === 'Only one delivery').length, 1);
   assert.equal(h.runner.threads.get(coordinator.threadId)!.rec.queue.filter((q) => q.text === 'Only one delivery').length, 0);
   c.stop();
+});
+
+test('acknowledged project events survive recovery by a fresh runner before their queued turn starts', async () => {
+  const { c, h, project, home } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  c.forThread(coordinator.threadId)!.events.push({ key: 'durable', text: 'Durable project event' });
+  c.update(project.id, { wakeAt: new Date(h.clock.now() + 60_000).toISOString() });
+  h.clock.advance(60_000);
+  assert.equal(c.forThread(coordinator.threadId)!.events.length, 0);
+  assert.ok(h.runner.threads.get(coordinator.threadId)!.rec.queue.some((q) => q.text.includes('Durable project event')));
+  c.stop();
+  const clock = new FakeClock(h.clock.now());
+  const projects = new Projects({ home, clock, log: nullLogger });
+  const adapter = new FakeAdapter();
+  const host = new Runner({ config: h.cfg, store: new ThreadStore(home), adapters: { claude: adapter }, accounts: new FakeAccounts(withCodex()), clock, log: nullLogger, projects, defer: (fn) => fn(), backgroundJobs: false, reachable: async () => true, panelsRoot: home });
+  projects.start(host);
+  const replacement = new Coordinators({ home, host, projects, clock, enabled: () => true, log: nullLogger });
+  host.coordinators = replacement;
+  host.start();
+  replacement.start();
+  await tick();
+  assert.ok(adapter.sessions.some((s) => s.sent.some((m) => m.text.includes('Durable project event'))), 'recovery dispatches the queued event instead of turning it into a note');
+  replacement.stop();
+});
+
+test('project deletion and merge require the coordinator stopped, then archive its conversation and work', async () => {
+  for (const action of ['delete', 'merge'] as const) {
+    const { c, h, projects, project, home } = setup();
+    const target = projects.create({ title: 'Other project', by: 'mike' });
+    const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+    await tick();
+    const remove = () => action === 'delete' ? projects.delete(project.id) : projects.merge(project.id, target.id);
+    assert.throws(remove, /Pause/);
+    assert.equal(projects.get(project.id).project.id, project.id);
+    await c.pause(project.id, true);
+    remove();
+    assert.equal(c.list().length, 0);
+    assert.ok(h.runner.get(coordinator.threadId).archivedAt);
+    const history = fs.readFileSync(path.join(home, 'coordinator-history.jsonl'), 'utf8');
+    assert.ok(history.includes(coordinator.threadId));
+    c.stop();
+  }
 });
 
 test('distant wake times use bounded timer intervals and keep their actual deadline', () => {
