@@ -140,7 +140,10 @@ sub-agents above. `HELD_NUDGE` keeps the next turn from dropping the asks.
   trading 2,359 characters for 96. Text after it is dropped, as with
   any "Stop here". Codex calls it before its final answer as before, and
   its final answer is the reply. The setting is read when a CLI starts;
-  Bullet replies doesn't apply to a one-reply session. Neither provider's
+  Bullet replies doesn't apply to a one-reply session. For Claude,
+  `end_turn` carries `_meta` `anthropic/alwaysLoad`, so it's in every
+  request from the start instead of behind `ToolSearch`, saving a fresh
+  session a round trip (since 25 Nov 2026). Neither provider's
   agent is sure to be shown today's form of `end_turn`. A Codex thread's
   tool list is fixed at `thread/start`, restarts included. A Claude
   session keeps each tool's definition from when it first loaded it,

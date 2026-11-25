@@ -273,9 +273,6 @@ export function buildThreadbearTools(
     gateway?: () => string | undefined;
     gatewayHealth?: () => Promise<ConnectorService[] | undefined>;
     remote?: () => RemoteControl | undefined;
-    // Experiment loadEndTurn: Claude gets end_turn's schema in every
-    // request instead of finding it with ToolSearch first (experiments/loadEndTurn.md).
-    loadEndTurn?: () => boolean;
     // Experiment reviewCanvas: show_options offers marks on its pictures
     // (experiments/reviewCanvas.md). Read once, here, as it changes the
     // tool's shape; the runner drops marks itself with it off.
@@ -1957,9 +1954,9 @@ export function buildThreadbearTools(
   // step was a request that only loaded end_turn, re-sending the whole
   // context to do it: 3 requests for a "hello" where the bare CLI makes 1
   // (ADEMark B1 on a Scaleway M2, 21 Nov 2026, thread 0b6b183c). Every
-  // turn ends with it, so it's always listed (experiment loadEndTurn).
+  // turn ends with it, so it's always listed.
   const loaded = <T extends { _meta?: Record<string, unknown> }>(t: T): T =>
-    !codex && opts.loadEndTurn?.() ? Object.assign(t, { _meta: { ...t._meta, 'anthropic/alwaysLoad': true } }) : t;
+    !codex ? Object.assign(t, { _meta: { ...t._meta, 'anthropic/alwaysLoad': true } }) : t;
   const endTurn = () => {
     const today = loaded(oneReply ? oneReplyEndTurn() : bulletsEndTurn());
     const other = oneReply ? bulletsEndTurn() : oneReplyEndTurn();
@@ -2583,13 +2580,13 @@ export function serverInstructions(selfId: string, o: { one: boolean; bulletRepl
   );
 }
 
-export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, remote?: () => RemoteControl | undefined, loadEndTurn?: () => boolean, reviewCanvas?: () => boolean, livePages?: () => boolean): McpSdkServerConfigWithInstance {
+export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, remote?: () => RemoteControl | undefined, reviewCanvas?: () => boolean, livePages?: () => boolean): McpSdkServerConfigWithInstance {
   const one = oneReply();
   const server = createSdkMcpServer({
     name: SERVER_NAME,
     version: RUNNER_VERSION,
     instructions: serverInstructions(selfId, { one, bulletReplies: bulletReplies(), pocket: Boolean(pocket?.()), projects: Boolean(projects), livePages: livePages?.() ?? false }),
-    tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, remote, loadEndTurn, reviewCanvas }),
+    tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, remote, reviewCanvas }),
   });
   server.tools = [...ALWAYS_ASK_TOOLS].map((name) => ({ name: name.split('__').at(-1)!, permission_policy: 'always_ask' as const }));
   return server;
