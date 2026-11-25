@@ -109,7 +109,7 @@ impl WindowsWindowInner {
             WM_CLOSE => self.handle_close_msg(),
             WM_DESTROY => self.handle_destroy_msg(handle),
             WM_MOUSEMOVE => self.handle_mouse_move_msg(handle, lparam, wparam),
-            WM_MOUSELEAVE | WM_NCMOUSELEAVE => self.handle_mouse_leave_msg(),
+            WM_MOUSELEAVE | WM_NCMOUSELEAVE => self.handle_mouse_leave_msg(handle),
             WM_NCMOUSEMOVE => self.handle_nc_mouse_move_msg(handle, lparam),
             // Treat double click as a second single click, since we track the double clicks ourselves.
             // If you don't interact with any elements, this will fall through to the windows default
@@ -392,7 +392,7 @@ impl WindowsWindowInner {
         if handled { Some(0) } else { Some(1) }
     }
 
-    fn handle_mouse_leave_msg(&self) -> Option<isize> {
+    fn handle_mouse_leave_msg(&self, handle: HWND) -> Option<isize> {
         self.state.hovered.set(false);
         // The next window's `WM_SETCURSOR` picks its own cursor, so we just clear
         // the flag for tight `is_cursor_visible()` semantics.
@@ -404,8 +404,51 @@ impl WindowsWindowInner {
                 .hovered_status_change
                 .set(Some(callback));
         }
+        self.dispatch_pointer_left(handle);
 
         Some(0)
+    }
+
+    /// Windows sends no `WM_MOUSEMOVE` once the pointer is off the window, so
+    /// GPUI kept the last position inside it: hover styles, `on_hover` and
+    /// tooltips all went on as if the pointer were still there. Tell it where
+    /// the pointer went with a move (which hit tests nothing outside), then
+    /// `MouseExited`, as the Mac and Linux platforms do.
+    fn dispatch_pointer_left(&self, handle: HWND) {
+        let (mut screen, mut client) = (POINT::default(), RECT::default());
+        let found = unsafe {
+            GetCursorPos(&mut screen).is_ok() && GetClientRect(handle, &mut client).is_ok()
+        };
+        if !found {
+            return;
+        }
+        let mut cursor = screen;
+        if !unsafe { ScreenToClient(handle, &mut cursor) }.as_bool() {
+            return;
+        }
+        let over_this_window = unsafe { WindowFromPoint(screen) } == handle;
+        let Some(to) = pointer_left_to(cursor, client, over_this_window) else {
+            return;
+        };
+        let position = logical_point(to.x as f32, to.y as f32, self.state.scale_factor.get());
+        // So a move back in to where it left isn't taken for a repaint's
+        // synthetic `WM_MOUSEMOVE` and dropped.
+        self.state.mouse_position.set(position);
+        let Some(mut func) = self.state.callbacks.input.take() else {
+            return;
+        };
+        let modifiers = current_modifiers();
+        func(PlatformInput::MouseMove(MouseMoveEvent {
+            position,
+            pressed_button: None,
+            modifiers,
+        }));
+        func(PlatformInput::MouseExited(MouseExitEvent {
+            position,
+            pressed_button: None,
+            modifiers,
+        }));
+        self.state.callbacks.input.set(Some(func));
     }
 
     fn handle_syskeyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
@@ -1832,5 +1875,71 @@ fn notify_frame_changed(handle: HWND) {
                 | SWP_NOZORDER,
         )
         .log_err();
+    }
+}
+
+/// Where GPUI should be told the pointer went when Windows says it left the
+/// window, in client device pixels; `cursor` is in client coordinates too.
+/// `None` when it only went into this window's own title bar: that's inside the
+/// client area, and `WM_NCMOUSEMOVE` goes on reporting it. Over another window
+/// that covers this one (or a child window, such as a web view), it's a point
+/// just outside the client area, so nothing of this window stays hovered.
+fn pointer_left_to(cursor: POINT, client: RECT, over_this_window: bool) -> Option<POINT> {
+    let inside = cursor.x >= client.left
+        && cursor.x < client.right
+        && cursor.y >= client.top
+        && cursor.y < client.bottom;
+    match (inside, over_this_window) {
+        (false, _) => Some(cursor),
+        (true, true) => None,
+        (true, false) => Some(POINT {
+            x: client.left - 1,
+            y: client.top - 1,
+        }),
+    }
+}
+
+#[cfg(test)]
+mod pointer_left_tests {
+    use super::*;
+
+    const CLIENT: RECT = RECT {
+        left: 0,
+        top: 0,
+        right: 2506,
+        bottom: 1653,
+    };
+
+    #[test]
+    fn off_the_window_onto_the_desktop_goes_where_the_cursor_is() {
+        let cursor = POINT { x: 3140, y: 1820 };
+        assert_eq!(pointer_left_to(cursor, CLIENT, false), Some(cursor));
+    }
+
+    #[test]
+    fn onto_its_own_frame_outside_the_client_area_goes_where_the_cursor_is() {
+        let cursor = POINT { x: -4, y: 600 };
+        assert_eq!(pointer_left_to(cursor, CLIENT, true), Some(cursor));
+    }
+
+    #[test]
+    fn into_its_own_title_bar_is_left_to_the_non_client_moves() {
+        let cursor = POINT { x: 900, y: 10 };
+        assert_eq!(pointer_left_to(cursor, CLIENT, true), None);
+    }
+
+    #[test]
+    fn under_a_window_on_top_goes_just_outside() {
+        let cursor = POINT { x: 900, y: 600 };
+        assert_eq!(
+            pointer_left_to(cursor, CLIENT, false),
+            Some(POINT { x: -1, y: -1 })
+        );
+    }
+
+    #[test]
+    fn the_right_and_bottom_edges_are_outside() {
+        let cursor = POINT { x: 2506, y: 1653 };
+        assert_eq!(pointer_left_to(cursor, CLIENT, true), Some(cursor));
     }
 }

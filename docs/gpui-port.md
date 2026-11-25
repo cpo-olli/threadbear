@@ -244,7 +244,10 @@ still works, and with an `img` playing a GIF whether or not its window is the
 key one (upstream froze it on its first frame in a window behind another app's),
 woken at the GIF's own pace rather than drawn at every display frame
 (`desktop/gpui/tests/gif_frames.rs`). Its pictures are decoded within `image_budget`'s limits (`src/image_budget.rs`, Daybreak 170): `Image::to_image_data` and the `img` path loader decode through it, and its SVGs are drawn at up to 4 million pixels with their `<image>`s left out, never gzipped, and only when their layers nest at most 8 deep, so a picture drawn any way is held to what the app's own budget (`desktop/gpui/src/fit_picture.rs`) allows one picture. GPUI exposes no input-mode setter for an
-app shim. The published
+app shim. `desktop/vendor/gpui-pre-windows` tells GPUI where the pointer
+went, then sends `MouseExited`, when it leaves a window: upstream only cleared
+the window's hovered flag, so hover buttons and tooltips stayed up after the
+pointer left onto the desktop. The published
 crates are separate commits from our changes; retain those patches on an
 update, or remove a patch once upstream includes it.
 
