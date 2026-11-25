@@ -165,6 +165,12 @@ pub struct UserMessage {
     pub editable: bool,
     /// Sent from this app and not shown by the runner yet.
     pub pending: Option<Pending>,
+    /// The runner's message saying another lab's review came back, read
+    /// into its findings (review_note.rs): drawn as a checklist.
+    pub review_note: Option<Box<super::review_note::ReviewNote>>,
+    /// What the agent did about those findings: the ledger of the turn that
+    /// answered them, set by the reducer once it's done (build_rows).
+    pub review_ledger: Option<Box<super::event::LabReview>>,
 }
 
 impl UserMessage {

@@ -17,6 +17,7 @@ pub mod format;
 pub mod groups;
 pub mod model;
 pub mod pending;
+pub mod review_note;
 pub mod row;
 pub mod row_debug;
 pub mod text;
@@ -32,6 +33,7 @@ pub use format::{cost_text, duration, short_tokens, token_line, TurnTokens};
 pub use groups::{BackgroundWork, DiffPreview, WorkSummary};
 pub use model::{PrependResult, TranscriptChange, TranscriptModel};
 pub use pending::PendingMessage;
+pub use review_note::ReviewNote;
 pub use row::{
     AgentHeader, ApprovalItem, AskNote, AsksCard, BackgroundStatus, ChangedFile, ChangedFiles,
     Pending, PlanCard, PlanCardState, QuestionItem, Row, RowContent, RowKind, ScheduledHeader,
