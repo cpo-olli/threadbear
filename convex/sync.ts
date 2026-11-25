@@ -4282,7 +4282,9 @@ async function otherRunners(ctx: QueryCtx, runnerId: string) {
 async function boxSummary(ctx: QueryCtx, r: Doc<'runners'>): Promise<{ state: string; waiting?: boolean; service?: string; token?: 'none' | 'dead'; login?: string }> {
   const row = await boxOfRunner(ctx, r);
   const token = row ? await ctx.db.query('cloudTokens').withIndex('by_login', (q) => q.eq('login', row.login)).unique() : null;
-  const missing = !row ? undefined : !token ? ('none' as const) : token.tokenState.kind === 'dead' ? ('dead' as const) : undefined;
+  const grant = row ? await ctx.db.query('boxTokenGrants').withIndex('by_box', (q) => q.eq('boxId', row._id)).unique() : null;
+  const refused = grant?.keyHash === row?.boxKeyHash && grant?.grantState.kind === 'refused';
+  const missing = !row ? undefined : !token ? ('none' as const) : token.tokenState.kind === 'dead' || refused ? ('dead' as const) : undefined;
   return {
     state: row?.boxState.kind ?? 'expired',
     ...(row?.wantsWakeAt !== undefined || row?.waitsForHours !== undefined || row?.boxState.kind === 'waitingForRoom' ? { waiting: true } : {}),

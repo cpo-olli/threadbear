@@ -14,6 +14,7 @@ import { boxStateV } from './boxStates';
 import { requiredUnlessStepping } from './stepping';
 import { tokenStateV } from './cloudTokenStates';
 import { installStateV } from './relayInstallStates';
+import { grantStateV } from './boxTokenGrantStates';
 
 // A thread's sharing, as the runner mirrors it (ThreadShare in
 // docs/protocol.md): "link" is readable by anyone with /s/<slug>; "off"
@@ -457,6 +458,10 @@ export const appSchema = defineSchema({
     .index('by_box_attempt', ['boxId', 'attempt'])
     .index('by_machine', ['providerBoxId']),
   reapQueued: defineTable({ providerBoxId: v.string(), at: v.number(), job: v.optional(v.string()) }).index('by_box', ['providerBoxId']),
+
+  boxTokenGrants: defineTable({
+    boxId: v.id('boxes'), login: v.string(), keyHash: v.string(), sealedToken: v.string(), grantState: grantStateV,
+  }).index('by_box', ['boxId']).index('by_login_state', ['login', 'grantState.kind', 'grantState.afterSetAt']),
 
   cloudTokens: defineTable({
     login: v.string(),
