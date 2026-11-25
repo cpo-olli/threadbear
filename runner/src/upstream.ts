@@ -914,6 +914,8 @@ export class Upstream {
   //    and each candidate is a ref there, refs/incoming/<date>.
   // checkNow deletes the folder when the check ends, whatever happened, so
   // what didn't verify, and a fetch cut short, leaves nothing behind.
+  // Weekly keys' tags whose week ended before this fork saw them (promote).
+  private lapsed = new Set<string>();
   private async stageReleases(checkout: string, signers: string, work: string, from: string): Promise<string | undefined> {
     const listed = await this.git(checkout, ['ls-remote', this.uploadPack, from, 'refs/heads/main', `refs/tags/${TAG_PREFIX}*`], this.remote({ timeoutMs: this.fetchTimeoutMs }));
     // Upstream's main: no main, no release can count (STAGED_MAIN).
@@ -954,7 +956,7 @@ export class Upstream {
     const newest = [...kept.keys()].filter((n) => RELEASE_NAME.test(n)).sort().at(-1) ?? '';
     const latest = new Date(this.deps.clock.now() + FUTURE_SLACK_MS).toISOString().slice(0, 10);
     const pinned = this.signersHash(signers);
-    const unsigned = (name: string) => this.answers.get(`${pinned} ${offered.get(name)} ${TAG_PREFIX}${name}`) === null;
+    const unsigned = (name: string) => this.answers.get(`${pinned} ${offered.get(name)} ${TAG_PREFIX}${name}`) === null || this.lapsed.has(offered.get(name)!);
     const names = [...offered.keys()].filter((n) => n <= latest && !unsigned(n)).sort().reverse();
     const candidates = [...names.filter((n) => n >= newest).slice(0, MAX_READS), ...names.filter((n) => n < newest).slice(0, MAX_OLDER)];
     if (candidates.length) await this.fetchStaged(checkout, work, objects, candidates.map((n) => `refs/tags/${TAG_PREFIX}${n}`), from);
@@ -1053,6 +1055,10 @@ export class Upstream {
       const now = this.deps.clock.now();
       if (cert && (now < cert.validAfter || now >= cert.validBefore)) {
         this.deps.log.warn("skipped a weekly key's release whose certificate isn't good now", { tag });
+        // One whose week is over never will be: passed over from now on, so
+        // a run of them can't hold every check's places (Codex's and
+        // Gemini's reviews).
+        if (now >= cert.validBefore) this.lapsed.add(ref.oid);
         continue;
       }
       if (!(await this.onUpstreamMain(staged, signed.commit))) {
@@ -1409,7 +1415,11 @@ export class Upstream {
       }
     }
     const last = tags[0];
-    if (last && (await this.isAncestor(checkout, tip, last))) return this.hold(undefined);
+    // Nothing new since the last release: unless it was a weekly key's and
+    // that key's week ends within SIGN_MARGIN_MS, when the same commit goes
+    // out again under today's name, so a fork that missed it still has one
+    // it can take (Codex's and Gemini's reviews).
+    if (last && (await this.isAncestor(checkout, tip, last)) && !(await this.lastLapsing(checkout, last, now))) return this.hold(undefined);
     const why = await this.checksSay(checkout, tip);
     // The tip held by a red check: the newest settled commit since the last
     // release that's green on everything goes out instead (newestGreen).
@@ -1559,6 +1569,15 @@ Don't run anything yet: the renewal pops up a Touch ID prompt that only works wh
     });
     writeDelegateState(home, { remindThread: id });
     log.info('started a thread to renew the weekly release key', { threadId: id });
+  }
+
+  // Whether the release `last` was signed by a weekly key whose week ends
+  // within SIGN_MARGIN_MS (or has), on Mike's runner with releases.delegate.
+  private async lastLapsing(checkout: string, last: string, now: number): Promise<boolean> {
+    if (!this.deps.publish?.delegate) return false;
+    const raw = await (this.deps.gitBytes ?? gitBytes)(checkout, ['cat-file', 'tag', `refs/tags/${last}`]).catch(() => undefined);
+    const cert = raw ? signatureCert(splitSignedTag(raw, last)?.signature ?? '') : undefined;
+    return Boolean(cert && cert.validBefore - now < SIGN_MARGIN_MS);
   }
 
   // Deletes the local tag if it's still `oid`. One left behind isn't on

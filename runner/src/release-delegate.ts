@@ -17,9 +17,11 @@ import { DELEGATE_DAYS, keyFilesHash, keyOf, keysIn, KEYS_EXTENSION, parseCert, 
 
 export const RENEW_AHEAD_MS = 3 * 24 * 60 * 60_000;
 export const REMIND_AHEAD_MS = 36 * 60 * 60_000;
-// The least it must have left to sign with: a tag made with a minute to go
-// would still verify, but not a retry an hour later.
-export const SIGN_MARGIN_MS = 60 * 60_000;
+// The least it must have left to sign with: forks take a weekly key's
+// release only within its week, and look every six hours, more when a Mac
+// sleeps. A release with less goes out signed by the release key, and one
+// made before goes out again, under that day's name (lastLapsing).
+export const SIGN_MARGIN_MS = 2 * 24 * 60 * 60_000;
 
 export function delegatePaths(home: string): { key: string; cert: string; state: string } {
   const dir = path.join(home, 'runner');

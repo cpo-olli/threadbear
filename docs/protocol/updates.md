@@ -174,7 +174,9 @@ something, the check looks again before the newest says anything. A
 weekly key's release is taken only while its certificate is good by the
 fork's own clock (as well as at the tag's time); once kept, it stays. So a
 weekly key that leaked is good for its week at most, however the tags
-upstream are arranged. Mike's runner waits for
+upstream are arranged. One whose week ended before the fork saw it is
+passed over from then on, so older releases stay in reach. An older
+release read for its revocations never lets a waiting key in. Mike's runner waits for
 UTC's day only on its hourly look: `tb updates publish` signs with the
 release key then.
 `release.commit` is the commit
@@ -268,13 +270,16 @@ verifies before putting it in place, and with 36 hours left and still not
 renewed starts a starred thread asking him to (its id in
 `release-delegate.json`, one at a time). The weekly key is used only once
 the last release's `runner/src/release-keys.ts` has the check that takes
-it, with an hour or more left, when its key file and the release key
+it, with two days or more left (forks take its release only within its
+week), when its key file and the release key
 match its certificate, when it isn't revoked, and when it vouches for the
 release's key files (a key change needs a new one, with a touch), and when
 this Mac's day is UTC's (in Perth, from 8am; before then it waits);
 otherwise the release key signs, as before (and a key that doesn't fit is renewed
-next time). `tb updates publish` says until when the weekly key signs, or
-why renewing it failed.
+next time). When main hasn't moved but the last release was a weekly key's whose
+week ends within two days, the same commit goes out again under today's
+name, so a fork that missed it still has one it can take. `tb updates
+publish` says until when the weekly key signs, or why renewing it failed.
 
 ### Your changes to the old app
 

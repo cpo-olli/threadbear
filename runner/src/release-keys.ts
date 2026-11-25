@@ -438,7 +438,10 @@ function applyLocked(o: { home: string; signers: string; signer: string; announc
   const still: Pending[] = [];
   for (const p of state.pending) {
     if (revoked.has(p.key) || revoked.has(p.by) || !pinnedNow(p.by)) continue; // its announcer is gone
-    if (o.now - p.seenAt >= ADD_DELAY_MS) {
+    // Only the newest release's look lets a waiting key in, after its own
+    // revocations: an older one's first could pin a key the newest revokes
+    // above the key revoking it (Gemini's review, 25 Nov 2026).
+    if (!o.onlyRevoke && o.now - p.seenAt >= ADD_DELAY_MS) {
       lines.push(`${principal} namespaces="git" ${p.key}`);
       out.added.push(p.key);
     } else {

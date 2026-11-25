@@ -400,3 +400,65 @@ test('a copy away for weeks catches up', async () => {
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
   assert.equal((await up.check()).release?.tag, 'release/2026-10-26');
 });
+
+// Gemini's ninth look: an older release read for its revocations mustn't
+// let in a key that's waited its week before the newest revokes it.
+test("an older release read for revocations doesn't let a waiting key in", () => {
+  const w = world();
+  const signers = path.join(w.root, 'pinned');
+  fs.copyFileSync(w.mikeKey.signers, signers);
+  const mike = pubOf(w.mikeKey);
+  const evil = key(w.root, 'evil');
+  applyKeyChanges({ home: w.home, signers, signer: mike, announced: [pubOf(evil)], revoke: [], tag: 'release/2026-10-01', now: 0 });
+  const later = 8 * 24 * 60 * 60_000;
+  const r = applyKeyChanges({ home: w.home, signers, signer: mike, announced: [pubOf(evil)], revoke: [], tag: 'release/2026-10-01', now: later, onlyRevoke: true });
+  assert.deepEqual(r.added, []);
+  assert.equal(fs.readFileSync(signers, 'utf8').includes(pubOf(evil)), false);
+  // The newest, revoking it, then has its say.
+  applyKeyChanges({ home: w.home, signers, signer: mike, announced: [], revoke: [pubOf(evil)], tag: 'release/2026-10-02', now: later });
+  assert.equal(fs.readFileSync(signers, 'utf8').includes(pubOf(evil)), false);
+});
+
+test("a run of weekly keys' releases whose week is over doesn't keep a fork from older ones", async () => {
+  const w = world();
+  const real = release(w, 'release/2026-10-05', w.mikeKey.priv);
+  const k = weekly(w, 'week', '20261006Z:20261014Z');
+  for (let day = 6; day <= 13; day++) {
+    commit(w.mike, `d${day}.txt`, `Day ${day}`);
+    certTag(w.mike, `release/2026-10-${String(day).padStart(2, '0')}`, k.cert, `2026-10-${String(day).padStart(2, '0')}T10:00:00Z`);
+  }
+  const k2 = weekly(w, 'week2', '20261014Z:20261022Z');
+  for (let day = 14; day <= 21; day++) {
+    commit(w.mike, `d${day}.txt`, `Day ${day}`);
+    certTag(w.mike, `release/2026-10-${day}`, k2.cert, `2026-10-${day}T10:00:00Z`);
+  }
+  const k3 = weekly(w, 'week3', '20261022Z:20261030Z');
+  for (let day = 22; day <= 27; day++) {
+    commit(w.mike, `d${day}.txt`, `Day ${day}`);
+    certTag(w.mike, `release/2026-10-${day}`, k3.cert, `2026-10-${day}T10:00:00Z`);
+  }
+  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
+  const up = forkAt(w, '2026-11-20T00:00:00Z');
+  let s;
+  for (let i = 0; i < 3; i++) s = await up.check();
+  assert.equal(s?.release?.tag, 'release/2026-10-05');
+  assert.ok(real);
+});
+
+test("Mike's runner puts a quiet main out again before its weekly key's release lapses", async () => {
+  const w = world();
+  readyToDelegate(w);
+  commit(w.mike, 'b.txt', 'Newer work');
+  git(w.mike, 'push', '-q', 'origin', 'main');
+  // Tagged with a weekly key whose week ends within two days.
+  const short = weekly(w, 'short', '-3d:+1d');
+  const today = noonUtc();
+  const name = `release/${new Date(today - 24 * 60 * 60_000).toISOString().slice(0, 10)}`;
+  certTag(w.mike, name, short.cert, new Date(today - 24 * 60 * 60_000).toISOString());
+  git(w.mike, 'push', '-q', 'origin', name);
+  const up = upstreamFor(w.mike, w.home, new FakeClock(today), { publish: { publish: true, signingKey: w.mikeKey.priv, delegate: true }, runningMainSettled: () => true });
+  const tag = await up.publishOnce({ now: true });
+  assert.equal(tag, `release/${new Date(today).toISOString().slice(0, 10)}`, up.status().held?.why ?? '');
+  assert.equal(git(w.mike, 'rev-parse', `${tag}^{commit}`), git(w.mike, 'rev-parse', `${name}^{commit}`), 'the same commit');
+  assert.ok(signatureCert(armorOf(git(w.mike, 'cat-file', 'tag', tag!))), 'by the weekly key in place, with its week ahead');
+});
