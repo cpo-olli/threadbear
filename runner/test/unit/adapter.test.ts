@@ -140,7 +140,7 @@ test('a coordinator gate runs before Full access and trusts only the SDK helper 
     assert.equal((await hook('Read')).hookSpecificOutput.permissionDecision, 'deny');
     assert.equal(approvals.length, 0, 'a gate refusal cannot turn into a user card');
   } finally {
-    state.close();
+    state.close!();
     await session.end();
   }
 });
@@ -155,7 +155,7 @@ test('coordinator verification failures deny a tool instead of dropping the boun
     const approval = await state.options.canUseTool('Write', {}, { signal: new AbortController().signal, toolUseID: 'w1', agentID: 'worker-1' });
     assert.equal(approval.behavior, 'deny');
   } finally {
-    state.close();
+    state.close!();
     await session.end();
   }
 });
@@ -172,7 +172,7 @@ test('coordinator dispatch uses its controlled worker and cannot override the wo
     assert.equal(state.options.agents['coordinator-worker'].model, 'inherit');
     assert.match(state.options.agents['coordinator-worker'].prompt, /report.*coordinator/i);
   } finally {
-    state.close();
+    state.close!();
     await session.end();
   }
 });
@@ -202,7 +202,7 @@ test('coordinator helper questions go to the coordinator and approval needs neve
     assert.match(r.message, /coordinator/i);
     assert.equal(approvals.length, 0);
   } finally {
-    state.close();
+    state.close!();
     await session.end();
   }
 });
