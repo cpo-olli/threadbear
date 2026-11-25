@@ -2274,9 +2274,7 @@ impl TranscriptModel {
             return true;
         }
         match &item.content {
-            RowContent::User(message) => {
-                !message.is_from_runner() || message.review_note.is_some()
-            }
+            RowContent::User(message) => !message.is_from_runner() || message.review_note.is_some(),
             RowContent::Error { .. }
             | RowContent::Footer(_)
             | RowContent::Asks(_)
