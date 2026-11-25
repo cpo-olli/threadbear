@@ -246,7 +246,7 @@ impl Threadbear {
         let done =
             cx.new(|cx| InputState::new(window, cx).placeholder("What does finished look like?"));
         let app = cx.weak_entity();
-        let (project, typed, outcome) = (project.to_owned(), title.clone(), done.clone());
+        let (project, typed, outcome) = (project.to_owned(), title.clone(), done);
         window.open_alert_dialog(cx, move |dialog, _, _| {
             let (app, project, title, done) =
                 (app.clone(), project.clone(), typed.clone(), outcome.clone());
@@ -339,7 +339,8 @@ impl Render for CoordinatorControls {
                     .ok();
             },
         );
-        self.composer
-            .update(cx, |composer, cx| composer.render_controls(add, window, cx))
+        self.composer.update(cx, |composer, cx| {
+            composer.render_coordinator_picker(add, window, cx)
+        })
     }
 }

@@ -18,7 +18,8 @@ app/Tools scripts point here).
   at the repo's top) are private and gitignored: pass them with `--fixtures`.
 - `TB_MOCK_COORDINATORS=1` adds the coordinator experiment and a project home
   for Threadbear, with synthetic helper conversations. `mock.coordinatorFinish`
-  completes its first task and updates the shared project state.
+  returns its first helper result for review. `mock.coordinatorVerify` accepts
+  that result and marks the task done, updating the shared project state.
 
 It imports a few of the runner's own files (`../runner/src/`), so a change there
 runs the desktop checks too (.github/workflows/desktop.yml).

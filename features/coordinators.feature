@@ -30,6 +30,8 @@ Feature: Project coordinators
   Scenario: Helper results update the shared project state without another thread
     When I open the project "Threadbear"
     And a coordinator helper finishes its work
+    Then the coordinator has the to-do "Build the project home" in "Needs review"
+    When the coordinator checks and accepts the helper result
     Then the coordinator's document contains "The project home is ready"
     And the coordinator has the to-do "Build the project home" in "Done"
     And the coordinator is listed once in its own sidebar section

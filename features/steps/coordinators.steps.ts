@@ -46,3 +46,7 @@ Then('the project coordinator is {string}', async function (this: ThreadbearWorl
 When('a coordinator helper finishes its work', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'mock', method: 'coordinatorFinish', params: {} });
 });
+
+When('the coordinator checks and accepts the helper result', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'mock', method: 'coordinatorVerify', params: {} });
+});

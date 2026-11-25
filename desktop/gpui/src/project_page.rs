@@ -464,7 +464,7 @@ impl Threadbear {
             let markdown = if field == TextField::Notes
                 && self.coordinator_for_project(&project.id).is_some()
             {
-                text.clone()
+                text
             } else {
                 keep_breaks(&text)
             };

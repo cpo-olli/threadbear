@@ -1,6 +1,6 @@
 //! A project's coordinator and its work, read from `coordinators.*`.
 //! Project prose stays in `projects`; these records only link its conversation
-//! and the helper runs that own each task's state.
+//! and the tasks whose helper results the coordinator checks.
 use crate::inbox::{Section, ThreadSummary};
 use serde_json::Value;
 use std::sync::Arc;
@@ -11,11 +11,39 @@ pub enum State {
     Paused,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskState {
+    Todo,
+    Working,
+    Blocked,
+    Review,
+    Done,
+}
+
+impl TaskState {
+    fn read(state: &Value, run_status: &str) -> Self {
+        match state.as_str() {
+            Some("todo") => Self::Todo,
+            Some("working") => Self::Working,
+            Some("blocked") => Self::Blocked,
+            Some("review") => Self::Review,
+            Some("done") => Self::Done,
+            _ => match run_status {
+                "running" => Self::Working,
+                "completed" => Self::Review,
+                "failed" | "interrupted" | "stopped" => Self::Blocked,
+                _ => Self::Todo,
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Task {
     pub id: String,
     pub title: String,
     pub done_when: String,
+    pub state: TaskState,
     pub agent_id: Option<String>,
     pub status: String,
     pub summary: Option<String>,
@@ -23,18 +51,21 @@ pub struct Task {
 
 impl Task {
     pub fn status_label(&self) -> &'static str {
-        match self.status.as_str() {
-            "running" => "Helper working",
-            "completed" => "Done",
-            "interrupted" => "Interrupted",
-            "failed" => "Failed",
-            "stopped" => "Stopped",
+        if self.state == TaskState::Done {
+            return "Done";
+        }
+        if self.state == TaskState::Review || self.status == "completed" {
+            return "Needs review";
+        }
+        match self.state {
+            TaskState::Working => "Helper working",
+            TaskState::Blocked => "Blocked",
             _ => "To do",
         }
     }
 
     pub fn finished(&self) -> bool {
-        self.status == "completed"
+        self.state == TaskState::Done
     }
 }
 
@@ -80,12 +111,14 @@ impl Coordinator {
                 .into_iter()
                 .flatten()
                 .filter_map(|t| {
+                    let status = t["run"]["status"].as_str().unwrap_or("queued");
                     Some(Task {
                         id: identity(t, "id")?,
                         title: identity(t, "title")?,
                         done_when: t["doneWhen"].as_str().unwrap_or("").to_owned(),
+                        state: TaskState::read(&t["state"], status),
                         agent_id: identity(&t["run"], "agentId"),
-                        status: t["run"]["status"].as_str().unwrap_or("queued").to_owned(),
+                        status: status.to_owned(),
                         summary: t["run"]["summary"].as_str().map(str::to_owned),
                     })
                 })
@@ -103,7 +136,10 @@ impl Coordinator {
     }
 
     pub fn working(&self) -> usize {
-        self.tasks.iter().filter(|t| t.status == "running").count()
+        self.tasks
+            .iter()
+            .filter(|t| t.state == TaskState::Working && t.status == "running")
+            .count()
     }
 }
 
@@ -216,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn helper_result_is_the_task_state() {
+    fn a_helper_returning_needs_review_until_the_coordinator_accepts_it() {
         let c = Coordinator::decode(&json!({
             "projectId":"p", "threadId":"t", "state":"active", "tasks":[
                 {"id":"a", "title":"Fix a bug", "doneWhen":"Review passes", "run":{"status":"completed","agentId":"worker"}},
@@ -225,8 +261,17 @@ mod tests {
             ]
         })).unwrap();
         assert_eq!(c.tasks.len(), 2);
-        assert!(c.tasks[0].finished());
+        assert!(!c.tasks[0].finished());
+        assert_eq!(c.tasks[0].status_label(), "Needs review");
         assert_eq!(c.tasks[1].status_label(), "To do");
+        let done = Coordinator::decode(&json!({
+            "projectId":"p", "threadId":"t", "state":"active", "tasks":[
+                {"id":"a", "title":"Fix a bug", "state":"done", "run":{"status":"completed"}}
+            ]
+        }))
+        .unwrap();
+        assert!(done.tasks[0].finished());
+        assert_eq!(done.tasks[0].status_label(), "Done");
     }
 
     #[test]

@@ -31,9 +31,9 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
     const coordinator = {
       projectId: p.id, threadId: id, state: 'active', charter: 'Keep the project moving and bring decisions to Mike.', interests: [], updatedAt: ts,
       tasks: [
-        { id: 'layout', title: 'Build the project home', doneWhen: 'The conversation and project document match the approved layout.', run: { agentId: 'helper_layout', status: 'running' } },
-        { id: 'notes', title: 'Keep project notes in sync', doneWhen: 'Edits from the coordinator and project page share the same document.', run: { agentId: 'helper_notes', status: 'running' } },
-        { id: 'research', title: 'Compare the Prints document model', doneWhen: 'The focused document approach is included in the design.', run: { status: 'completed', summary: 'The project document uses the existing shared goals, state and notes.' } },
+        { id: 'layout', state: 'working', title: 'Build the project home', doneWhen: 'The conversation and project document match the approved layout.', run: { agentId: 'helper_layout', status: 'running' } },
+        { id: 'notes', state: 'working', title: 'Keep project notes in sync', doneWhen: 'Edits from the coordinator and project page share the same document.', run: { agentId: 'helper_notes', status: 'running' } },
+        { id: 'research', state: 'done', title: 'Compare the Prints document model', doneWhen: 'The focused document approach is included in the design.', run: { status: 'completed', summary: 'The project document uses the existing shared goals, state and notes.' } },
       ],
     };
     coordinators.push(coordinator);
@@ -62,7 +62,7 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
     if (method === 'coordinators.pause') {
       coordinator.state = p.paused ? 'paused' : 'active';
       for (const task of coordinator.tasks) {
-        if (p.paused && task.run?.status === 'running') task.run.status = 'interrupted';
+        if (p.paused && task.run?.status === 'running') { task.run.status = 'interrupted'; task.state = 'blocked'; }
       }
       if (p.paused) for (const helper of threads.get(coordinator.threadId).summary.subagents) {
         if (helper.status === 'running') helper.status = 'stopped';
@@ -70,17 +70,23 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
       threadChanged(coordinator.threadId);
     } else if (method === 'coordinators.addTask') {
       if (!p.title?.trim() || !p.doneWhen?.trim()) throw error(-32602, 'Add a title and what finished looks like.');
-      coordinator.tasks.push({ id: `todo_${coordinator.tasks.length}`, title: p.title, doneWhen: p.doneWhen });
+      coordinator.tasks.push({ id: `todo_${coordinator.tasks.length}`, state: 'todo', title: p.title, doneWhen: p.doneWhen });
     } else if (method === 'coordinators.update') {
       if (p.charter !== undefined) coordinator.charter = p.charter;
       if (p.interests !== undefined) coordinator.interests = p.interests;
     } else if (method === 'mock.coordinatorFinish') {
       coordinator.tasks[0].run.status = 'completed';
+      coordinator.tasks[0].state = 'review';
       const helper = threads.get(coordinator.threadId).summary.subagents[0];
       helper.status = 'completed';
       helper.summary = 'The conversation and living document match the approved layout.';
       threadChanged(coordinator.threadId);
-      target.state = 'The project home is ready. The conversation and living document use the same project state.';
+      target.state = 'The project home helper has returned. The coordinator is checking its result before marking the work done.';
+      target.stateUpdatedAt = now();
+      projectChanged();
+    } else if (method === 'mock.coordinatorVerify') {
+      coordinator.tasks[0].state = 'done';
+      target.state = 'The project home is ready. The coordinator checked the helper result and the conversation and living document use the same project state.';
       target.stateUpdatedAt = now();
       projectChanged();
     } else throw error(-32601, 'Unknown coordinator method.');

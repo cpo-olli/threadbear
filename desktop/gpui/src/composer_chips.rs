@@ -414,6 +414,27 @@ impl Composer {
 
     // ---- The row ----
 
+    /// The ordinary pool/model menu without message-only controls. Project
+    /// coordinators belong to this runner and always use its permissions.
+    pub(crate) fn render_coordinator_picker(
+        &mut self,
+        add: AnyElement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let data = self.chip_data(cx);
+        let mut row = h_flex().w_full().items_center().gap(px(8.));
+        if let Some(settings) = data.settings() {
+            if !settings.uses_pools() {
+                row = row
+                    .child(self.render_account_chip(&data, cx))
+                    .child(chip_divider(cx));
+            }
+            row = row.child(self.render_model_chip(&data, window, cx));
+        }
+        row.child(div().flex_1()).child(add).into_any_element()
+    }
+
     pub(crate) fn render_controls(
         &mut self,
         send_button: AnyElement,
