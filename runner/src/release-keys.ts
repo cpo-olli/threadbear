@@ -152,14 +152,30 @@ export function parseCert(blob: Buffer): ReleaseCert | undefined {
   }
 }
 
-// The certificate an SSH signature was made with, if it was.
-export function signatureCert(armor: string): ReleaseCert | undefined {
+// The key blob an SSH signature names (a plain key or a certificate).
+function signatureBlob(armor: string): Buffer | undefined {
   const body = armor.replace(/-----(BEGIN|END) SSH SIGNATURE-----/g, '').replace(/\s+/g, '');
   const buf = Buffer.from(body, 'base64');
   if (buf.length < 14 || buf.subarray(0, 6).toString('latin1') !== 'SSHSIG') return undefined;
   const len = buf.readUInt32BE(10);
   const blob = buf.subarray(14, 14 + len);
-  return blob.length === len ? parseCert(blob) : undefined;
+  return blob.length === len && len >= 4 ? blob : undefined;
+}
+
+// The certificate an SSH signature was made with, if it was.
+export function signatureCert(armor: string): ReleaseCert | undefined {
+  const blob = signatureBlob(armor);
+  return blob ? parseCert(blob) : undefined;
+}
+
+// Whether the signature was made with a certificate of any kind: one
+// parseCert can't read (another key type) would skip the date check, so
+// sshVerified refuses it.
+export function signedWithCert(armor: string): boolean {
+  const blob = signatureBlob(armor);
+  if (!blob) return false;
+  const n = blob.readUInt32BE(0);
+  return blob.subarray(4, 4 + n).toString('latin1').endsWith('-cert-v01@openssh.com');
 }
 
 // An allowed-signers file's text with each key also trusted as an

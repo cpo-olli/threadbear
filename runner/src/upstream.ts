@@ -48,7 +48,7 @@ import type { Logger } from './log.ts';
 import { IS_WINDOWS } from './platform.ts';
 import { killGroup } from './proc.ts';
 import { currentCert, delegatePaths, readDelegateState, REMIND_AHEAD_MS, RENEW_AHEAD_MS, renewDelegate, SIGN_MARGIN_MS, writeDelegateState } from './release-delegate.ts';
-import { ADD_DELAY_MS, applyKeyChanges, certVerifyArgs, KeysBusy, keysIn, revokedPath, REVOKED_FILE, signatureCert, signerKey, SIGNERS_FILE, withAuthorities } from './release-keys.ts';
+import { ADD_DELAY_MS, applyKeyChanges, certVerifyArgs, KeysBusy, keysIn, revokedPath, REVOKED_FILE, signatureCert, signedWithCert, signerKey, SIGNERS_FILE, withAuthorities } from './release-keys.ts';
 import { changelogFor, type ReleaseChangelog } from './changelog.ts';
 import { LISTING_GIT_CONFIG, parseConfigListBytes, repoProofConfig, settable, TRUSTED_SCOPES, untrustedGitEnv } from './safe-git.ts';
 
@@ -1769,7 +1769,8 @@ async function sshVerified(signed: SignedTag, signers: string, revoked?: string)
     // weekly key"): checked at the time the tag was made, which has to be
     // the day its name says; the pinned keys count as its authority too.
     let when: string[] = [];
-    if (signatureCert(signed.signature)) {
+    if (signedWithCert(signed.signature)) {
+      if (!signatureCert(signed.signature)) return false;
       const name = /\ntag ([^\n]+)\n/.exec(signed.payload.toString('latin1'))?.[1] ?? '';
       const args = certVerifyArgs(name, signed.date);
       if (!args) return false;

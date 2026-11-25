@@ -186,3 +186,14 @@ test('a weekly key near its end that Touch ID never renewed starts one starred r
   await up.publishOnce();
   assert.equal(started.length, 2, 'again once he archived it unrenewed');
 });
+
+test("not a certificate for a kind of key the check can't read the dates of", async () => {
+  const w = world();
+  const priv = path.join(w.root, 'ecdsa-week');
+  assert.equal(spawnSync('ssh-keygen', ['-q', '-t', 'ecdsa', '-N', '', '-f', priv]).status, 0);
+  assert.equal(spawnSync('ssh-keygen', ['-q', '-s', w.mikeKey.priv, '-I', 'e', '-n', 'mike@example.com', '-V', '-1d:+8d', `${priv}.pub`]).status, 0);
+  commit(w.mike, 'b.txt', 'An ecdsa weekly key');
+  certTag(w.mike, 'release/2026-10-30', `${priv}-cert.pub`, '2026-10-30T10:00:00Z');
+  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
+  assert.equal((await upstreamFor(w.theirs, w.home).check()).release?.tag, 'release/2026-10-01');
+});
