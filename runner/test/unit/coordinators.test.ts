@@ -11,6 +11,7 @@ import { Runner } from '../../src/runner.ts';
 import { ThreadStore } from '../../src/store.ts';
 import { CallerGate } from '../../src/rpc-gate.ts';
 import type { Settings } from '../../src/settings.ts';
+import type { ThreadSummary } from '../../src/protocol.ts';
 import { buildThreadbearTools, type ProjectControl } from '../../src/threadbear-mcp.ts';
 
 function setup(home = tmpDir(), enabled = () => true) {
@@ -533,5 +534,27 @@ test('idle coordinator compaction reaches the CLI as a command, with current mem
   assert.ok(compact, 'no project memory is prepended to the slash command');
   projects.update(project.id, { notes: 'A decision made while compacting' });
   assert.match(session.opts.coordinator!.context!()!, /decision made while compacting/);
+  c.stop();
+});
+
+test('a turn finishing on a draining runner’s thread reaches the coordinator through the peer’s summary (THREADBEAR-2R)', async () => {
+  const home = tmpDir();
+  const projects = new Projects({ home, clock: new FakeClock(), log: nullLogger });
+  const h = makeHarness(home, {}, { projects, accounts: new FakeAccounts(withCodex()) });
+  const peerThreads = new Map<string, ThreadSummary>();
+  const c = new Coordinators({ home, host: h.runner, projects, clock: h.clock, enabled: () => true, log: nullLogger, elsewhere: (id) => peerThreads.get(id) });
+  h.runner.coordinators = c;
+  projects.start(h.runner);
+  c.start();
+  const project = projects.create({ title: 'Pantry', goals: 'Keep food fresh', by: 'mike' });
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  peerThreads.set('peer-thread', { id: 'peer-thread', title: 'Check stock', preview: 'Two tins left', projects: [{ id: project.id, title: 'Pantry' }] } as ThreadSummary);
+  const forward = (threadId: string, turnId: string) => h.runner.publish({ method: 'thread.event', params: { threadId, seq: 1, event: { type: 'turn.completed', turnId, outcome: 'completed' } } } as never);
+  assert.doesNotThrow(() => forward('peer-thread', 't1'));
+  assert.doesNotThrow(() => forward('unknown-thread', 't2'));
+  const events = c.forThread(coordinator.threadId)!.events;
+  assert.equal(events.length, 1);
+  assert.match(events[0]!.text, /Check stock/);
   c.stop();
 });

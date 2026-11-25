@@ -618,7 +618,7 @@ async function main(): Promise<void> {
   runner.scheduleCeiling = (id) => (scheduler ? scheduler.ceilingById(id) : 'ask');
   // Load shared project memory before recovery can dispatch a coordinator.
   projects.start(runner);
-  const coordinators = new Coordinators({ home: cfg.home, host: runner, projects, clock: realClock, log, enabled: () => !box && experimentOn(cfg.home, 'coordinators') });
+  const coordinators = new Coordinators({ home: cfg.home, host: runner, projects, clock: realClock, log, enabled: () => !box && experimentOn(cfg.home, 'coordinators'), elsewhere: (id) => peers.find(id) });
   runner.coordinators = coordinators;
   runner.start({ skip: kept });
   // App-restart watches with words from before ceilings: bound now.

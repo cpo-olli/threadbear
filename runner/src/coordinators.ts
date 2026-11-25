@@ -8,7 +8,7 @@ import type { Runner, Notification } from './runner.ts';
 import type { Projects } from './projects.ts';
 import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
-import type { EffortLevel } from './protocol.ts';
+import type { EffortLevel, ThreadSummary } from './protocol.ts';
 import { ErrorCode, RpcError } from './protocol.ts';
 import type { StartSessionOptions, SubagentUpdate } from './adapters/types.ts';
 import { atomicWriteFileSync } from './fsutil.ts';
@@ -85,7 +85,9 @@ export class Coordinators {
   private readonly stoppingSessions = new Map<string, Promise<void>>();
   private unlisten?: () => void;
   private stopped = false;
-  private readonly deps: { home: string; host: Runner; projects: Projects; clock: Clock; enabled: () => boolean; log: Logger };
+  // elsewhere: a thread still on a draining runner, whose events the
+  // handover forwards here before this runner adopts it (THREADBEAR-2R).
+  private readonly deps: { home: string; host: Runner; projects: Projects; clock: Clock; enabled: () => boolean; log: Logger; elsewhere?: (threadId: string) => ThreadSummary | undefined };
 
   constructor(deps: Coordinators['deps']) {
     this.deps = deps;
@@ -455,7 +457,8 @@ export class Coordinators {
       this.scheduleCompaction(own); return;
     }
     if (!['completed', 'failed'].includes(event.outcome)) return;
-    const thread = this.deps.host.get(threadId);
+    const thread = this.deps.host.has(threadId) ? this.deps.host.get(threadId) : this.deps.elsewhere?.(threadId);
+    if (!thread) return;
     for (const row of this.rows.values()) {
       const matches = thread.projects?.some((p) => p.id === row.projectId) || row.interests.some((interest) => `${thread.title}\n${thread.preview}`.toLowerCase().includes(interest.toLowerCase()));
       if (!matches) continue;
