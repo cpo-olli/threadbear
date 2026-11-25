@@ -129,8 +129,10 @@ export async function runDev(client: RunnerClient, cmd: string, args: string[], 
         if (p.tag) process.stdout.write(`Tagged and pushed ${p.tag}.\n`);
         else if (p.upstream.held) process.stdout.write(`No release: ${p.upstream.held.why} (main at ${p.upstream.held.commit.slice(0, 9)}).\n`);
         else if (p.upstream.published) process.stdout.write(`Nothing new to release: the last one is ${p.upstream.published.tag}.\n`);
+        else if (wk) process.stdout.write('No release due.\n');
         else process.stdout.write("No release: this runner doesn't publish them (runner.json releases.publish).\n");
-        return p.tag ? 0 : 1;
+        // A renewal that worked is a success too, release or not.
+        return p.tag || (wk?.until && !wk.error) ? 0 : 1;
       }
       const r = await client.call<{ upstream: UpstreamStatus }>(args[0] === 'check' ? 'upstream.check' : 'upstream.status').catch(quietlyTooOld);
       if (!r) {

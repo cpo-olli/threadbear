@@ -10,7 +10,7 @@
 // DELEGATE_DAYS. Upstream.publishOnce renews it when it has RENEW_AHEAD_MS
 // left and Mike is at the Mac, and starts the reminder thread when it has
 // REMIND_AHEAD_MS left and still hasn't been renewed.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DELEGATE_DAYS, keyOf, keysIn, parseCert, type ReleaseCert, withAuthorities } from './release-keys.ts';
@@ -49,7 +49,10 @@ export function usableCert(home: string, signingKey: string, revoked: string): R
   const c = currentCert(home);
   if (!c) return undefined;
   try {
-    if (keyOf(fs.readFileSync(`${delegatePaths(home).key}.pub`, 'utf8')) !== c.key) return undefined;
+    // The private key itself, as that's what signs (ssh-keygen -y reads its
+    // public half): a .pub beside it could be another renewal's.
+    const own = spawnSync('ssh-keygen', ['-y', '-f', delegatePaths(home).key], { encoding: 'utf8', timeout: 10_000 });
+    if (own.status !== 0 || keyOf(own.stdout) !== c.key) return undefined;
     if (keyOf(fs.readFileSync(signingKey.endsWith('.pub') ? signingKey : `${signingKey}.pub`, 'utf8')) !== c.ca) return undefined;
   } catch {
     return undefined;

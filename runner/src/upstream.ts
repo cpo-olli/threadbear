@@ -48,7 +48,7 @@ import type { Logger } from './log.ts';
 import { IS_WINDOWS } from './platform.ts';
 import { killGroup } from './proc.ts';
 import { delegatePaths, readDelegateState, usableCert, REMIND_AHEAD_MS, RENEW_AHEAD_MS, renewDelegate, SIGN_MARGIN_MS, writeDelegateState } from './release-delegate.ts';
-import { ADD_DELAY_MS, applyKeyChanges, certVerifyArgs, KeysBusy, keysIn, revokedPath, REVOKED_FILE, signatureCert, signedWithCert, signerKey, SIGNERS_FILE, withAuthorities } from './release-keys.ts';
+import { ADD_DELAY_MS, applyKeyChanges, certVerifyArgs, KeysBusy, keysIn, revokedPath, REVOKED_FILE, signatureCert, signedWithCert, signerKey, SIGNERS_FILE, weeklyRevokedPath, withAuthorities } from './release-keys.ts';
 import { changelogFor, type ReleaseChangelog } from './changelog.ts';
 import { LISTING_GIT_CONFIG, parseConfigListBytes, repoProofConfig, settable, TRUSTED_SCOPES, untrustedGitEnv } from './safe-git.ts';
 
@@ -824,7 +824,7 @@ export class Upstream {
           const keysBefore = this.signersHash(signers);
           this.newestVerified = undefined;
           release = await this.newestSigned(checkout, signers, staged);
-          const changed = release ? await this.keyChanges(checkout, signers) : false;
+          const changed = release ? await this.keyChanges(checkout, signers, staged) : false;
           settled = !changed && this.signersHash(signers) === keysBefore;
         }
         if (!settled) throw new Error('the release keys kept changing while the check ran; it looks again next time');
@@ -1065,26 +1065,49 @@ export class Upstream {
   // a week and then counts, one in scripts/release-keys-revoked stops
   // counting at once. Read from the commit the signature covers.
   // Whether the keys that count changed.
-  private async keyChanges(checkout: string, signers: string): Promise<boolean> {
-    const signed = this.newestVerified;
-    if (!signed) return false;
-    const signer = signerKey(signed.signature);
-    if (!signer) return false;
-    // Read object by object, each checked against its id (committedFile).
-    const [announced, revoke] = await Promise.all([this.committedFile(checkout, signed.commit, SIGNERS_FILE), this.committedFile(checkout, signed.commit, REVOKED_FILE)]);
-    let change;
-    try {
-      change = applyKeyChanges({ home: this.deps.home, signers, signer, announced: keysIn(announced), revoke: keysIn(revoke), tag: signed.tag, now: this.deps.clock.now(), viaCert: signedWithCert(signed.signature) });
-    } catch (e) {
-      // Another runner is at it; the next check reads the release again.
-      if (e instanceof KeysBusy) return false;
-      throw e;
+  private async keyChanges(checkout: string, signers: string, staged?: string): Promise<boolean> {
+    const newest = this.newestVerified;
+    if (!newest) return false;
+    // A weekly key's release changes nothing but weekly keys, so a key
+    // change comes from the newest release the release key signed itself
+    // too: a fork offline the day it went out still takes it (Gemini's
+    // review). Read from the staged tags, like notesSince.
+    const direct = signedWithCert(newest.signature) && staged ? await this.newestDirect(staged, signers, newest) : undefined;
+    let change: ReturnType<typeof applyKeyChanges> = { added: [], revoked: [], waiting: [], refused: [] };
+    for (const signed of direct ? [direct, newest] : [newest]) {
+      const signer = signerKey(signed.signature);
+      if (!signer) continue;
+      // Read object by object, each checked against its id (committedFile).
+      const [announced, revoke] = await Promise.all([this.committedFile(checkout, signed.commit, SIGNERS_FILE), this.committedFile(checkout, signed.commit, REVOKED_FILE)]);
+      try {
+        const c = applyKeyChanges({ home: this.deps.home, signers, signer, announced: keysIn(announced), revoke: keysIn(revoke), tag: signed.tag, now: this.deps.clock.now(), viaCert: signedWithCert(signed.signature) });
+        change = { added: [...change.added, ...c.added], revoked: [...change.revoked, ...c.revoked], waiting: [...new Set([...change.waiting, ...c.waiting])], refused: [...change.refused, ...c.refused] };
+      } catch (e) {
+        // Another runner is at it; the next check reads the release again.
+        if (e instanceof KeysBusy) return false;
+        throw e;
+      }
     }
+    const signed = newest;
     for (const k of change.revoked) this.deps.log.warn('a release revoked a release key; it no longer counts', { key: k.slice(0, 60), tag: signed.tag });
     for (const k of change.added) this.deps.log.warn('a new release key now counts, announced a week ago by a pinned key', { key: k.slice(0, 60), tag: signed.tag });
     for (const k of change.refused) this.deps.log.warn("a release tried to revoke a key it can't (only that key or a newer one can)", { key: k.slice(0, 60), tag: signed.tag });
     if (change.waiting.length) this.deps.log.info('a new release key is waiting out its week before it counts', { keys: change.waiting.map((k) => k.slice(0, 60)), tag: signed.tag });
     return change.added.length > 0 || change.revoked.length > 0;
+  }
+
+  // The newest release older than `newest`, on its history, signed by a
+  // pinned key itself rather than a weekly key's certificate: at most
+  // MAX_READS looked at, newest first.
+  private async newestDirect(staged: string, signers: string, newest: SignedTag & { tag: string }): Promise<(SignedTag & { tag: string }) | undefined> {
+    const name = newest.tag.slice(TAG_PREFIX.length);
+    const older = [...(await this.refs(staged, STAGED_NS))].filter(([n]) => RELEASE_NAME.test(n) && n < name).sort(([x], [y]) => (x < y ? 1 : -1)).slice(0, MAX_READS);
+    for (const [n, ref] of older) {
+      const signed = await this.verified(staged, ref, TAG_PREFIX + n, signers);
+      if (!signed || signedWithCert(signed.signature)) continue;
+      if (await this.isAncestor(staged, signed.commit, newest.commit)) return { ...signed, tag: TAG_PREFIX + n };
+    }
+    return undefined;
   }
 
   // `file` (a/b/c) as the commit `rev` names has it, read object by object
@@ -1227,7 +1250,9 @@ export class Upstream {
     const raw = await (this.deps.gitBytes ?? gitBytes)(checkout, ['cat-file', 'tag', ref.oid]);
     const split = splitSignedTag(raw, tag);
     const signed = split && (await sshVerified(split, signers, revokedPath(this.deps.home))) ? split : undefined;
-    this.remember(key, signed ?? null);
+    // A weekly key's tag can fail only for now (dated ahead of this clock),
+    // so a failure is read again next time, bounded like any (MAX_READS).
+    if (signed || !split || !signedWithCert(split.signature)) this.remember(key, signed ?? null);
     return signed;
   }
 
@@ -1253,7 +1278,13 @@ export class Upstream {
         return Buffer.alloc(0);
       }
     })();
-    return createHash('sha256').update(fs.readFileSync(signers)).update('\0').update(revoked).digest('hex');
+    let weekly = Buffer.alloc(0);
+    try {
+      weekly = fs.readFileSync(weeklyRevokedPath(this.deps.home));
+    } catch {
+      // none revoked
+    }
+    return createHash('sha256').update(fs.readFileSync(signers)).update('\0').update(revoked).update('\0').update(weekly).digest('hex');
   }
 
   // Mike's runner: tags main's tip as today's release when it's moved since
@@ -1282,7 +1313,10 @@ export class Upstream {
     }
     this.renewMissed = false;
     if (publish.delegate && touchKey(publish.signingKey)) {
-      await this.keepDelegate(checkout, asked).catch((e: unknown) => this.deps.log.warn('could not look after the weekly release key', { error: String(e).slice(0, 200) }));
+      await this.keepDelegate(checkout, asked).catch((e: unknown) => {
+        this.deps.log.warn('could not look after the weekly release key', { error: String(e).slice(0, 200) });
+        this.set({ ...this.st, weeklyKey: { ...this.st.weeklyKey, error: String((e as Error).message ?? e).slice(0, 200) } });
+      });
     }
     if (!asked && !(this.deps.runningMainSettled?.() ?? false)) return undefined;
     const now = this.deps.clock.now();
@@ -1367,7 +1401,11 @@ export class Upstream {
     // doesn't touch it. Nothing waits on it but this look.
     // Or the weekly key, when it has time left and the last release has
     // the check that takes it, so forks on that release already do.
-    const weekly = await this.weeklyKey(checkout, tip, last, now);
+    const weekly = await this.weeklyKey(checkout, tip, last, tag, now);
+    if (weekly === 'later') {
+      this.hold({ commit: tip, why: "waiting for UTC's day to be today's, so the weekly key can sign it", at: new Date(now).toISOString() });
+      return undefined;
+    }
     const touch = !weekly && touchKey(publish.signingKey);
     if (touch && !asked && !(await (this.deps.atMac?.() ?? Promise.resolve(false)))) {
       this.hold({ commit: tip, why: 'waiting for you at the Mac to sign it with Touch ID', at: new Date(now).toISOString() });
@@ -1422,15 +1460,19 @@ export class Upstream {
   // release-keys-revoked differ from the last release's): forks take key
   // changes only from a release the release key signed itself, bar
   // revoking weekly keys (release-keys.ts applyKeyChanges).
-  private async weeklyKey(checkout: string, tip: string, last: string | undefined, now: number): Promise<string | undefined> {
+  // Nor while this Mac's day isn't UTC's (Perth's first eight hours): forks
+  // take a weekly key's tag only on the UTC day its name says.
+  // 'later' then, when the weekly key could otherwise sign.
+  private async weeklyKey(checkout: string, tip: string, last: string | undefined, tag: string, now: number): Promise<string | 'later' | undefined> {
     const { publish, home } = this.deps;
     if (!publish?.delegate || !publish.signingKey || !last) return undefined;
+    const utcDay = tag === `${TAG_PREFIX}${new Date(now).toISOString().slice(0, 10)}`;
     const read = (rev: string, file: string) => this.committedFile(checkout, rev, file).catch(() => undefined);
     const [revoked, signersAt, signersWas, revokedWas, forks] = await Promise.all([read(tip, REVOKED_FILE), read(tip, SIGNERS_FILE), read(`refs/tags/${last}`, SIGNERS_FILE), read(`refs/tags/${last}`, REVOKED_FILE), read(`refs/tags/${last}`, 'runner/src/release-keys.ts')]);
     if (revoked === undefined || signersAt !== signersWas || revoked !== revokedWas || !forks?.includes('cert-authority')) return undefined;
     const cert = usableCert(home, publish.signingKey, revoked);
     if (!cert || cert.validAfter > now || cert.validBefore - now < SIGN_MARGIN_MS) return undefined;
-    return delegatePaths(home).cert;
+    return utcDay ? delegatePaths(home).cert : 'later';
   }
 
   // Renews the weekly key when it's near its end and Mike is at the Mac
@@ -1794,22 +1836,21 @@ async function sshVerified(signed: SignedTag, signers: string, revoked?: string)
     // weekly key"): checked at the time the tag was made, which has to be
     // the day its name says; the pinned keys count as its authority too.
     let when: string[] = [];
+    let allowed = signers;
     if (signedWithCert(signed.signature)) {
-      if (!signatureCert(signed.signature)) return false;
+      const cert = signatureCert(signed.signature);
+      if (!cert) return false;
       const name = /\ntag ([^\n]+)\n/.exec(signed.payload.toString('latin1'))?.[1] ?? '';
       const args = certVerifyArgs(name, signed.date);
       if (!args) return false;
       when = args;
-      // Revoked weekly keys count against certificates only.
-      const weekly = revoked && fs.existsSync(`${revoked}-weekly`) ? fs.readFileSync(`${revoked}-weekly`, 'utf8') : '';
-      if (weekly.trim()) {
-        const both = path.join(dir, 'revoked');
-        fs.writeFileSync(both, (revoked && fs.existsSync(revoked) ? fs.readFileSync(revoked, 'utf8') : '') + '\n' + weekly, { mode: 0o600 });
-        revoked = both;
-      }
+      // A revoked weekly key, by the key it certifies only (never the
+      // authority's, as ssh-keygen's -r would: Codex's and Gemini's reviews).
+      const weekly = revoked ? `${revoked}-weekly` : undefined;
+      if (weekly && fs.existsSync(weekly) && keysIn(fs.readFileSync(weekly, 'utf8')).includes(cert.key)) return false;
+      allowed = path.join(dir, 'signers');
+      fs.writeFileSync(allowed, withAuthorities(fs.readFileSync(signers, 'utf8')), { mode: 0o600 });
     }
-    const allowed = path.join(dir, 'signers');
-    fs.writeFileSync(allowed, withAuthorities(fs.readFileSync(signers, 'utf8')), { mode: 0o600 });
     const found = await run('ssh-keygen', ['-Y', 'find-principals', '-f', allowed, '-s', sig, ...when]);
     if (found.code !== 0) return false;
     for (const principal of found.stdout.split('\n').map((l) => l.trim()).filter(Boolean)) {

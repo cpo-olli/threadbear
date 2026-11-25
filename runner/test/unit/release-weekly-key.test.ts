@@ -22,6 +22,12 @@ function weekly(w: World, name: string, validity: string, ca = w.mikeKey.priv): 
   return { priv, cert: `${priv}-cert.pub`, pub: fs.readFileSync(`${priv}.pub`, 'utf8').split(' ').slice(0, 2).join(' ') };
 }
 
+function noonUtc(): number {
+  const d = new Date();
+  const noon = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12);
+  return noon <= Date.now() ? noon : noon - 24 * 60 * 60_000;
+}
+
 const armorOf = (tag: string) => tag.slice(tag.indexOf('-----BEGIN SSH SIGNATURE-----')) + '\n';
 
 // A release tag signed with a weekly key's certificate, dated `date`.
@@ -56,9 +62,10 @@ test("not when the tag's date is outside the certificate, or not the day its nam
   const s = await upstreamFor(w.theirs, w.home).check();
   assert.equal(s.release?.tag, 'release/2026-10-01');
   assert.equal(certVerifyArgs('release/2026-11-21', '2026-11-01T10:00:00Z'), undefined);
-  assert.ok(certVerifyArgs('release/2026-11-21', '2026-11-20T23:00:00Z'), 'UTC+14 is already on the 21st');
-  assert.ok(certVerifyArgs('release/2026-11-21', '2026-11-22T11:00:00Z'), 'UTC-12 is still on the 21st');
-  assert.equal(certVerifyArgs('release/2026-11-21', '2026-11-22T13:00:00Z'), undefined);
+  assert.ok(certVerifyArgs('release/2026-11-21', '2026-11-21T00:00:00Z'));
+  assert.ok(certVerifyArgs('release/2026-11-21', '2026-11-21T23:59:59Z'));
+  assert.equal(certVerifyArgs('release/2026-11-21', '2026-11-20T23:00:00Z'), undefined, "UTC's day only: no naming tomorrow's today");
+  assert.equal(certVerifyArgs('release/2026-11-21', '2026-11-22T00:00:01Z'), undefined);
 });
 
 test("not a certificate from a key that isn't pinned, nor a weekly key that's been revoked", async () => {
@@ -87,7 +94,7 @@ test('withAuthorities: each pinned key also counts as an authority, for git only
 
 // Mike's side: the release before has the check that takes the weekly key,
 // and his weekly key is in place.
-function readyToDelegate(w: World, validity = '-1d:+8d') {
+function readyToDelegate(w: World, validity = '-3d:+8d') {
   release(w, 'release/2026-10-02', w.mikeKey.priv, { 'runner/src/release-keys.ts': '// cert-authority\n' });
   const k = weekly(w, 'week', validity);
   const p = delegatePaths(w.home);
@@ -103,8 +110,9 @@ test("Mike's runner signs with the weekly key, and a fork takes it", async () =>
   readyToDelegate(w);
   commit(w.mike, 'b.txt', 'Newer work');
   git(w.mike, 'push', '-q', 'origin', 'main');
-  // The real time, as forks refuse a weekly key's tag dated ahead of theirs.
-  const clock = new FakeClock(Date.now());
+  // Noon UTC (today's, or yesterday's if it's still ahead): not ahead of
+  // forks' clocks, and a day that's the same here and in UTC.
+  const clock = new FakeClock(noonUtc());
   const signs: string[][] = [];
   const up = upstreamFor(w.mike, w.home, clock, {
     publish: { publish: true, signingKey: w.mikeKey.priv, delegate: true },
@@ -263,4 +271,40 @@ test("Mike's runner doesn't sign with a weekly key that's revoked, isn't the key
     assert.ok(tag, `${how}: ${up.status().held?.why ?? ''}`);
     assert.equal(signatureCert(armorOf(git(w.mike, 'cat-file', 'tag', tag))), undefined, how);
   }
+});
+
+test("a weekly key revoked after its release was taken stops counting, on the same runner", async () => {
+  const w = world();
+  const k = weekly(w, 'week', '20261029Z:20261106Z');
+  commit(w.mike, 'b.txt', 'Work');
+  certTag(w.mike, 'release/2026-10-30', k.cert, '2026-10-30T10:00:00Z');
+  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
+  const up = upstreamFor(w.theirs, w.home);
+  assert.equal((await up.check()).release?.tag, 'release/2026-10-30');
+  fs.writeFileSync(weeklyRevokedPath(w.home), `${k.pub}\n`);
+  assert.equal((await up.check()).release?.tag, 'release/2026-10-01', 'not from an answer kept from before');
+});
+
+test("a fork offline the day a key change went out takes it from that release, under a weekly key's newer one", async () => {
+  const w = world();
+  const next = key(w.root, 'next');
+  // The release key's own release announces a new key...
+  release(w, 'release/2026-10-29', w.mikeKey.priv, { 'scripts/release-signers': fs.readFileSync(w.mikeKey.signers, 'utf8') + fs.readFileSync(next.signers, 'utf8') });
+  // ...and the next day's, the first this fork sees, is the weekly key's.
+  const k = weekly(w, 'week', '20261029Z:20261106Z');
+  commit(w.mike, 'c.txt', 'Weekly');
+  certTag(w.mike, 'release/2026-10-30', k.cert, '2026-10-30T10:00:00Z');
+  git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
+  assert.equal((await upstreamFor(w.theirs, w.home).check()).release?.tag, 'release/2026-10-30');
+  const pending = JSON.parse(fs.readFileSync(keyStatePath(w.home), 'utf8')).pending as { key: string; tag: string }[];
+  assert.deepEqual(pending.map((p) => [p.key, p.tag]), [[pubOf(next), 'release/2026-10-29']]);
+});
+
+test('usableCert: not when the private key beside it is another', () => {
+  const w = world();
+  readyToDelegate(w);
+  assert.ok(usableCert(w.home, w.mikeKey.priv, ''));
+  const other = key(w.root, 'other-private');
+  fs.copyFileSync(other.priv, delegatePaths(w.home).key);
+  assert.equal(usableCert(w.home, w.mikeKey.priv, ''), undefined);
 });

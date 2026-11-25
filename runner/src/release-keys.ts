@@ -200,8 +200,8 @@ export function withAuthorities(text: string): string {
 
 // ssh-keygen's options for checking a certificate-made signature on the
 // tag `name` (release/YYYY-MM-DD) dated `date` (its tagger line): at that
-// time, which must fall on the day its name says, give or take the
-// world's time zones. Undefined when it doesn't, which fails the check.
+// time, which must fall on the day its name says, in UTC. Undefined when
+// it doesn't, which fails the check.
 // Not a tag dated ahead of `now` either (an hour's slack for clocks): forks
 // keep the newest name and never go back, so a leaked key mustn't be able
 // to name one for days to come and shut out the release that revokes it.
@@ -211,11 +211,10 @@ export function certVerifyArgs(name: string, date: string | undefined, now = Dat
   const day = /^release\/(\d{4})-(\d{2})-(\d{2})$/.exec(name);
   const t = date ? Date.parse(date) : NaN;
   if (!day || !Number.isFinite(t) || t > now + 3_600_000) return undefined;
-  const midnight = Date.UTC(Number(day[1]), Number(day[2]) - 1, Number(day[3]));
-  if (new Date(midnight).toISOString().slice(0, 10) !== `${day[1]}-${day[2]}-${day[3]}`) return undefined;
-  const start = midnight - 14 * 3_600_000;
-  const end = start + 24 * 3_600_000 + 26 * 3_600_000;
-  if (t < start || t >= end) return undefined;
+  // The UTC day, exactly: with time zones' slack a key could name
+  // tomorrow's release today and shut out today's (Codex's review). Mike's
+  // runner signs with the weekly key only when its local day is UTC's.
+  if (new Date(t).toISOString().slice(0, 10) !== `${day[1]}-${day[2]}-${day[3]}`) return undefined;
   const d = new Date(t);
   const p = (n: number) => String(n).padStart(2, '0');
   return ['-O', `verify-time=${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`];
@@ -384,7 +383,7 @@ function applyLocked(o: { home: string; signers: string; signer: string; announc
     // A key never pinned nor waiting is a weekly key's, or nobody's: any
     // pinned key's release may revoke it, for certificates only.
     if (at(r) < 0 && !waiting) {
-      if (!weekly.has(r)) {
+      if (r.startsWith('ssh-ed25519 ') && !weekly.has(r)) {
         weekly.add(r);
         out.revoked.push(r);
       }
