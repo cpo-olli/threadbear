@@ -44,6 +44,8 @@ export const GATED_READS: ReadonlySet<string> = new Set([
   'remoteThreads.list',
   'projects.list',
   'projects.get',
+  'coordinators.list',
+  'coordinators.get',
   'instructions.get',
   'librarian.status',
   'settings.get',
@@ -62,6 +64,7 @@ export type CallerGateDeps = {
     has(threadId: string): boolean;
     get(threadId: string): ThreadLike;
     accessOf(threadId: string): PermissionMode;
+    coordinators?: { rpcRefusal(threadId: string, method: string, p: Params): string | undefined };
   };
   // Threads a draining runner still has (rpc.ts's RemoteThreads).
   remote?: { owns(threadId: string): boolean; summaries(include: ('inbox' | 'snoozed' | 'archived')[]): (ThreadLike & { id: string })[] };
@@ -130,6 +133,9 @@ export class CallerGate {
   // Throws a refusal, or returns the params to run with (the caller's own
   // mode filled in, what only a client with the token may say taken out).
   check(threadId: string, method: string, p: Params): Params {
+    if (method.startsWith('coordinators.') && !['coordinators.list', 'coordinators.get'].includes(method)) throw new RpcError(ErrorCode.notAllowed, 'Configure project coordinators from the project home. A coordinator changes its own desk through its coordinator tool.');
+    const coordinatorRefusal = this.deps.runner.coordinators?.rpcRefusal(threadId, method, p);
+    if (coordinatorRefusal) throw new RpcError(ErrorCode.notAllowed, coordinatorRefusal);
     const known = this.authority(threadId);
     // Any agent's move, Full's too: it never starts a turn by itself
     // (Runner.update's carry-on after a limit is Mike's pick from the menu).

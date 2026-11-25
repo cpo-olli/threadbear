@@ -649,3 +649,67 @@ recipe's file, its state, its schedules or the threads they started. The
 runner looks every 30 seconds and at once after its own changes; a client
 fetches `recipes.list` again (and `recipes.get` for a recipe it shows). With
 the experiment off every method fails with `-32601`.
+## Project coordinators
+
+The `coordinators` experiment adds one optional coordinator to a project. It is an
+ordinary thread using the normal pool/model settings. The first implementation
+supports Claude: its SDK identifies helper tool calls separately from the parent.
+An unsupported provider is refused before creating a coordinator. No coordinator
+budget, spending limit or cost estimate is added.
+
+The project home has Conversation, Activity, To-dos and Threads tabs. Its right
+Highlights pane draws the shared project goals, state and notes; these stay the
+same records `projects.get` and `projects.update` read and write. The conversation
+is the audit trail. Routine work uses native sub-agents, never separate inbox
+threads. Questions from helpers go to the coordinator. Only it asks the user.
+
+`projects.update` optionally takes `ifUnchanged: { goals?, state?, notes? }`.
+The owning runner compares every supplied baseline before writing anything. A
+conflict leaves the project unchanged and the editor keeps the user's draft.
+
+Requests (local runner; other clients tolerate the unknown methods/notification):
+
+| Method | Params | Reply |
+| --- | --- | --- |
+| `coordinators.list` | `{}` | `{ coordinators: Coordinator[] }` |
+| `coordinators.get` | `{ projectId }` | `{ coordinator }` |
+| `coordinators.start` | `{ projectId, accountId?, poolId?, model?, effort? }` | `{ coordinator, thread }` |
+| `coordinators.pause` | `{ projectId, paused }` | `{ coordinator }` |
+| `coordinators.addTask` | `{ projectId, title, doneWhen }` | `{ coordinator }` |
+| `coordinators.update` | `{ projectId, charter?, interests?, wakeAt? }` | `{ coordinator }` |
+| `coordinators.answer` | `{ projectId, questionId, answer }` | `{ coordinator }` |
+
+`coordinators.updated` carries `{ coordinators: Coordinator[] }`, and the app
+loads `coordinators.list` again after reconnect. With the experiment off, lists
+are empty and writes refuse; existing coordinator identities still retain their
+tool restrictions. They cannot become unrestricted threads by turning it off.
+
+`Coordinator` is `{ projectId, threadId, state: "active" | "paused", charter,
+interests: string[], tasks, questions, updatedAt, wakeAt? }`. Tasks have `{ id,
+title, doneWhen, run? }`; run is `{ id, agentId?, status, summary? }`.
+Run states are `queued`, `running`, `interrupted`, `completed`, `failed`, `stopped`.
+One transition function owns the allowed moves. A native dispatch reserves a run
+before the tool proceeds. Its native worker identity is attached by the trusted
+SDK hook, and native task results determine its status. The UI does not manually
+mark running work done. Questions have `{ id, agentId, questions, state, answer? }`.
+
+The runner stores the registry outside the model's context, including briefs,
+native identities and checkpoints. Restart marks unfinished execution interrupted;
+the next coordinator turn reconciles it rather than blindly replaying work. A
+known helper may be resumed explicitly. Compaction waits for helpers to finish.
+It retains the charter and rereads canonical project records after compaction.
+
+Only the user-facing app may start or pause a coordinator. The coordinator's
+`coordinator` tool may read its own registry, add tasks, update its charter and
+interests, set a wake time and record answers to helper questions. Thread-owned
+RPC credentials cannot start or reconfigure another coordinator. Parent tool
+permissions are enforced before the CLI's Full access bypass; helper tools are
+identified by the SDK's `agent_id`, never a tool argument claiming an identity.
+
+Pause blocks new dispatch and all coordinator/helper tool calls, cancels pending
+wake timers and interrupts its CLI. Resume reconciles interrupted work. It does
+not pause independent threads that the coordinator messages. Completion/failure
+events from project threads and matching interest keywords are deduplicated and
+batched for ten minutes; progress does not wake it. An explicit timer or a helper
+question wakes it without that batch delay. Sources remain quoted event data.
+

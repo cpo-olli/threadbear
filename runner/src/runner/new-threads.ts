@@ -30,6 +30,7 @@ export const newThreadsPart = {
     accountId?: string;
     poolId?: string;
     provider?: Provider;
+    onlyProvider?: Provider;
     model?: string;
     effort?: EffortLevel;
     permissionMode?: PermissionMode;
@@ -184,6 +185,7 @@ export const newThreadsPart = {
     accountId?: string;
     poolId?: string;
     provider?: Provider;
+    onlyProvider?: Provider;
     model?: string;
     effort?: EffortLevel;
     permissionMode?: PermissionMode;
@@ -218,6 +220,7 @@ export const newThreadsPart = {
     accountId?: string;
     poolId?: string;
     provider?: Provider;
+    onlyProvider?: Provider;
     model?: string;
     effort?: EffortLevel;
     permissionMode?: PermissionMode;
@@ -245,7 +248,7 @@ export const newThreadsPart = {
     let poolId: string | undefined;
     let accountId = params.accountId;
     if (accountId === undefined && (params.poolId !== undefined || !peekRunnerJson(this.cfg.home).defaults?.keepAccount)) {
-      const picked = this.pickForNew({ poolId: params.poolId, cwd, model: params.model, provider: params.provider });
+      const picked = this.pickForNew({ poolId: params.poolId, cwd, model: params.model, provider: params.provider, onlyProvider: params.onlyProvider });
       if (picked) ({ poolId, accountId } = picked);
     }
     // A schedule pinned to a signed-out login runs this time on a pool

@@ -627,8 +627,8 @@ class ClaudeSession implements AgentSession {
   // after a compaction, and what it adds is the first thing the agent reads.
   private onCompact(input: HookInput): { hookSpecificOutput?: { hookEventName: 'SessionStart'; additionalContext: string } } {
     if ((input as { source?: string }).source !== 'compact') return {};
-    if (!this.oneReply || !this.owedReply) return {};
-    return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: owedReplyAfterCompact(this.owedReply) } };
+    const additionalContext = [this.opts.coordinator?.context?.(), this.oneReply && this.owedReply ? owedReplyAfterCompact(this.owedReply) : undefined].filter(Boolean).join('\n\n');
+    return additionalContext ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext } } : {};
   }
 
   private forgetEndTurn(): void {

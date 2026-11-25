@@ -137,8 +137,8 @@ export const poolsPart = {
   // first) with the most room, else one of another provider with room,
   // else the first of its provider. undefined when no pool has a login
   // this runner can use.
-  pickForNew(this: Runner, p: { poolId?: string; cwd: string; model?: string; provider?: Provider }): { poolId: string; accountId: string } | undefined {
-    const accounts = this.usableAccounts();
+  pickForNew(this: Runner, p: { poolId?: string; cwd: string; model?: string; provider?: Provider; onlyProvider?: Provider }): { poolId: string; accountId: string } | undefined {
+    const accounts = this.usableAccounts().filter((a) => !p.onlyProvider || a.provider === p.onlyProvider);
     const pools = this.pools().filter((x) => poolAccounts(x, accounts).length);
     let pool: Pool | undefined;
     if (p.poolId !== undefined) {
@@ -206,7 +206,7 @@ export const poolsPart = {
     // A carry-on that runs dry too moves on again while another login has
     // room (Mike, 12 Nov: it should just carry on). It can't loop: each
     // login that runs dry is marked blocked until its window resets.
-    const next = nextLogin(pool, accounts, rec, now);
+    const next = nextLogin(pool, this.coordinatorAccounts(rec.id, accounts), rec, now);
     if ('waitUntil' in next) {
       if (waits) this.startWait(st, next, `Every login in ${pool.title} is out of room.`);
       return;
@@ -233,7 +233,7 @@ export const poolsPart = {
     if (was?.provider !== 'claude') return;
     // The refusal may not have reached the list (no SignInState: tests, or
     // a fork's): never move back onto it.
-    const next = nextLogin(pool, accounts.map((a) => (a.id === rec.accountId ? { ...a, signedOut: true } : a)), rec, this.clock.now());
+    const next = nextLogin(pool, this.coordinatorAccounts(rec.id, accounts).map((a) => (a.id === rec.accountId ? { ...a, signedOut: true } : a)), rec, this.clock.now());
     if ('waitUntil' in next) return;
     this.moveLogin(st, accounts.find((a) => a.id === next.accountId)!, `${was?.title ?? rec.accountId} is signed out`);
     this.carryOn(st, CARRY_ON_SIGNED_OUT);
@@ -390,7 +390,7 @@ export const poolsPart = {
       this.moveLogin(st, to, current ? `${current.title} ${limitWhy(current, now, true)}` : `${rec.accountId} isn't on this Mac`);
       moved = true;
     } else if (!current || !pool.accountIds.includes(current.id) || !loginOk(current)) {
-      const next = nextLogin(pool, accounts, rec, now);
+      const next = nextLogin(pool, this.coordinatorAccounts(rec.id, accounts), rec, now);
       if ('waitUntil' in next) {
         this.startWait(st, next, `Still no room in ${pool.title}.`);
         return;
@@ -439,7 +439,7 @@ export const poolsPart = {
     const now = this.clock.now();
     // Another login: never the one it ran dry on, whose block a reading
     // from another of its sessions can clear (a model's own limit).
-    const next = nextLogin(pool, this.usableAccounts(), rec, now);
+    const next = nextLogin(pool, this.coordinatorAccounts(rec.id, this.usableAccounts()), rec, now);
     if ('waitUntil' in next) return undefined;
     // The login the wait is for is back at its reset, a minute before
     // `until`. That's the timer's, with its minute of grace, as a provider

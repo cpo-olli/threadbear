@@ -159,6 +159,7 @@ import type { YearTokenAnswer, YearTokenParams } from './year-token-maker.ts';
 import { placeBucket, placeOf } from './place.ts';
 import { allowed as waitMoveAllowed, waitStateOf, type WaitState } from './wait-state.ts';
 import { archivedNote, hibernatedNote, scheduledNote, unarchivedNote, unscheduledNote, wokenNote } from './place-notes.ts';
+import type { Coordinators, Coordinator } from './coordinators.ts';
 
 export type Notification =
   | { method: 'thread.updated'; params: { thread: ThreadSummary } }
@@ -175,6 +176,7 @@ export type Notification =
   | { method: 'instructions.updated'; params: { instructions: import('./instructions.ts').StandingInstructions } }
   | { method: 'runner.updates'; params: { updates: RunnerUpdates } }
   | { method: 'projects.updated'; params: { projects: Project[] } }
+  | { method: 'coordinators.updated'; params: { coordinators: Coordinator[] } }
   | { method: 'librarian.updated'; params: { librarian: LibrarianStatus } }
   | { method: 'connectors.updated'; params: { connectors: ConnectorsStatus } }
   | { method: 'recipes.updated'; params: Record<string, never> }
@@ -787,6 +789,7 @@ export class Runner {
   models?: Pick<Models, 'generate'>;
   projects?: Projects;
   standingInstructions?: () => string;
+  coordinators?: Coordinators;
   activity = new Set<(a: ThreadActivity) => void>();
   patchCache: PatchCache = new Map();
   patchTrust: PatchTrustStore;
@@ -2785,6 +2788,7 @@ export class Runner {
       // with a stand-in).
       runsAsCode: (file) => this.writeRunsAsCode(this.threads.get(id)?.rec ?? rec, file),
       ...(heldGrants ? { heldGrants: true } : {}),
+      ...(this.coordinators?.session(rec.id) ? { coordinator: this.coordinators.session(rec.id) } : {}),
     };
     return { opts, claude, claudeSkipped, heldGrants };
   }
@@ -2793,8 +2797,11 @@ export class Runner {
   // no wait since; without one, it looks here.
   startSession(st: ThreadState, account: Account, looks?: ClaudeLook[]): void {
     const { rec, rt } = st;
+    const held = this.coordinators?.dispatchRefusal(rec.id);
+    if (held) throw new Error(held);
     const adapter = this.adapters[rec.provider];
     if (!adapter) throw new Error(`This runner can't run ${providerName(rec.provider)} threads.`);
+    if (this.coordinators?.forThread(rec.id) && rec.provider !== 'claude') throw new Error('This project coordinator needs a Claude pool/model so helper permissions can be enforced.');
     // Checked here, where every way a thread runs (a send, a carry-on, a
     // wake, a review) comes through, rather than at each of them.
     if (rec.copied) throw new Error(COPIED_REFUSAL);
@@ -3079,6 +3086,7 @@ export class Runner {
       }
       case 'subagent':
         this.updateSubagent(st, o.update);
+        this.coordinators?.subagent(rec.id, o.update);
         break;
       case 'wrote':
         // Patch files, and helpers a trusted patch may import, an edit the
@@ -3721,6 +3729,10 @@ export class Runner {
   // under the minimum room) or isn't in its pool any more, it moves first
   // (docs/protocol/settings.md, "Pools"). With nowhere better, the turn starts
   // where it is. A pinned thread (no poolId) never moves.
+  coordinatorAccounts(threadId: string, accounts: Account[]): Account[] {
+    return this.coordinators?.forThread(threadId) ? accounts.filter((a) => a.provider === 'claude') : accounts;
+  }
+
   beforeTurn(st: ThreadState): void {
     const { rec } = st;
     const pool = this.poolById(rec.poolId);
@@ -3730,7 +3742,7 @@ export class Runner {
     const inPool = pool.accountIds.includes(rec.accountId);
     if (current && inPool && loginOk(current)) return;
     const now = this.clock.now();
-    const next = nextLogin(pool, accounts, rec, now);
+    const next = nextLogin(pool, this.coordinatorAccounts(rec.id, accounts), rec, now);
     if ('waitUntil' in next) return;
     const why = !current ? `${rec.accountId} isn't on this Mac` : !inPool ? `${current.title} isn't in ${pool.title}` : current.planEnded ? `${current.title}'s plan has ended` : current.signedOut ? `${current.title} is signed out` : `${current.title} ${limitWhy(current, now)}`;
     this.moveLogin(st, accounts.find((a) => a.id === next.accountId)!, why);
@@ -3996,11 +4008,11 @@ export class Runner {
     const wanted = params.provider ?? (params.model ? this.modelProvider(params.model) : undefined);
     const otherProvider = wanted !== undefined && wanted !== rec.provider && pool?.accountIds.some((id) => this.accounts.get(id)?.provider === wanted);
     if (pool && (!pool.accountIds.includes(rec.accountId) || otherProvider)) {
-      const accounts = this.usableAccounts();
+      const accounts = this.coordinatorAccounts(rec.id, this.usableAccounts());
       const provider = otherProvider ? wanted : rec.provider;
       let id = pickInPool(pool, accounts, { provider });
       if (!id) {
-        const next = nextLogin(pool, accounts, rec, this.clock.now());
+        const next = nextLogin(pool, this.coordinatorAccounts(rec.id, accounts), rec, this.clock.now());
         if (!('waitUntil' in next)) id = next.accountId;
       }
       toAccountId = id ?? poolAccounts(pool, accounts)[0]?.id;
@@ -4014,6 +4026,9 @@ export class Runner {
     const newCwd = params.cwd !== undefined ? path.resolve(expandHome(params.cwd.trim())) : undefined;
     if (newCwd !== undefined && !isDirectory(newCwd)) throw new RpcError(ErrorCode.badParams, `Folder not found: ${newCwd}`);
     const newAccount = toAccountId !== undefined ? this.accounts.get(toAccountId) : undefined;
+    if (this.coordinators?.forThread(rec.id) && ((newAccount && newAccount.provider !== 'claude') || (wanted && wanted !== 'claude') || (pool && !pool.accountIds.some((id) => this.accounts.get(id)?.provider === 'claude')))) {
+      throw new RpcError(ErrorCode.badParams, 'Project coordinators currently need a Claude model and a pool containing a Claude login.');
+    }
     if (toAccountId !== undefined && !newAccount) {
       throw new RpcError(ErrorCode.accountNotFound, `No account called ${toAccountId}`);
     }
@@ -4954,7 +4969,7 @@ export class Runner {
     // phone push until they're done and the agent has had its say on them.
     // Asks the agent said wait for its shell jobs count them too.
     const afterJobs = this.asksHeld(st);
-    const unfinished = running || agentsStillWorking(background, afterJobs);
+    const unfinished = running || (this.coordinators?.forThread(rec.id) ? afterJobs : agentsStillWorking(background, afterJobs));
     const s: ThreadSummary = {
       id: rec.id,
       title: rec.title,
@@ -5357,7 +5372,7 @@ export class Runner {
     const pressed = this.takePressNews(st);
     const wokeBefore = structuredClone(rec.wakeNews);
     const woke = this.takeWakeNews(st, message.id);
-    const lead = [standing, woke, pressed].filter(Boolean).join('\n\n');
+    const lead = [standing, this.coordinators?.context(rec.id), woke, pressed].filter(Boolean).join('\n\n');
     try {
       rt.session!.send(lead ? { ...message, text: `${lead}\n\n${message.text}` } : message);
     } catch (e) {

@@ -22,6 +22,7 @@ import type { Scheduler } from './schedules.ts';
 import { MAX_CHECK_TIMEOUT_SECS } from './schedule-check.ts';
 import { checkCardProblem, checkDigest, type CheckCard } from './patch-trust.ts';
 import { applyNoteEdits, type Projects } from './projects.ts';
+import type { Coordinators } from './coordinators.ts';
 import { parseWhen, relativeFuture, relativeTime } from './when.ts';
 import { SAID_MAX } from './wake-when.ts';
 
@@ -287,6 +288,7 @@ export function buildThreadbearTools(
     // The once-a-turn note to a Done card in a project still going
     // (needs.ts, projectStepNudge), off likewise.
     projectStepNote?: boolean;
+    coordinators?: () => Coordinators | undefined;
   } = {},
 ) {
   const codex = opts.provider === 'codex';
@@ -405,6 +407,7 @@ export function buildThreadbearTools(
     throw new Error(jobsNudge(jobs));
   };
   const projectStepNote = async (input: { archive?: unknown; snooze?: unknown; waitFor?: unknown }, needs: string, next: string[] | undefined, events: PersistedEvent[]): Promise<string | undefined> => {
+    if (opts.coordinators?.()?.forThread(selfId)) return undefined;
     if (opts.projectStepNote === false || needs !== 'nothing' || !projects) return undefined;
     if (input.archive === true || snoozeFromTool({ ...input, needs: 'nothing' }) || (Array.isArray(input.waitFor) && input.waitFor.length) || projectStepNudged(events)) return undefined;
     if (appRestarts?.isWatching(selfId)) return undefined;
@@ -2003,6 +2006,20 @@ export function buildThreadbearTools(
 
   return [
     endTurn(),
+    ...(opts.coordinators?.()?.forThread(selfId) ? [tool(
+      'coordinator',
+      'Read your durable project desk, add a bounded job, update your charter/interests or wake time, or record an answer to a helper question. Keep shared project goals/state/notes with update_project. Helpers report to you; ask the user only for decisions your instructions do not settle.',
+      { action: z.enum(['get', 'addTask', 'update', 'answer']), title: z.string().max(200).optional(), doneWhen: z.string().max(1000).optional(), charter: z.string().max(8000).optional(), interests: z.array(z.string().max(200)).max(40).optional(), wakeAt: z.string().nullable().optional(), questionId: z.string().optional(), answer: z.string().max(4000).optional() },
+      handle(async (p) => {
+        const service = opts.coordinators?.();
+        const own = service?.forThread(selfId);
+        if (!service || !own) throw new Error('This session has no coordinator desk.');
+        if (p.action === 'addTask') service.addTask(own.projectId, p.title ?? '', p.doneWhen ?? '');
+        else if (p.action === 'update') service.update(own.projectId, p);
+        else if (p.action === 'answer') service.answer(own.projectId, p.questionId ?? '', p.answer ?? '');
+        return service.context(selfId) ?? '';
+      }),
+    )] : []),
     ...(appRestarts
       ? [
           tool(
@@ -2580,13 +2597,13 @@ export function serverInstructions(selfId: string, o: { one: boolean; bulletRepl
   );
 }
 
-export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, remote?: () => RemoteControl | undefined, reviewCanvas?: () => boolean, livePages?: () => boolean): McpSdkServerConfigWithInstance {
+export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, remote?: () => RemoteControl | undefined, reviewCanvas?: () => boolean, livePages?: () => boolean, coordinators?: () => Coordinators | undefined): McpSdkServerConfigWithInstance {
   const one = oneReply();
   const server = createSdkMcpServer({
     name: SERVER_NAME,
     version: RUNNER_VERSION,
     instructions: serverInstructions(selfId, { one, bulletReplies: bulletReplies(), pocket: Boolean(pocket?.()), projects: Boolean(projects), livePages: livePages?.() ?? false }),
-    tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, remote, reviewCanvas }),
+    tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, remote, reviewCanvas, coordinators }),
   });
   server.tools = [...ALWAYS_ASK_TOOLS].map((name) => ({ name: name.split('__').at(-1)!, permission_policy: 'always_ask' as const }));
   return server;
