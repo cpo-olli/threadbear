@@ -484,3 +484,19 @@ test("a revocation in weekly releases whose week is over still counts", async ()
   for (let i = 0; i < 3; i++) assert.notEqual((await up.check()).release?.tag, 'release/2026-11-20', `check ${i + 1}`);
   assert.ok(readRevoked(w.home).includes(pubOf(w.mikeKey)));
 });
+
+// Codex's twelfth look: another runner holding the key lock leaves this
+// check's revocations unread, so it keeps nothing new and fails.
+test('a check that finds the release keys locked keeps nothing new and looks again', async () => {
+  const w = world();
+  const up = forkAt(w);
+  assert.equal((await up.check()).release?.tag, 'release/2026-10-01');
+  release(w, 'release/2026-10-30', w.mikeKey.priv, { 'scripts/release-keys-revoked': 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVl\n' });
+  const lock = path.join(w.home, 'upstream-keys.lock');
+  fs.writeFileSync(lock, `${process.pid} someone-else`);
+  const s = await up.check();
+  assert.equal(s.state, 'failed', s.reason ?? '');
+  assert.equal(git(w.theirs, 'for-each-ref', 'refs/threadbear/upstream/2026-10-30'), '', 'not kept');
+  fs.rmSync(lock);
+  assert.equal((await up.check()).release?.tag, 'release/2026-10-30');
+});

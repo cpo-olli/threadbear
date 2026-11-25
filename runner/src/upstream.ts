@@ -834,9 +834,16 @@ export class Upstream {
           settled = !changed && this.signersHash(signers) === keysBefore;
         }
         if (!settled) throw new Error('the release keys kept changing while the check ran; it looks again next time');
-        // Only once their revocations were read: not after another runner
-        // held the key lock (keysBusy), which left them unread.
-        if (!this.keysBusy) for (const oid of this.lapsing) this.lapsed.add(oid);
+        // Another runner held the key lock, so revocations went unread: what
+        // this check kept goes again and it fails, to read them next time,
+        // rather than offer a release one of them may revoke (Codex's review).
+        if (this.keysBusy) {
+          for (const [name, ref] of await this.refs(checkout, REF_NS)) {
+            if (name > keptBefore) await this.git(checkout, ['update-ref', '-d', REF_NS + name, ref.oid]).catch(() => undefined);
+          }
+          throw new Error('another runner was changing the release keys; it looks again next time');
+        }
+        for (const oid of this.lapsing) this.lapsed.add(oid);
       } finally {
         fs.rmSync(work, { recursive: true, force: true });
       }

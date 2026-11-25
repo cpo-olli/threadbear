@@ -280,6 +280,9 @@ next time). When main hasn't moved but the last release was a weekly key's whose
 week ends within two days, the same commit goes out again under today's
 name, so a fork that missed it still has one it can take. `tb updates
 publish` says until when the weekly key signs, or why renewing it failed.
+Known limit: while main stays red for longer than a weekly key's week,
+nothing new goes out, and a fork that missed the last weekly key's
+release waits for the next green commit's.
 
 ### Your changes to the old app
 
