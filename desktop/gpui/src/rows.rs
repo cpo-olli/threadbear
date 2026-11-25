@@ -961,7 +961,12 @@ impl ThreadPane {
             .text_color(quiet)
             .text_center()
             .child(note.to_owned());
-        row_wrap(row, content)
+        // A line naming something that acts by itself (the quiet inbox)
+        // says what it is on hover.
+        match row.content.note_tip() {
+            Some(tip) => row_wrap(row, content.id(SharedString::from(row.id.clone())).tip(tip)),
+            None => row_wrap(row, content),
+        }
     }
 
     /// A failed turn's message in its pink box, and what to do about it when

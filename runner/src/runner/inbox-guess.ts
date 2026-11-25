@@ -37,6 +37,7 @@ import { experimentOn } from '../experiments.ts';
 import { placeOf } from '../place.ts';
 import { latestMessages } from './card-review.ts';
 import { OPUS } from '../models/index.ts';
+import { quietArchivedNote } from '../place-notes.ts';
 
 export const INBOX_GUESS = 'inboxGuess';
 // Acting on the guess (experiment quietInboxMine, part of the quiet inbox):
@@ -116,8 +117,6 @@ export function readGuess(text: string): { skip: boolean; why: string } | undefi
     return undefined;
   }
 }
-
-export const QUIET_ARCHIVED_NOTE = "Archived quietly: it finished with nothing for you, and a model judged you didn't need to see it.";
 
 // Tools whose threads are reminders Mike set himself: bookmarking an X post
 // means "look into this later" (25 Nov 2026, after the quiet inbox hid one's
@@ -307,7 +306,7 @@ export const inboxGuessPart = {
     // A thread it started that's gone back to work since git looked.
     if (this.childEnds(st).length) return;
     const why = strong.why.replace(/\s+/g, ' ').trim();
-    this.emit(st, { type: 'system.note', text: `${QUIET_ARCHIVED_NOTE} ${why}` });
+    this.emit(st, { type: 'system.note', text: quietArchivedNote({ why, now: this.clock.now(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }) });
     this.update({ threadId: rec.id, archived: true, archivedBy: 'threadbear', noted: true });
     // After the archive, which clears any older mark (parkRecord).
     rec.quietlyArchived = { at: this.isoNow(), why, seq };

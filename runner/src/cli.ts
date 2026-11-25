@@ -605,7 +605,7 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
       // "restart": until the runner next starts; "release": until it starts on a new release.
       const word = args[1]?.toLowerCase();
       const until = word === 'restart' || word === 'release' ? word : parseWhen(args[1] ?? '1h');
-      const r = await client.call<{ thread: ThreadSummary }>('threads.update', { threadId: id, snoozedUntil: until });
+      const r = await client.call<{ thread: ThreadSummary }>('threads.update', { threadId: id, snoozedUntil: until, ...(process.env.THREADBEAR_THREAD_ID ? { byAgent: true } : {}) });
       console.log(`snoozed until ${r.thread.snoozedUntilRelease ? 'a new release' : r.thread.snoozedUntilRestart ? 'the runner restarts' : r.thread.snoozedUntil}`);
       return 0;
     }
@@ -620,8 +620,9 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
     case 'unarchive': {
       const id = await resolveId(client, args[0]);
       if (cmd === 'archive') notSelf(id, STOPS_SELF);
-      // Run from a thread (its agent), it's the agent archiving, not Mike.
-      const by = cmd === 'archive' && process.env.THREADBEAR_THREAD_ID ? { archivedBy: 'agent' } : {};
+      // Run from a thread (its agent), it's the agent archiving or bringing
+      // it back, not Mike: the line in the thread says who (place-notes.ts).
+      const by = !process.env.THREADBEAR_THREAD_ID ? {} : cmd === 'archive' ? { archivedBy: 'agent' } : { byAgent: true };
       // Mike saying the quiet inbox shouldn't have hidden it (its daily
       // review thread asks him): brought back, written down as a wrong hide.
       const wrong = cmd === 'unarchive' && f['wrong-hide'] ? { verdict: 'shouldHaveShown' } : {};

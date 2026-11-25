@@ -404,7 +404,8 @@ test("Opus's skip archives his finished thread quietly, says why, and marks it",
   assert.equal(t.archivedBy, 'threadbear');
   assert.equal(t.quietlyArchived?.why, 'A receipt for what he asked.');
   assert.equal(typeof t.quietlyArchived?.at, 'string');
-  assert.ok(notes(h, id).some((n) => n.startsWith('Archived quietly: it finished with nothing for you') && n.endsWith('A receipt for what he asked.')));
+  // Named, so the app can say what Quiet inbox is, with the model's reason.
+  assert.ok(notes(h, id).some((n) => /^Archived by Quiet inbox on \w{3} \d+ \w{3}, \d+:\d\d [ap]m: it finished with nothing for you/.test(n) && n.endsWith('A receipt for what he asked.')), notes(h, id).join('\n'));
   const [guess, quiet] = h.lines();
   assert.equal(guess.kind, 'guess');
   assert.deepEqual({ ...quiet, at: undefined }, { at: undefined, kind: 'quiet', threadId: id, seq: guess.seq, why: 'A receipt for what he asked.' });
@@ -507,7 +508,10 @@ test('"Should have shown me" brings it back, writes the wrong hide down, and cle
   assert.equal(t.archivedAt, undefined);
   assert.equal(t.quietlyArchived, undefined);
   assert.equal(h.runner.threads.get(id)!.rec.quietlyArchived, undefined);
-  assert.ok(notes(h, id).includes('Brought back by you: you should have been shown this.'));
+  // One line, saying who and why (place-notes.ts), not a second.
+  const back = notes(h, id).filter((n) => n.startsWith('Brought back'));
+  assert.equal(back.length, 1, back.join('\n'));
+  assert.match(back[0], /^Brought back from the archive by you on .+: Quiet inbox shouldn't have hidden it\.$/);
   const line = h.lines().at(-1)!;
   assert.equal(line.kind, 'wrongHide');
   assert.equal(line.threadId, id);

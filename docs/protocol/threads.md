@@ -783,9 +783,10 @@ post is something he means to look into), or whose done card he has
 already seen (`lastSeenSeq >= seq`: he had it open as it finished). The checks `settleQuietly` makes are made again, as the
 models took a moment: no turn, edit or queued message, still `finished`,
 the done card still the last, the thread still in the inbox, and no thread
-it started gone back to work. Then a `system.note` ("Archived quietly: it finished with nothing
-for you, and a model judged you didn't need to see it." and the model's
-`why`), an archive with `archivedBy: "threadbear"`, and
+it started gone back to work. Then a `system.note` ("Archived by Quiet inbox on <when>: it finished
+with nothing for you, and Opus judged you didn't need to see it." and the
+model's `why`; the app explains Quiet inbox on hovering a line that names
+it), an archive with `archivedBy: "threadbear"`, and
 `quietlyArchived: { at, why, seq }` on the record, which the summary
 carries as `quietlyArchived: { at, why }` while the thread is archived by
 Threadbear. Any move that brings it out of the archive (a message, an
@@ -796,7 +797,10 @@ archiving it again) clears the mark (`parkRecord`). The file gets
 **Should have shown me.** `threads.update` with `archived: false,
 verdict: "shouldHaveShown"` brings a thread back as any unarchive does
 (so it's `keptOut` and never quietly archived again), with a
-`system.note` ("Brought back by you: you should have been shown this.")
+`system.note` saying who and why ("Brought back from the archive by you
+on <when>: Quiet inbox shouldn't have hidden it.", or "by an agent ...: you
+said Quiet inbox shouldn't have hidden it." for `byAgent`, which
+`tb unarchive` run from a thread sends)
 and the line `{ at, kind: "wrongHide", threadId, seq?, quiet, guesses? }`:
 `seq` the card it was quietly archived for (else its last done card),
 `quiet` whether it had the mark, `guesses` that card's. The GPUI app

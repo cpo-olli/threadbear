@@ -4190,9 +4190,12 @@ export class Runner {
       if (params.archived && !rec.archivedAt) {
         // A verdict from the Archive menu says it already (ARCHIVE_NOTES).
         const verdict = (params.archivedBy ?? 'mike') === 'mike' && params.verdict && params.verdict !== 'shouldHaveShown';
-        if (!verdict) this.emit(st, { type: 'system.note', text: archivedNote({ by: params.archivedBy ?? 'mike', now: this.clock.now(), timeZone: noteZone, ...(params.why ? { why: params.why } : {}) }) });
-      } else if (!params.archived && rec.archivedAt && params.verdict !== 'shouldHaveShown') {
-        this.emit(st, { type: 'system.note', text: unarchivedNote({ who, now: this.clock.now(), timeZone: noteZone }) });
+        if (!verdict) this.emit(st, { type: 'system.note', text: archivedNote({ by: params.archivedBy ?? who, now: this.clock.now(), timeZone: noteZone, ...(params.why ? { why: params.why } : {}) }) });
+      } else if (!params.archived && rec.archivedAt) {
+        // "Should have shown me", from the archived row's menu or an agent's
+        // `tb unarchive --wrong-hide` (the quiet inbox's daily review).
+        const wrong = params.verdict === 'shouldHaveShown' ? { why: who === 'mike' ? "Quiet inbox shouldn't have hidden it" : "you said Quiet inbox shouldn't have hidden it" } : {};
+        this.emit(st, { type: 'system.note', text: unarchivedNote({ who, now: this.clock.now(), timeZone: noteZone, ...(params.why ? { why: params.why } : {}), ...wrong }) });
       }
     }
     if (params.snoozedUntil !== undefined) {
@@ -4229,11 +4232,8 @@ export class Runner {
         stop = true;
       } else {
         // "Should have shown me" on a thread the quiet inbox archived:
-        // written down beside the guesses, and said in the thread.
-        if (params.verdict === 'shouldHaveShown' && rec.archivedAt) {
-          this.noteWrongHide(st);
-          this.emit(st, { type: 'system.note', text: 'Brought back by you: you should have been shown this.' });
-        }
+        // written down beside the guesses (the line above says it).
+        if (params.verdict === 'shouldHaveShown' && rec.archivedAt) this.noteWrongHide(st);
         // Brought back out by hand: it stays out, however its next turn ends
         // (runner/quiet-inbox.ts).
         this.park(st, { kind: 'unarchive' });

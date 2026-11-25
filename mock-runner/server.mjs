@@ -1340,6 +1340,7 @@ async function dispatch(client, method, p) {
       if (p.archived === false && p.verdict === 'shouldHaveShown') {
         if (refuseWrongHide) throw rpcError(-32000, "Couldn't bring it back just now. Try again in a moment.");
         lastWrongHide = { threadId: s.id };
+        persist(s.id, { type: 'system.note', text: `Brought back from the archive by ${p.byAgent ? 'an agent' : 'you'} on Wed 25 Nov, 9:40 am: ${p.byAgent ? 'you said ' : ''}Quiet inbox shouldn't have hidden it.` });
       }
       if (p.archived !== undefined) {
         s.archivedAt = p.archived ? iso() : undefined;
@@ -2348,7 +2349,10 @@ async function dispatch(client, method, p) {
         const entry = [...threads.values()].find((t) => t.summary.title === title);
         if (!entry) throw rpcError(-32602, `No thread called "${title}"`);
         const at = new Date(Date.now() - (i + 1) * 60_000).toISOString();
-        Object.assign(entry.summary, { archivedAt: at, archivedBy: 'threadbear', quietlyArchived: { at, why: p.why ?? 'It only confirmed what was asked.' }, live: false });
+        const why = p.why ?? 'It only confirmed what was asked.';
+        Object.assign(entry.summary, { archivedAt: at, archivedBy: 'threadbear', quietlyArchived: { at, why }, live: false });
+        // The runner's line in the thread (place-notes.ts, quietArchivedNote).
+        persist(entry.summary.id, { type: 'system.note', text: `Archived by Quiet inbox on Tue 24 Nov, 8:10 pm: it finished with nothing for you, and Opus judged you didn't need to see it. ${why}` });
         broadcastSummary(entry.summary.id);
       });
       return { ok: true };
