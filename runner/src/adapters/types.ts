@@ -80,7 +80,8 @@ export type StartSessionOptions = {
     context?: () => string | undefined;
     checkTool(call: { name: string; input: Record<string, unknown>; agentId?: string; toolUseId?: string }): string | undefined;
     helperQuestion?(agentId: string, questions: Question[]): void;
-    workerStarted?(agentId: string, agentType?: string): void;
+    workerStarted?(agentId: string, agentType?: string, dispatch?: { toolUseId: string; runId?: string }): void;
+    workerFailed?(toolUseId: string, reason: string): void;
   };
 };
 
@@ -179,6 +180,9 @@ export type BackgroundTask = { id: string; type: string; kind: BackgroundKind; d
 
 export type SubagentUpdate = {
   id: string;
+  // The native task's current execution. A resumed task keeps its id but
+  // gets a new runId; late events from an older run must not finish it.
+  runId?: string;
   started?: boolean; // the first report of it
   itemId?: string;
   parentId?: string;

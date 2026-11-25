@@ -130,6 +130,9 @@ test('a coordinator gate runs before Full access and trusts only the SDK helper 
     }
     assert.equal((await hook('Bash', { agent_id: 'worker-1' })).hookSpecificOutput.permissionDecision, 'deny', 'the model cannot put its helper identity in tool input');
     assert.equal((await hook('Write', {}, 'unknown')).hookSpecificOutput.permissionDecision, 'deny');
+    await hook('Agent', { prompt: 'Read the marker' });
+    await state.frame!({ type: 'system', subtype: 'task_started', task_id: 'worker-1', run_id: 'run-001', task_type: 'local_agent', subagent_type: 'coordinator-worker', tool_use_id: 'call-1' });
+    assert.ok(known.has('worker-1'), 'the native task event registers its helper before SubagentStart');
     await state.options.hooks.SubagentStart[0].hooks[0]({ hook_event_name: 'SubagentStart', agent_id: 'worker-1', agent_type: 'coordinator-worker' });
     assert.deepEqual(await hook('Write', { file_path: '/tmp/a' }, 'worker-1'), {});
     assert.deepEqual(await hook('mcp__threadbear__read_project'), {});
@@ -201,6 +204,28 @@ test('coordinator helper questions go to the coordinator and approval needs neve
     assert.equal(r.behavior, 'deny');
     assert.match(r.message, /coordinator/i);
     assert.equal(approvals.length, 0);
+  } finally {
+    state.close!();
+    await session.end();
+  }
+});
+
+test('coordinator native task registration is bound to its dispatch and run before helper tools arrive', async () => {
+  const started: unknown[] = [];
+  const failed: unknown[] = [];
+  const { session, state, outputs } = start([], { permissionMode: 'full', coordinator: { checkTool: () => undefined, workerStarted: (...args: unknown[]) => started.push(args), workerFailed: (...args: unknown[]) => failed.push(args) } });
+  try {
+    const pre = state.options.hooks.PreToolUse[0].hooks[0];
+    await pre({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'dispatch-1', tool_input: { prompt: 'Read the marker' } });
+    await state.frame!({ type: 'system', subtype: 'task_started', task_id: 'worker-1', run_id: 'run-001', task_type: 'local_agent', subagent_type: 'coordinator-worker', tool_use_id: 'dispatch-1' });
+    assert.deepEqual(started, [['worker-1', 'coordinator-worker', { toolUseId: 'dispatch-1', runId: 'run-001' }]]);
+    assert.ok(outputs.some((o) => o.kind === 'subagent' && o.update.runId === 'run-001'));
+    await state.frame!({ type: 'system', subtype: 'task_started', task_id: 'rogue', run_id: 'run-001', task_type: 'local_agent', subagent_type: 'coordinator-worker', tool_use_id: 'unknown-dispatch' });
+    assert.equal(started.length, 1, 'an SDK task without an allowed coordinator dispatch is not enrolled');
+    const failure = state.options.hooks.PostToolUseFailure[0].hooks[0];
+    await failure({ hook_event_name: 'PostToolUseFailure', tool_name: 'Agent', tool_use_id: 'dispatch-1', tool_input: {}, error: 'Worker could not launch' });
+    await failure({ hook_event_name: 'PostToolUseFailure', tool_name: 'Agent', tool_use_id: 'dispatch-1', tool_input: {}, error: 'Worker could not launch' });
+    assert.deepEqual(failed, [['dispatch-1', 'Worker could not launch']], 'failed dispatch is reported once using its unique tool call, not a reused agent id');
   } finally {
     state.close!();
     await session.end();
