@@ -1267,7 +1267,16 @@ pub fn thread_honey<Tz: TimeZone>(
         .max_by(|a, b| honey_level(usage(a).as_ref()).total_cmp(&honey_level(usage(b).as_ref())));
     // A pinned login can have less room than the pools it belongs to.
     if group.is_none() {
-        let title = login_name(account_id, accounts);
+        let title = pool.map_or_else(
+            || {
+                if account_id.is_empty() {
+                    "No login selected".to_owned()
+                } else {
+                    login_name(account_id, accounts)
+                }
+            },
+            |p| p.title.clone(),
+        );
         groups.insert(
             0,
             Group {
@@ -2422,6 +2431,25 @@ mod tests {
         let old = thread_honey(&[], &accounts, Some("claude"), "low", at(13, 0), &zone());
         assert_eq!(old.level, 0.2);
         assert_eq!(old.tip.lines().nth(1), Some("low: 20% left"));
+        let missing = [pool("missing", "Missing", &["removed-login"])];
+        let icon = thread_honey(
+            &missing,
+            &accounts,
+            Some("missing"),
+            "low",
+            at(13, 0),
+            &zone(),
+        );
+        assert_eq!(icon.level, 0.);
+        assert_eq!(
+            icon.tip.lines().nth(1),
+            Some("Missing: usage not available")
+        );
+        let empty = thread_honey(&[], &[], None, "", at(13, 0), &zone());
+        assert_eq!(
+            empty.tip.lines().nth(1),
+            Some("No login selected: usage not available")
+        );
         accounts[1].signed_out = true;
         let icon = thread_honey(&pools, &accounts, Some("main"), "low", at(13, 0), &zone());
         assert_eq!(icon.level, 0.2);
