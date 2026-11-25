@@ -167,7 +167,7 @@ export type Config = {
   keepAwake: boolean;
   // Mike's runner tags a signed release of main once a day for everyone
   // else's copy (src/upstream.ts): runner.json `releases`.
-  releases?: { publish: boolean; signingKey?: string; signingProvider?: string };
+  releases?: { publish: boolean; signingKey?: string; signingProvider?: string; delegate?: boolean };
   // The runner's own model calls (src/models/): the pool whose Claude
   // logins answer them (null: none, so no small jobs) and folders whose
   // threads are never sent.
@@ -261,7 +261,7 @@ export type RunnerJson = {
   // bringIn: how often a fork's runner starts a thread to bring in Mike's
   // releases (bring-in.ts): every so many days, 'important' or 'off'.
   // checkup: false stops that thread offering Mike a check-up (checkup.ts).
-  releases?: { publish?: boolean; signingKey?: string; signingProvider?: string; bringIn?: number | 'important' | 'off'; checkup?: boolean };
+  releases?: { publish?: boolean; signingKey?: string; signingProvider?: string; delegate?: boolean; bringIn?: number | 'important' | 'off'; checkup?: boolean };
   models?: { pool?: string | null; privateFolders?: string[] };
   // icon: an SF Symbol for this runner in lists (machine.ts works one out).
   // An rpcUrl left from the direct link between Macs (gone 13 Nov 2026) is ignored.
@@ -509,7 +509,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnl
     // On for everyone since 10 Nov 2026, after a few days as an experiment
     // on Mike's Mac; Settings turns it off for anyone who'd rather.
     keepAwake: json.keepAwake !== false,
-    ...(json.releases?.publish === true ? { releases: { publish: true, ...(typeof json.releases.signingKey === 'string' ? { signingKey: expand(json.releases.signingKey) } : {}), ...(typeof json.releases.signingProvider === 'string' ? { signingProvider: expand(json.releases.signingProvider) } : {}) } } : {}),
+    ...(json.releases?.publish === true ? { releases: { publish: true, ...(typeof json.releases.signingKey === 'string' ? { signingKey: expand(json.releases.signingKey) } : {}), ...(typeof json.releases.signingProvider === 'string' ? { signingProvider: expand(json.releases.signingProvider) } : {}), ...(json.releases.delegate === true ? { delegate: true } : {}) } } : {}),
     models: modelSettingsFrom(json),
     ...(codexPath ? { codexPath: expand(codexPath) } : {}),
     ...(nonEmpty(json.cursorPath) ? { cursorPath: expand(nonEmpty(json.cursorPath)!) } : {}),

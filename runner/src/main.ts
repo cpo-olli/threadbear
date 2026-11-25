@@ -1243,6 +1243,14 @@ async function main(): Promise<void> {
     // A release signed with a Touch ID key waits for Mike at the Mac, and
     // with it unlocked: over the lock screen the key signs nothing.
     atMac: async () => isAtMac(true, await hidIdleMs()) && !(await screenLocked()),
+    // The weekly release key's reminder (release-delegate.ts): starred, so
+    // Mike can't miss it.
+    remind: (r) => {
+      const id = startOwnThread(runner, r, thisRelease?.checkout);
+      runner.update({ threadId: id, starred: true });
+      return id;
+    },
+    isOpen: openThread,
     onChange: () => publishUpdates(),
     onChecked: (status) => {
       void bringIn.consider(status);

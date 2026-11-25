@@ -27,7 +27,8 @@ export const DEV_HELP = `Working on Threadbear itself:
   tb updates [check] [--json]     Mike's newest release and what this copy's main is missing
                                   (docs/bringing-in-updates.md); check fetches upstream now
   tb updates publish [--json]     Mike's runner: tags and signs today's release now, asking for
-                                  Touch ID at once (the newest commit green on every check)
+                                  Touch ID at once (the newest commit green on every check);
+                                  renews the weekly signing key first if it's due
   tb checkup [--text "note"] [--post | --skip] [--json]
                                   in someone else's copy, after bringing in a release: drafts
                                   the check-up for Mike (docs/bringing-in-updates.md, 7);

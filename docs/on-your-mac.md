@@ -843,7 +843,10 @@ File references are where to look.
   mouse have been idle (`ioreg`), so your phone knows whether you're at
   the Mac. A runner that signs releases with a Touch ID key also reads
   whether the screen is locked (`ioreg`'s console session), as it can't
-  sign until you've unlocked it.
+  sign until you've unlocked it. With `releases.delegate`, it keeps a
+  weekly signing key and its certificate in `runner/release-delegate*` in
+  the data folder, and asks for Touch ID about once a week to renew them
+  (`runner/src/release-delegate.ts`).
 - **Dialogs on the screen** (`runner/src/mac-screen.ts`): every 2 minutes it
   runs `osascript` to count the windows of macOS's UserNotificationCenter, so
   it can tell you when a dialog has been left waiting. It sees how many, not

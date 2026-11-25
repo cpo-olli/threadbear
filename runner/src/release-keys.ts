@@ -78,7 +78,117 @@ export function signerKey(armor: string): string | undefined {
   if (blob.length !== len || len < 4) return undefined;
   const typeLen = blob.readUInt32BE(0);
   const type = blob.subarray(4, 4 + typeLen).toString('latin1');
+  if (type === CERT_TYPE) return parseCert(blob)?.ca;
   return KEY_TYPE.test(type) ? `${type} ${blob.toString('base64')}` : undefined;
+}
+
+// Releases signed by a weekly key (Mike, 25 Nov 2026: a release waited
+// days for his Touch ID whenever he was away from the Mac). His Touch ID
+// key, as a certificate authority, signs an OpenSSH certificate for a
+// plain ed25519 key that's good for DELEGATE_DAYS; the runner signs each
+// day's release with that, unattended, and asks for a touch once a week
+// to make the next (release-delegate.ts). A fork takes such a signature
+// from any pinned key as the authority (authoritiesFile), checked at the
+// time the tag says it was made (certVerifyArgs), which has to be the day
+// its name says: so a weekly key that leaks is good for the days its
+// certificate covers, and the releases it could have signed are named for
+// those days, never newer than one made after it ran out. A leaked one is
+// revoked the usual way (its own public key in release-keys-revoked), and
+// revoking the authority's key stops every certificate it made.
+export const CERT_TYPE = 'ssh-ed25519-cert-v01@openssh.com';
+export const DELEGATE_DAYS = 8;
+
+export type ReleaseCert = { key: string; ca: string; principals: string[]; validAfter: number; validBefore: number };
+
+// An ed25519 certificate's fields (PROTOCOL.certkeys), times in ms, or
+// undefined for anything else (only the runner's own kind is read).
+export function parseCert(blob: Buffer): ReleaseCert | undefined {
+  let at = 0;
+  const str = (): Buffer => {
+    if (at + 4 > blob.length) throw new Error('short');
+    const n = blob.readUInt32BE(at);
+    if (at + 4 + n > blob.length) throw new Error('short');
+    const out = blob.subarray(at + 4, at + 4 + n);
+    at += 4 + n;
+    return out;
+  };
+  const u64 = (): bigint => {
+    if (at + 8 > blob.length) throw new Error('short');
+    const v = blob.readBigUInt64BE(at);
+    at += 8;
+    return v;
+  };
+  try {
+    if (str().toString('latin1') !== CERT_TYPE) return undefined;
+    str(); // nonce
+    const pk = str();
+    if (pk.length !== 32) return undefined;
+    u64(); // serial
+    if (at + 4 > blob.length) return undefined;
+    const kind = blob.readUInt32BE(at); // 1 user, 2 host
+    at += 4;
+    if (kind !== 1) return undefined;
+    str(); // key id
+    const packed = str();
+    const principals: string[] = [];
+    for (let i = 0; i < packed.length; ) {
+      const n = packed.readUInt32BE(i);
+      principals.push(packed.subarray(i + 4, i + 4 + n).toString('utf8'));
+      i += 4 + n;
+    }
+    const ms = (v: bigint) => (v > BigInt(Number.MAX_SAFE_INTEGER) / 1000n ? Number.MAX_SAFE_INTEGER : Number(v) * 1000);
+    const validAfter = ms(u64());
+    const validBefore = ms(u64());
+    str(); // critical options
+    str(); // extensions
+    str(); // reserved
+    const caBlob = str();
+    const caType = caBlob.subarray(4, 4 + caBlob.readUInt32BE(0)).toString('latin1');
+    if (!KEY_TYPE.test(caType)) return undefined;
+    const plain = Buffer.concat([Buffer.from([0, 0, 0, 11]), Buffer.from('ssh-ed25519', 'latin1'), Buffer.from([0, 0, 0, 32]), pk]);
+    return { key: `ssh-ed25519 ${plain.toString('base64')}`, ca: `${caType} ${caBlob.toString('base64')}`, principals, validAfter, validBefore };
+  } catch {
+    return undefined;
+  }
+}
+
+// The certificate an SSH signature was made with, if it was.
+export function signatureCert(armor: string): ReleaseCert | undefined {
+  const body = armor.replace(/-----(BEGIN|END) SSH SIGNATURE-----/g, '').replace(/\s+/g, '');
+  const buf = Buffer.from(body, 'base64');
+  if (buf.length < 14 || buf.subarray(0, 6).toString('latin1') !== 'SSHSIG') return undefined;
+  const len = buf.readUInt32BE(10);
+  const blob = buf.subarray(14, 14 + len);
+  return blob.length === len ? parseCert(blob) : undefined;
+}
+
+// An allowed-signers file's text with each key also trusted as an
+// authority for certificates naming the same principal, for the git
+// namespace only.
+export function withAuthorities(text: string): string {
+  const out = text.split('\n').filter((l) => l.trim());
+  for (const line of [...out]) {
+    const key = keyOf(line);
+    const principal = line.trim().split(/\s+/)[0];
+    if (key && principal && !principal.startsWith('#')) out.push(`${principal} cert-authority,namespaces="git" ${key}`);
+  }
+  return out.join('\n') + '\n';
+}
+
+// ssh-keygen's options for checking a certificate-made signature on the
+// tag `name` (release/YYYY-MM-DD) dated `date` (its tagger line): at that
+// time, which must fall on the day its name says, give or take the
+// world's time zones. Undefined when it doesn't, which fails the check.
+export function certVerifyArgs(name: string, date: string | undefined): string[] | undefined {
+  const day = /^release\/(\d{4})-(\d{2})-(\d{2})$/.exec(name);
+  const t = date ? Date.parse(date) : NaN;
+  if (!day || !Number.isFinite(t)) return undefined;
+  const start = Date.UTC(Number(day[1]), Number(day[2]) - 1, Number(day[3])) - 14 * 3_600_000;
+  const end = start + 24 * 3_600_000 + 26 * 3_600_000;
+  if (t < start || t >= end) return undefined;
+  const d = new Date(t);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return ['-O', `verify-time=${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`];
 }
 
 type Pending = { key: string; by: string; seenAt: number; tag: string };
@@ -229,7 +339,9 @@ function applyLocked(o: { home: string; signers: string; signer: string; announc
     const waiting = state.pending.find((p) => p.key === r);
     // Itself, or a key pinned after it; one still waiting, by the key that
     // announced it or a later one.
-    const may = r === o.signer || (at(r) >= 0 ? signerAt > at(r) : waiting ? at(waiting.by) >= 0 && signerAt >= at(waiting.by) : false);
+    // A key never pinned nor waiting is a weekly key's (above), or nobody's:
+    // any pinned key's release may revoke it.
+    const may = r === o.signer || (at(r) >= 0 ? signerAt > at(r) : waiting ? at(waiting.by) >= 0 && signerAt >= at(waiting.by) : true);
     if (!may) {
       if (at(r) >= 0 || waiting) out.refused.push(r);
       continue;

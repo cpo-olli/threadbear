@@ -144,7 +144,16 @@ the key that announced it is revoked first; then it's added to
 taken out at once and kept in `<home>/upstream-revoked`, which
 `ssh-keygen -Y verify` is given with `-r` on every check and which setup
 honours too, but only if that release was signed with the key itself or
-with one pinned after it. `release.commit` is the commit
+with one pinned after it. A signature may also come from a weekly key
+whose OpenSSH certificate a pinned key made (Mike's, since 25 Nov 2026:
+release-keys.ts, "Releases signed by a weekly key"): each pinned key also
+counts as a `cert-authority` for its principal, for the git namespace, and
+such a signature is checked at the tag's own tagger time
+(`-O verify-time`), which must fall on the day the tag's name says (with
+the world's time zones' slack), so the certificate's week bounds the
+names it can sign. A key in `scripts/release-keys-revoked` that was never
+pinned (a weekly key) is revoked by any pinned key's release.
+`release.commit` is the commit
 the verified tag names, and that is what a bring-in merges. It never
 changes main: bringing a release in is a thread (docs/bringing-in-updates.md).
 
@@ -223,6 +232,20 @@ main's tip as `release/<local date>` (SSH-signed, its message the subjects
 since the last release) and pushes it to origin, when there's no tag for
 today, main has moved since the last one, main's tip is an hour old, and the
 runner it's running is main's runner/, marked good and up for an hour.
+
+With `"delegate": true` and a Touch ID key, it signs with a weekly key
+instead (`runner/src/release-delegate.ts`), so a release doesn't wait for
+Mike at the Mac: a plain ed25519 key in `<home>/runner/release-delegate`,
+with a certificate from the release key good for 8 days
+(`release-delegate-cert.pub`). With 3 days left, the hourly look asks for
+Touch ID to make a new one when he's at the Mac (at most once an hour;
+`tb updates publish` asks at once), checks a signature made with it
+verifies before putting it in place, and with 36 hours left and still not
+renewed starts a starred thread asking him to (its id in
+`release-delegate.json`, one at a time). The weekly key is used only once
+the last release's `runner/src/release-keys.ts` has the check that takes
+it, and with an hour or more left; otherwise the release key signs, as
+before.
 
 ### Your changes to the old app
 

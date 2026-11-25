@@ -47,7 +47,8 @@ import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
 import { IS_WINDOWS } from './platform.ts';
 import { killGroup } from './proc.ts';
-import { ADD_DELAY_MS, applyKeyChanges, KeysBusy, keysIn, revokedPath, REVOKED_FILE, signerKey, SIGNERS_FILE } from './release-keys.ts';
+import { currentCert, delegatePaths, readDelegateState, REMIND_AHEAD_MS, RENEW_AHEAD_MS, renewDelegate, SIGN_MARGIN_MS, writeDelegateState } from './release-delegate.ts';
+import { ADD_DELAY_MS, applyKeyChanges, certVerifyArgs, KeysBusy, keysIn, revokedPath, REVOKED_FILE, signatureCert, signerKey, SIGNERS_FILE, withAuthorities } from './release-keys.ts';
 import { changelogFor, type ReleaseChangelog } from './changelog.ts';
 import { LISTING_GIT_CONFIG, parseConfigListBytes, repoProofConfig, settable, TRUSTED_SCOPES, untrustedGitEnv } from './safe-git.ts';
 
@@ -149,7 +150,9 @@ export type CiRun = { workflow: string; name: string; status: string; conclusion
 // Secure Enclave key's handle (`ssh-keygen -K`), which asks for Touch ID
 // on every signature (touchKey, publishOnce). signingProvider: the library
 // such a key signs through, /usr/lib/ssh-keychain.dylib unless set.
-export type PublishConfig = { publish: boolean; signingKey?: string; signingProvider?: string };
+// delegate: sign with a weekly key the signing key certifies, so a
+// release needn't wait for a touch (release-delegate.ts).
+export type PublishConfig = { publish: boolean; signingKey?: string; signingProvider?: string; delegate?: boolean };
 
 // How long the release signature waits for Touch ID before giving up for
 // this hour, and the library a Secure Enclave key signs through on macOS.
@@ -183,6 +186,10 @@ export type UpstreamDeps = {
   // Touch ID key is only tried then, so the prompt never sits on an empty
   // desk. Only asked for such a key.
   atMac?: () => Promise<boolean>;
+  // Mike's runner, with releases.delegate: starts the starred thread that
+  // asks him to renew the weekly key, and whether a thread is still open.
+  remind?: (r: { text: string; title: string; why: string }) => string;
+  isOpen?: (threadId: string) => boolean;
   onChange?: () => void;
   // After every check that got as far as the releases, with what it found
   // (bring-in.ts decides from it whether to start a thread).
@@ -1270,6 +1277,9 @@ export class Upstream {
       this.deps.log.warn('releases.publish is on but releases.signingKey is missing', { signingKey: publish.signingKey });
       return undefined;
     }
+    if (publish.delegate && touchKey(publish.signingKey)) {
+      await this.keepDelegate(checkout, asked).catch((e: unknown) => this.deps.log.warn('could not look after the weekly release key', { error: String(e).slice(0, 200) }));
+    }
     if (!asked && !(this.deps.runningMainSettled?.() ?? false)) return undefined;
     const now = this.deps.clock.now();
     const tip = await this.git(checkout, ['rev-parse', 'refs/heads/main']);
@@ -1351,14 +1361,19 @@ export class Upstream {
     // review finding 3, 9 Nov 2026): tried only while Mike is at the Mac,
     // given TOUCH_SIGN_TIMEOUT_MS, and held for the next hourly look if he
     // doesn't touch it. Nothing waits on it but this look.
-    const touch = touchKey(publish.signingKey);
+    // Or the weekly key, when it has time left and the last release has
+    // the check that takes it, so forks on that release already do.
+    const weekly = await this.weeklyKey(checkout, last, now);
+    const touch = !weekly && touchKey(publish.signingKey);
     if (touch && !asked && !(await (this.deps.atMac?.() ?? Promise.resolve(false)))) {
       this.hold({ commit: tip, why: 'waiting for you at the Mac to sign it with Touch ID', at: new Date(now).toISOString() });
       return undefined;
     }
     try {
-      await this.git(checkout, ['-c', 'gpg.format=ssh', '-c', `user.signingkey=${publish.signingKey}`, 'tag', '-s', '-F', file, tag, tip],
-        touch ? { owner: true, timeoutMs: TOUCH_SIGN_TIMEOUT_MS, env: { SSH_SK_PROVIDER: publish.signingProvider ?? MAC_SK_PROVIDER } } : { owner: true });
+      // A weekly key's tag is dated by the same clock that named it: forks
+      // check the certificate at that time, on that day (certVerifyArgs).
+      await this.git(checkout, ['-c', 'gpg.format=ssh', '-c', `user.signingkey=${weekly ?? publish.signingKey}`, 'tag', '-s', '-F', file, tag, tip],
+        weekly ? { owner: true, env: { SSH_AUTH_SOCK: '', GIT_COMMITTER_DATE: `${Math.floor(now / 1000)} +0000` } } : touch ? { owner: true, timeoutMs: TOUCH_SIGN_TIMEOUT_MS, env: { SSH_SK_PROVIDER: publish.signingProvider ?? MAC_SK_PROVIDER } } : { owner: true });
     } catch (e) {
       if (!touch) throw e;
       await this.git(checkout, ['tag', '-d', tag]).catch(() => undefined);
@@ -1389,6 +1404,51 @@ export class Upstream {
     this.deps.log.info('tagged a release', { tag, commit: tip });
     this.set({ ...this.st, published: { tag, at: new Date(now).toISOString() } });
     return tag;
+  }
+
+  // The weekly key's certificate file to sign with (release-delegate.ts),
+  // or undefined to sign with the release key itself.
+  private async weeklyKey(checkout: string, last: string | undefined, now: number): Promise<string | undefined> {
+    if (!this.deps.publish?.delegate || !last) return undefined;
+    const cert = currentCert(this.deps.home);
+    if (!cert || cert.validAfter > now || cert.validBefore - now < SIGN_MARGIN_MS) return undefined;
+    const forks = await this.committedFile(checkout, `refs/tags/${last}`, 'runner/src/release-keys.ts').catch(() => '');
+    return forks.includes('cert-authority') ? delegatePaths(this.deps.home).cert : undefined;
+  }
+
+  // Renews the weekly key when it's near its end and Mike is at the Mac
+  // (or asked, with tb updates publish), at most once an hour; and when
+  // it's nearer still, starts a starred thread so he can't miss it.
+  private lastRenewTry = 0;
+  private async keepDelegate(checkout: string, asked: boolean): Promise<void> {
+    const { publish, home, clock, log } = this.deps;
+    if (!publish?.signingKey) return;
+    const now = clock.now();
+    let left = (currentCert(home)?.validBefore ?? 0) - now;
+    if (left < RENEW_AHEAD_MS && (asked || now - this.lastRenewTry >= 60 * 60_000) && (asked || (await (this.deps.atMac?.() ?? Promise.resolve(false))))) {
+      this.lastRenewTry = now;
+      const signers = await this.committedFile(checkout, 'refs/heads/main', SIGNERS_FILE);
+      try {
+        const c = await renewDelegate({ home, signingKey: publish.signingKey, provider: publish.signingProvider ?? MAC_SK_PROVIDER, signers, now, timeoutMs: TOUCH_SIGN_TIMEOUT_MS });
+        left = c.validBefore - now;
+        log.info('renewed the weekly release key', { until: new Date(c.validBefore).toISOString() });
+      } catch (e) {
+        log.info('the weekly release key was not renewed', { error: String((e as Error).message ?? e).slice(0, 200) });
+      }
+    }
+    if (left >= REMIND_AHEAD_MS || !this.deps.remind) return;
+    const state = readDelegateState(home);
+    if (state.remindThread && this.deps.isOpen?.(state.remindThread)) return;
+    const until = left > 0 ? `runs out ${new Date(now + left).toLocaleString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}` : 'has run out';
+    const id = this.deps.remind({
+      title: 'Renew the release signing key',
+      why: 'the weekly key that signs releases needs your Touch ID',
+      text: `The weekly key that signs Threadbear's daily releases ${until}, and the Mac hasn't caught Mike there to renew it. Until it's renewed, each release waits for his Touch ID.
+
+Don't run anything yet: the renewal pops up a Touch ID prompt that only works while he's at the Mac. End your turn with one ask: "Renew the release signing key now? Press Touch ID when it pops up", options "Renew now" and "Later". When he says to, run \`tb updates publish\` (it renews the key first, then puts out today's release if one is due) and tell him in a line whether it worked; if the key was renewed, archive this thread.`,
+    });
+    writeDelegateState(home, { remindThread: id });
+    log.info('started a thread to renew the weekly release key', { threadId: id });
   }
 
   // Deletes the local tag if it's still `oid`. One left behind isn't on
@@ -1705,12 +1765,24 @@ async function sshVerified(signed: SignedTag, signers: string, revoked?: string)
   try {
     const sig = path.join(dir, 'tag.sig');
     fs.writeFileSync(sig, signed.signature, { mode: 0o600 });
-    const found = await run('ssh-keygen', ['-Y', 'find-principals', '-f', signers, '-s', sig]);
+    // A weekly key's certificate (release-keys.ts, "Releases signed by a
+    // weekly key"): checked at the time the tag was made, which has to be
+    // the day its name says; the pinned keys count as its authority too.
+    let when: string[] = [];
+    if (signatureCert(signed.signature)) {
+      const name = /\ntag ([^\n]+)\n/.exec(signed.payload.toString('latin1'))?.[1] ?? '';
+      const args = certVerifyArgs(name, signed.date);
+      if (!args) return false;
+      when = args;
+    }
+    const allowed = path.join(dir, 'signers');
+    fs.writeFileSync(allowed, withAuthorities(fs.readFileSync(signers, 'utf8')), { mode: 0o600 });
+    const found = await run('ssh-keygen', ['-Y', 'find-principals', '-f', allowed, '-s', sig, ...when]);
     if (found.code !== 0) return false;
     for (const principal of found.stdout.split('\n').map((l) => l.trim()).filter(Boolean)) {
       // A revoked key is refused even if it were still in the pinned file.
       const r = revoked && fs.existsSync(revoked) && fs.statSync(revoked).size > 0 ? ['-r', revoked] : [];
-      const v = await run('ssh-keygen', ['-Y', 'verify', '-f', signers, '-I', principal, '-n', 'git', '-s', sig, ...r], signed.payload);
+      const v = await run('ssh-keygen', ['-Y', 'verify', '-f', allowed, '-I', principal, '-n', 'git', '-s', sig, ...r, ...when], signed.payload);
       if (v.code === 0) return true;
     }
     return false;
