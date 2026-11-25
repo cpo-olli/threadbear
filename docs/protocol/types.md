@@ -243,6 +243,9 @@ type ThreadSummary = {
                         // shown under Coordinators before Starred, even asleep.
                         // Archived still wins. Missing or malformed: ordinary thread.
                         // Mirrored in thread/index rows from backend API 102.
+                        // No registry on another Mac is required to show its row.
+                        // Reading leaves open questions waiting; replying uses
+                        // the ordinary message and card-answer paths.
   starredAt?: string    // Mike starred it, at this time: it stays in the
                         // Starred section above the Inbox, hibernating or
                         // not, oldest star first. Kept while archived, when

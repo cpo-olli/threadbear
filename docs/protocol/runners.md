@@ -14,7 +14,10 @@ other, and the app never connects to another Mac.
   `threadIndex` row per thread there: `threadId, title, cwd, accountId,
   provider, model?, status, needsYou, unread, preview, createdAt,
   lastActivityAt, snoozedUntil?, archivedAt?, startedBy?, asked?, keywords?,
-  permissionMode?`
+  permissionMode?, coordinatorProjectId?`
+  (`coordinatorProjectId` from API 102, an optional nonempty project id for
+  the Coordinators section above Starred; ignored when malformed and archived
+  still wins. It remains on the relay summary when that thread opens.)
   (`startedBy` from API 23, without its `threadId`; `asked` from API 32; `keywords` from API 74;
   `permissionMode` from API 88, which the backend cuts to 16 bytes for a
   runner key). Another Mac's composer shows a thread's `permissionMode` as
@@ -108,7 +111,7 @@ type VirtualRunner = { id: string, name: string, provider: string }
 type RemoteThread = { runnerId: string, threadId: string, title, cwd,
   accountId, poolId?: string, provider, model?, status: ThreadStatus, needsYou: boolean,
   unread: boolean, preview, createdAt, lastActivityAt, snoozedUntil?,
-  archivedAt? }
+  archivedAt?, coordinatorProjectId?: string }
 ```
 
 - **The direct link** (13 Nov 2026, gone). Until then the app could

@@ -135,6 +135,9 @@ pub struct ThreadSummary {
     pub woke: Option<Value>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub starred_at: Option<String>,
+    /// A coordinator can arrive from another runner without its local registry.
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub coordinator_project_id: Option<String>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub archived_at: Option<String>,
     /// The quiet inbox archived it (protocol "Inbox guess"): only while
@@ -620,6 +623,11 @@ impl ThreadSummary {
     pub fn is_archived(&self) -> bool {
         self.archived_at.is_some()
     }
+    pub fn is_coordinator(&self) -> bool {
+        self.coordinator_project_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+    }
     pub fn is_starred(&self) -> bool {
         self.starred_at.is_some()
     }
@@ -905,8 +913,8 @@ fn sections_with<'a, T: Borrow<ThreadSummary> + Clone + 'a>(
     wakes: &HashMap<String, Wake>,
     nesting: Option<&crate::nested::Nesting>,
 ) -> Vec<Section<T>> {
-    let (mut starred, mut inbox, mut running, mut hibernating, mut archived) =
-        (vec![], vec![], vec![], vec![], vec![]);
+    let (mut coordinators, mut starred, mut inbox, mut running, mut hibernating, mut archived) =
+        (vec![], vec![], vec![], vec![], vec![], vec![]);
     for row in threads {
         let t = summary(row);
         if nesting.is_some_and(|n| n.is_nested(&t.id)) {
@@ -917,6 +925,7 @@ fn sections_with<'a, T: Borrow<ThreadSummary> + Clone + 'a>(
             .map(|g| g.section)
             .unwrap_or_else(|| section_of(t, now_ms, wakes));
         let section = match key {
+            "coordinators" => &mut coordinators,
             "archived" => &mut archived,
             "starred" => &mut starred,
             "hibernating" => &mut hibernating,
@@ -939,6 +948,7 @@ fn sections_with<'a, T: Borrow<ThreadSummary> + Clone + 'a>(
         },
     };
     sort_sections(
+        coordinators,
         starred,
         inbox,
         running,
@@ -950,12 +960,14 @@ fn sections_with<'a, T: Borrow<ThreadSummary> + Clone + 'a>(
     )
 }
 
-/// Which section a thread goes under: "starred", "inbox", "running",
-/// "hibernating" or "archived" (`sections_ordered`'s rules, for counting one
+/// Which section a thread goes under: "coordinators", "starred", "inbox",
+/// "running", "hibernating" or "archived" (`sections_ordered`'s rules, for counting one
 /// without building them all).
 pub fn section_of(t: &ThreadSummary, now_ms: i64, wakes: &HashMap<String, Wake>) -> &'static str {
-    if t.is_archived() {
+    if t.is_archived() || t.wait_state() == Some("archived") {
         "archived"
+    } else if t.is_coordinator() {
+        "coordinators"
     } else if t.is_starred() {
         "starred"
     } else if let Some(state) = t.wait_state() {
@@ -1063,6 +1075,7 @@ struct SortKeys {
     reason = "baselined when the lint was turned on (20 Nov 2026); take it off when this is next split up"
 )]
 fn sort_sections<T: Borrow<ThreadSummary>>(
+    mut coordinators: Vec<T>,
     mut starred: Vec<T>,
     mut inbox: Vec<T>,
     mut running: Vec<T>,
@@ -1078,6 +1091,12 @@ fn sort_sections<T: Borrow<ThreadSummary>>(
     // Inbox with this on every frame).
     use std::cmp::Reverse;
     let newest_first = |t: &ThreadSummary| (Reverse(keys(t).activity_ms), t.id.clone());
+    coordinators.sort_by(|a, b| {
+        let (a, b) = (summary(a), summary(b));
+        a.coordinator_project_id
+            .cmp(&b.coordinator_project_id)
+            .then_with(|| a.id.cmp(&b.id))
+    });
     starred.sort_by(|a, b| {
         let (a, b) = (summary(a), summary(b));
         a.starred_at
@@ -1116,6 +1135,7 @@ fn sort_sections<T: Borrow<ThreadSummary>>(
     hibernating.sort_by_cached_key(|t| (wakes_at(summary(t)), newest_first(summary(t))));
     archived.sort_by_cached_key(|t| (Reverse(summary(t).archived_ms()), summary(t).id.clone()));
     [
+        ("coordinators", "Coordinators", coordinators),
         ("starred", "Starred", starred),
         ("inbox", "Inbox", inbox),
         ("running", "Running", running),
@@ -1401,6 +1421,34 @@ mod tests {
             None,
             "Mike called it off himself"
         );
+    }
+
+    #[test]
+    fn coordinator_hints_decode_leniently_and_keep_their_section_when_read() {
+        for value in [Value::Null, json!(3), json!({}), json!(""), json!("  ")] {
+            let row = thread(1, json!({"coordinatorProjectId": value}));
+            assert!(!row.is_coordinator());
+            assert_eq!(section_of(&row, now(), &HashMap::new()), "inbox");
+        }
+        let row = thread(
+            1,
+            json!({"coordinatorProjectId":"p_a", "waitState":"card", "needs":"you", "lastSeenSeq":10}),
+        );
+        assert!(row.is_coordinator());
+        assert_eq!(section_of(&row, now(), &HashMap::new()), "coordinators");
+        assert_eq!(needs_you_count([&row], now()), 1);
+        let sleeping = thread(
+            2,
+            json!({"coordinatorProjectId":"p_b", "waitState":"hibernating", "snoozedUntil":"9999-12-31T00:00:00Z"}),
+        );
+        let gone = thread(
+            3,
+            json!({"coordinatorProjectId":"p_c", "archivedAt":"2026-11-06T09:00:00Z"}),
+        );
+        let rows = vec![sleeping, gone, row];
+        let sections = sections(rows.iter(), now());
+        assert_eq!(ids(&sections, "coordinators"), ["t1", "t2"]);
+        assert_eq!(ids(&sections, "archived"), ["t3"]);
     }
 
     fn thread(n: u32, over: Value) -> ThreadSummary {

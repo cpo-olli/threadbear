@@ -97,6 +97,7 @@ export const DRAWN: Record<string, DrawRow> = {
   'turn.next': { what: "Done card's follow-ups", ios: 'yes', android: 'yes', web: 'yes', sign: { ios: 'nextPicks', android: 'sendFollowUps', web: 'followUpMessage' } },
   'turn.review': { what: "Another lab's review ledger", ios: 'yes', android: 'yes', web: 'yes', sign: { ios: 'LabReviewText', android: 'LabReviewText', web: 'LabReviewLedger' } },
   'turn.looseEnds': { what: "Done card's loose ends", ios: 'yes', android: 'yes', web: 'yes' },
+  'section.coordinators': { what: 'Coordinators section', ios: 'yes', android: 'yes', web: 'yes', sign: { ios: 'coordinators', android: 'COORDINATORS', web: 'coordinators' } },
   'section.starred': { what: 'Starred section', ios: 'yes', android: 'yes', web: 'yes', sign: { android: 'STARRED' } },
   'section.inbox': { what: 'Inbox section', ios: 'yes', android: 'yes', web: 'yes', sign: { android: 'INBOX' } },
   'section.running': { what: 'Running section', ios: 'yes', android: 'yes', web: 'yes', sign: { android: 'RUNNING' } },

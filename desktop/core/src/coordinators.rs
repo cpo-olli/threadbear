@@ -129,6 +129,29 @@ pub fn sections(
             }
         }
     }
+    // Another runner sends the optional summary hint, not its local registry.
+    // Take those rows too, in a stable order independent of their last event.
+    let mut remote = Vec::new();
+    for section in &mut sections {
+        if section.key == "archived" {
+            continue;
+        }
+        let mut ordinary = Vec::new();
+        for row in std::mem::take(&mut section.rows) {
+            if row.is_coordinator() {
+                remote.push(row);
+            } else {
+                ordinary.push(row);
+            }
+        }
+        section.rows = ordinary;
+    }
+    remote.sort_by(|a, b| {
+        a.coordinator_project_id
+            .cmp(&b.coordinator_project_id)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    rows.extend(remote);
     sections.retain(|s| !s.rows.is_empty() || s.key == "inbox");
     if !rows.is_empty() {
         sections.insert(
@@ -157,6 +180,39 @@ mod tests {
         ] {
             assert!(Coordinator::decode(&v).is_none());
         }
+    }
+
+    #[test]
+    fn metadata_keeps_remote_coordinators_pinned_without_a_registry() {
+        let remote = Arc::new(ThreadSummary {
+            id: "remote".into(),
+            coordinator_project_id: Some("p_remote".into()),
+            ..Default::default()
+        });
+        let ordinary = Arc::new(ThreadSummary {
+            id: "ordinary".into(),
+            ..Default::default()
+        });
+        let result = sections(
+            vec![Section {
+                key: "inbox",
+                title: "Inbox",
+                rows: vec![ordinary, remote.clone()],
+            }],
+            &[],
+        );
+        assert_eq!(result[0].key, "coordinators");
+        assert_eq!(result[0].rows[0].id, "remote");
+        assert_eq!(result[1].rows[0].id, "ordinary");
+        let result = sections(
+            vec![Section {
+                key: "archived",
+                title: "Archived",
+                rows: vec![remote],
+            }],
+            &[],
+        );
+        assert_eq!(result[0].key, "archived");
     }
 
     #[test]
