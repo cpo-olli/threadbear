@@ -234,7 +234,7 @@ test("Mike's runner signs with the weekly key, and a fork takes it", async () =>
   assert.equal((await upstreamFor(w.theirs, w.home, clock).check()).release?.tag, tag);
 });
 
-test("the release key signs instead until forks have the check, when the weekly key's run out, is revoked, isn't its key's, or doesn't vouch for the key files", async () => {
+test("the release key signs instead until forks have the check, when the weekly key's run out, is revoked, isn't its key's, or doesn't vouch for the key files", { timeout: 240_000 }, async () => {
   for (const how of ['no check yet', 'ran out', 'revoked', 'mismatched', 'key change'] as const) {
     const w = world();
     if (how === 'no check yet') {
@@ -330,7 +330,8 @@ test('renewDelegate makes a key the release key certifies for these key files, c
   assert.deepEqual(currentCert(w.home), c);
   assert.ok(usableCert(w.home, w.mikeKey.priv, signers, revoked));
   assert.equal(usableCert(w.home, w.mikeKey.priv, signers, `${c.key}\n`), undefined, 'revoked, and other key files');
-  assert.equal(fs.statSync(delegatePaths(w.home).key).mode & 0o077, 0, 'the key is private');
+  // Unix permissions (Windows has none to read this way).
+  if (process.platform !== 'win32') assert.equal(fs.statSync(delegatePaths(w.home).key).mode & 0o077, 0, 'the key is private');
 
   // A key that isn't in release-signers isn't certified.
   const stranger = key(w.root, 'stranger');
@@ -419,7 +420,8 @@ test("an older release read for revocations doesn't let a waiting key in", () =>
   assert.equal(fs.readFileSync(signers, 'utf8').includes(pubOf(evil)), false);
 });
 
-test("a run of weekly keys' releases whose week is over doesn't keep a fork from older ones", async () => {
+// Twenty-two signed tags: git on Windows CI takes over a minute for them.
+test("a run of weekly keys' releases whose week is over doesn't keep a fork from older ones", { timeout: 240_000 }, async () => {
   const w = world();
   const real = release(w, 'release/2026-10-05', w.mikeKey.priv);
   const k = weekly(w, 'week', '20261006Z:20261014Z');
