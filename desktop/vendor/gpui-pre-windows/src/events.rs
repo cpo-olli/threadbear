@@ -440,9 +440,9 @@ impl WindowsWindowInner {
         };
         let scale_factor = self.state.scale_factor.get();
         let position = |p: POINT| logical_point(p.x as f32, p.y as f32, scale_factor);
-        // Where the last WM_MOUSEMOVE left it: a window came up over it.
+        // Where the last move left it: a window came up over it.
         let stationary = position(cursor) == self.state.mouse_position.get();
-        let Some(left) = pointer_left_to(cursor, client, under, stationary) else {
+        let Some(to) = pointer_left_to(cursor, client, under, stationary) else {
             return;
         };
         let Some(mut func) = self.state.callbacks.input.take() else {
@@ -450,21 +450,19 @@ impl WindowsWindowInner {
         };
         let modifiers = current_modifiers();
         func(PlatformInput::MouseExited(MouseExitEvent {
-            position: position(left.exit_at),
+            position: position(cursor),
             pressed_button: None,
             modifiers,
         }));
-        if let Some(to) = left.move_to {
-            let to = position(to);
-            // So a move back in to where it left isn't taken for a repaint's
-            // synthetic `WM_MOUSEMOVE` and dropped.
-            self.state.mouse_position.set(to);
-            func(PlatformInput::MouseMove(MouseMoveEvent {
-                position: to,
-                pressed_button: None,
-                modifiers,
-            }));
-        }
+        let to = position(to);
+        // So a move back in to where it left isn't taken for a repaint's
+        // synthetic `WM_MOUSEMOVE` and dropped.
+        self.state.mouse_position.set(to);
+        func(PlatformInput::MouseMove(MouseMoveEvent {
+            position: to,
+            pressed_button: None,
+            modifiers,
+        }));
         self.state.callbacks.input.set(Some(func));
     }
 
@@ -1103,8 +1101,12 @@ impl WindowsWindowInner {
             y: lparam.signed_hiword().into(),
         };
         unsafe { ScreenToClient(handle, &mut cursor_point).ok().log_err() };
+        let position = logical_point(cursor_point.x as f32, cursor_point.y as f32, scale_factor);
+        // Where GPUI's pointer is, title bar included: `dispatch_pointer_left`
+        // compares with it, and so does the client moves' synthetic-move check.
+        self.state.mouse_position.set(position);
         let input = PlatformInput::MouseMove(MouseMoveEvent {
-            position: logical_point(cursor_point.x as f32, cursor_point.y as f32, scale_factor),
+            position,
             pressed_button: None,
             modifiers: current_modifiers(),
         });
@@ -1906,28 +1908,23 @@ enum Under {
     AnotherWindow,
 }
 
-/// What to tell GPUI when the pointer leaves, in client device pixels.
-#[derive(Debug, PartialEq)]
-struct PointerLeft {
-    exit_at: POINT,
-    /// A move to send after `MouseExited`, so GPUI's pointer is off the
-    /// window: hover styles and tooltips go by its position.
-    move_to: Option<POINT>,
-}
-
-/// `None` when the pointer only went into this window's own title bar: that's
-/// inside the client area, and `WM_NCMOUSEMOVE` goes on reporting it. Off the
-/// client area, GPUI's pointer goes where it went. Onto a child window, or a
-/// window overlapping this one, just outside the client area, so nothing of
-/// this window stays hovered. But under a window that came up over a pointer
-/// that hadn't moved (`stationary`: a toast, Alt-Tab), only `MouseExited`: a
-/// move would be taken for mouse input and end keyboard mode (its focus rings).
+/// Where to move GPUI's pointer, after `MouseExited`, when Windows says it
+/// left the window, in client device pixels like `cursor`. Off the client
+/// area, where it went. Onto a child window, or a window overlapping this one,
+/// just outside the client area, so nothing of this window stays hovered.
+///
+/// `None`, sending nothing, when it only went into this window's own title bar
+/// (inside the client area, and `WM_NCMOUSEMOVE` goes on reporting it), or
+/// when a window came up over a pointer that hadn't moved (`stationary`: a
+/// toast, Alt-Tab): a move then would be taken for mouse input and end keyboard
+/// mode (its focus rings), and an exit alone is undone at the next paint, as
+/// GPUI's hit test still has the pointer where it was.
 fn pointer_left_to(
     cursor: POINT,
     client: RECT,
     under: Under,
     stationary: bool,
-) -> Option<PointerLeft> {
+) -> Option<POINT> {
     let inside = cursor.x >= client.left
         && cursor.x < client.right
         && cursor.y >= client.top
@@ -1937,19 +1934,10 @@ fn pointer_left_to(
         y: client.top - 1,
     };
     match (inside, under) {
-        (false, _) => Some(PointerLeft {
-            exit_at: cursor,
-            move_to: Some(cursor),
-        }),
+        (false, _) => Some(cursor),
         (true, Under::ThisWindow) => None,
-        (true, Under::AnotherWindow) if stationary => Some(PointerLeft {
-            exit_at: cursor,
-            move_to: None,
-        }),
-        (true, Under::ChildWindow | Under::AnotherWindow) => Some(PointerLeft {
-            exit_at: cursor,
-            move_to: Some(just_outside),
-        }),
+        (true, Under::AnotherWindow) if stationary => None,
+        (true, Under::ChildWindow | Under::AnotherWindow) => Some(just_outside),
     }
 }
 
@@ -1963,20 +1951,15 @@ mod pointer_left_tests {
         right: 2506,
         bottom: 1653,
     };
-
-    fn moved(to: POINT, exit_at: POINT) -> Option<PointerLeft> {
-        Some(PointerLeft {
-            exit_at,
-            move_to: Some(to),
-        })
-    }
+    const MIDDLE: POINT = POINT { x: 900, y: 600 };
+    const JUST_OUTSIDE: POINT = POINT { x: -1, y: -1 };
 
     #[test]
     fn off_the_window_onto_the_desktop_goes_where_the_cursor_is() {
         let cursor = POINT { x: 3140, y: 1820 };
         assert_eq!(
             pointer_left_to(cursor, CLIENT, Under::AnotherWindow, false),
-            moved(cursor, cursor)
+            Some(cursor)
         );
     }
 
@@ -1985,7 +1968,7 @@ mod pointer_left_tests {
         let cursor = POINT { x: -4, y: 600 };
         assert_eq!(
             pointer_left_to(cursor, CLIENT, Under::ThisWindow, false),
-            moved(cursor, cursor)
+            Some(cursor)
         );
     }
 
@@ -1997,31 +1980,25 @@ mod pointer_left_tests {
 
     #[test]
     fn onto_a_child_window_goes_just_outside() {
-        let cursor = POINT { x: 900, y: 600 };
         assert_eq!(
-            pointer_left_to(cursor, CLIENT, Under::ChildWindow, false),
-            moved(POINT { x: -1, y: -1 }, cursor)
+            pointer_left_to(MIDDLE, CLIENT, Under::ChildWindow, false),
+            Some(JUST_OUTSIDE)
         );
     }
 
     #[test]
     fn onto_a_window_overlapping_this_one_goes_just_outside() {
-        let cursor = POINT { x: 900, y: 600 };
         assert_eq!(
-            pointer_left_to(cursor, CLIENT, Under::AnotherWindow, false),
-            moved(POINT { x: -1, y: -1 }, cursor)
+            pointer_left_to(MIDDLE, CLIENT, Under::AnotherWindow, false),
+            Some(JUST_OUTSIDE)
         );
     }
 
     #[test]
-    fn under_a_window_that_came_up_over_a_still_pointer_only_exits() {
-        let cursor = POINT { x: 900, y: 600 };
+    fn under_a_window_that_came_up_over_a_still_pointer_sends_nothing() {
         assert_eq!(
-            pointer_left_to(cursor, CLIENT, Under::AnotherWindow, true),
-            Some(PointerLeft {
-                exit_at: cursor,
-                move_to: None,
-            })
+            pointer_left_to(MIDDLE, CLIENT, Under::AnotherWindow, true),
+            None
         );
     }
 
@@ -2030,7 +2007,7 @@ mod pointer_left_tests {
         let cursor = POINT { x: 2506, y: 1653 };
         assert_eq!(
             pointer_left_to(cursor, CLIENT, Under::ThisWindow, false),
-            moved(cursor, cursor)
+            Some(cursor)
         );
     }
 }
