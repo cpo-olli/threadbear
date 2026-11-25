@@ -35,7 +35,8 @@
 # next to its Node. Like launchd, it starts the runner again when it
 # exits 0 (runner.restart, tb restart), and stops when it exits with an
 # error. Ctrl-C, or `kill <pid>` with the pid it prints, stops it and the
-# CLIs it started.
+# CLIs it started. Wait for "The dev runner stopped." before starting it
+# again: kill sends the request and returns before shutdown finishes.
 set -euo pipefail
 
 # THREADBARE_* was the old name for these variables: each stands in for its new name.
@@ -189,6 +190,7 @@ echo "A thread:    $(printf '%q' "$TB") new \"say hi\" --model claude-haiku-5-5 
 echo "On Codex:    $(printf '%q' "$TB") new \"say hi\" --account codex-main --model gpt-6-luna --effort low --wait"
 echo "For the app: $(printf '%q' "$(cd "$RUNNER_DIR/.." && pwd)/desktop/scripts/dev-app.sh") start --home $(printf '%q' "$DATA_HOME")"
 echo "Stop it:     kill $$   (never pkill: the real runner runs src/main.ts too)"
+echo 'Wait for:    The dev runner stopped. (shutdown can take a moment)'
 echo
 
 cd "$RUNNER_DIR"
@@ -205,6 +207,7 @@ forget_home() {
 }
 stop() {
   trap - INT TERM HUP
+  echo "Stopping the dev runner; waiting for its child to finish cleanup..."
   if [ -n "$CHILD" ]; then
     kill -TERM "$CHILD" 2>/dev/null || true
     wait "$CHILD" 2>/dev/null || true
