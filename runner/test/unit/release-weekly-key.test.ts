@@ -39,6 +39,10 @@ function noonUtc(): number {
   return noon <= Date.now() ? noon : noon - 24 * 60 * 60_000;
 }
 
+// A fork whose clock is inside the test certificates' week (29 Oct to 6
+// Nov 2026): it takes a weekly key's release only while that's good now.
+const forkAt = (w: World, iso = '2026-11-05T00:00:00Z') => upstreamFor(w.theirs, w.home, new FakeClock(Date.parse(iso)));
+
 const armorOf = (tag: string) => tag.slice(tag.indexOf('-----BEGIN SSH SIGNATURE-----')) + '\n';
 
 // A release tag signed with a weekly key's certificate, dated `date`.
@@ -60,7 +64,7 @@ test('a fork takes a release signed by a weekly key its pinned key certified', a
   const tip = commit(w.mike, 'b.txt', 'Work');
   certTag(w.mike, 'release/2026-10-30', k.cert, '2026-10-30T10:00:00Z');
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  const s = await upstreamFor(w.theirs, w.home).check();
+  const s = await forkAt(w).check();
   assert.equal(s.release?.tag, 'release/2026-10-30', s.reason ?? '');
   assert.equal(s.release?.commit, tip);
   // The release counts as the pinned key's, for the key rules.
@@ -77,7 +81,7 @@ test("not when the tag's date is outside the certificate, or not the day its nam
   commit(w.mike, 'c.txt', 'Backdated, under a newer name');
   certTag(w.mike, 'release/2026-11-21', k.cert, '2026-11-01T10:00:00Z');
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  const s = await upstreamFor(w.theirs, w.home).check();
+  const s = await forkAt(w).check();
   assert.equal(s.release?.tag, 'release/2026-10-01', `${s.state} ${s.reason ?? ''}`);
 });
 
@@ -103,13 +107,13 @@ test("not a certificate from a key that isn't pinned, nor a weekly key that's be
   commit(w.mike, 'b.txt', 'Certified by a stranger');
   certTag(w.mike, 'release/2026-10-30', theirs.cert, '2026-10-30T10:00:00Z');
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  assert.equal((await upstreamFor(w.theirs, w.home).check()).release?.tag, 'release/2026-10-01');
+  assert.equal((await forkAt(w).check()).release?.tag, 'release/2026-10-01');
 
   const leaked = weekly(w, 'leaked', '20261029Z:20261106Z');
   commit(w.mike, 'c.txt', 'Signed by a leaked weekly key');
   certTag(w.mike, 'release/2026-10-31', leaked.cert, '2026-10-31T10:00:00Z');
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  const up = upstreamFor(w.theirs, w.home);
+  const up = forkAt(w);
   assert.equal((await up.check()).release?.tag, 'release/2026-10-31', 'taken until it is revoked');
   // Revoked, on the same runner: not from an answer kept from before.
   fs.writeFileSync(weeklyRevokedPath(w.home), `${leaked.pub}\n`);
@@ -123,7 +127,7 @@ test("not a weekly key's release whose key files aren't the ones its certificate
   commitFile(w, 'scripts/release-signers', fs.readFileSync(w.mikeKey.signers, 'utf8') + fs.readFileSync(attacker.signers, 'utf8'), 'Announce a key of their own');
   certTag(w.mike, 'release/2026-10-30', k.cert, '2026-10-30T10:00:00Z');
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  assert.equal((await upstreamFor(w.theirs, w.home).check()).release?.tag, 'release/2026-10-01');
+  assert.equal((await forkAt(w).check()).release?.tag, 'release/2026-10-01');
   const pending = fs.existsSync(keyStatePath(w.home)) ? (JSON.parse(fs.readFileSync(keyStatePath(w.home), 'utf8')).pending as unknown[]) : [];
   assert.equal(pending.length, 0, 'its key not announced');
 });
@@ -136,7 +140,7 @@ test("not a certificate for a kind of key the check can't read the dates of", as
   commit(w.mike, 'b.txt', 'An ecdsa weekly key');
   certTag(w.mike, 'release/2026-10-30', `${priv}-cert.pub`, '2026-10-30T10:00:00Z');
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  assert.equal((await upstreamFor(w.theirs, w.home).check()).release?.tag, 'release/2026-10-01');
+  assert.equal((await forkAt(w).check()).release?.tag, 'release/2026-10-01');
 });
 
 test('a fork away the day a key change went out takes it from the next weekly-signed release', async () => {
@@ -148,7 +152,7 @@ test('a fork away the day a key change went out takes it from the next weekly-si
   commit(w.mike, 'c.txt', 'Weekly');
   certTag(w.mike, 'release/2026-10-30', k.cert, '2026-10-30T10:00:00Z');
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  assert.equal((await upstreamFor(w.theirs, w.home).check()).release?.tag, 'release/2026-10-30');
+  assert.equal((await forkAt(w).check()).release?.tag, 'release/2026-10-30');
   const pending = JSON.parse(fs.readFileSync(keyStatePath(w.home), 'utf8')).pending as { key: string }[];
   assert.deepEqual(pending.map((p) => p.key), [pubOf(next)]);
 });
@@ -163,7 +167,7 @@ test('a revocation in an older release still counts when a revoked weekly key si
   git(w.mike, '-c', 'gpg.format=ssh', '-c', `user.signingkey=${w.mikeKey.priv}`, 'tag', '-s', '-m', 'Threadbear release/2026-10-29', 'release/2026-10-29');
   certTag(w.mike, 'release/2026-10-30', leaked.cert, '2026-10-30T10:00:00Z', b);
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  const s = await upstreamFor(w.theirs, w.home).check();
+  const s = await forkAt(w).check();
   assert.equal(s.release?.tag, 'release/2026-10-29', s.reason ?? '');
   assert.deepEqual(readWeeklyRevoked(w.home), [leaked.pub]);
 });
@@ -286,7 +290,7 @@ test("Mike's runner waits for UTC's day rather than ask for Touch ID, unless he 
 // every check's places, or a release revoking a key stays out of sight.
 test("a flood of tags that never verify doesn't hide a revocation, not even for a check", async () => {
   const w = world();
-  const up = upstreamFor(w.theirs, w.home);
+  const up = forkAt(w);
   assert.equal((await up.check()).release?.tag, 'release/2026-10-01', 'what the fork had');
   const leaked = weekly(w, 'leaked', '20261029Z:20261106Z');
   const b = commit(w.mike, 'b.txt', 'Something bad, never released');
@@ -372,27 +376,20 @@ test('revokedPath is where a fork keeps revoked keys', () => {
   assert.equal(weeklyRevokedPath('/h'), `${revokedPath('/h')}-weekly`);
 });
 
-// Codex's seventh look: a fresh copy, with nothing kept to start from.
-test("a fresh copy doesn't take a revoked weekly key's release either", async () => {
+// Codex's reviews: a weekly key's release is taken only in its week, so
+// however the tags are arranged, a leaked one is good for that long.
+test("a weekly key's release isn't taken once its week is over, fresh copy or not", async () => {
   const w = world();
-  const leaked = weekly(w, 'leaked', '20261029Z:20261106Z');
-  const b = commit(w.mike, 'b.txt', 'Something bad, never released');
-  commitFile(w, 'scripts/release-keys-revoked', `${leaked.pub}\n`, 'Revoke the leaked weekly key');
-  git(w.mike, '-c', 'gpg.format=ssh', '-c', `user.signingkey=${w.mikeKey.priv}`, 'tag', '-s', '-m', 'Threadbear release/2026-10-29', 'release/2026-10-29');
-  certTag(w.mike, 'release/2026-10-30', leaked.cert, '2026-10-30T10:00:00Z', b);
-  const junk = weekly(w, 'junk', '20261029Z:20261231Z', key(w.root, 'stranger').priv);
-  for (let day = 1; day <= 19; day++) certTag(w.mike, `release/2026-11-${String(day).padStart(2, '0')}`, junk.cert, `2026-11-${String(day).padStart(2, '0')}T10:00:00Z`, b);
+  const leaked = weekly(w, 'leaked', '20261102Z:20261110Z');
+  commit(w.mike, 'b.txt', 'Something bad');
+  certTag(w.mike, 'release/2026-11-05', leaked.cert, '2026-11-05T10:00:00Z');
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  const up = upstreamFor(w.theirs, w.home, new FakeClock(Date.parse('2026-11-20T00:00:00Z')));
-  let tag: string | undefined;
-  for (let i = 0; i < 3; i++) {
-    tag = (await up.check()).release?.tag;
-    assert.notEqual(tag, 'release/2026-10-30', `check ${i + 1} offered the revoked key's release`);
-  }
-  assert.equal(tag, 'release/2026-10-29');
+  assert.equal((await forkAt(w, '2026-11-20T00:00:00Z').check()).release?.tag, 'release/2026-10-01');
+  assert.equal((await forkAt(w, '2026-11-06T00:00:00Z').check()).release?.tag, 'release/2026-11-05', 'in its week');
+  assert.equal((await forkAt(w, '2026-11-20T00:00:00Z').check()).release?.tag, 'release/2026-11-05', 'and kept after');
 });
 
-test('a copy away for weeks catches up, MAX_READS releases a check', async () => {
+test('a copy away for weeks catches up', async () => {
   const w = world();
   const up = upstreamFor(w.theirs, w.home);
   assert.equal((await up.check()).release?.tag, 'release/2026-10-01');
@@ -401,7 +398,5 @@ test('a copy away for weeks catches up, MAX_READS releases a check', async () =>
     git(w.mike, '-c', 'gpg.format=ssh', '-c', `user.signingkey=${w.mikeKey.priv}`, 'tag', '-s', '-m', 'Threadbear', `release/2026-10-${String(day).padStart(2, '0')}`);
   }
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-  const seen: (string | undefined)[] = [];
-  for (let i = 0; i < 3 && seen.at(-1) !== 'release/2026-10-26'; i++) seen.push((await up.check()).release?.tag);
-  assert.equal(seen.at(-1), 'release/2026-10-26', seen.join(', '));
+  assert.equal((await up.check()).release?.tag, 'release/2026-10-26');
 });

@@ -94,8 +94,6 @@ const MAX_READS = 20;
 // The most releases older than the newest kept that a check fetches, for
 // their notes (notesSince reads nine).
 const MAX_OLDER = 9;
-// How far back a copy with no release kept starts reading (stageReleases).
-const FRESH_LOOKBACK_MS = 16 * 24 * 60 * 60_000;
 
 // A release tag's message lists at most 200 subjects (publishOnce), a few
 // tens of KB; a bigger tag object is turned down unread.
@@ -958,17 +956,7 @@ export class Upstream {
     const pinned = this.signersHash(signers);
     const unsigned = (name: string) => this.answers.get(`${pinned} ${offered.get(name)} ${TAG_PREFIX}${name}`) === null;
     const names = [...offered.keys()].filter((n) => n <= latest && !unsigned(n)).sort().reverse();
-    // Oldest first from the newest kept, so a release this check takes has
-    // every tag between it and what the fork had read alongside it: one
-    // revoking the key that signed it can't be pushed past this check's
-    // reads by junk tags (Codex's reviews, 25 Nov 2026), and a backlog
-    // moves on MAX_READS at a time. A fresh copy starts FRESH_LOOKBACK_MS
-    // back (longer than a weekly key lasts), or, with nothing that recent,
-    // takes the newest.
-    const floor = newest || new Date(this.deps.clock.now() - FRESH_LOOKBACK_MS).toISOString().slice(0, 10);
-    const recent = names.filter((n) => n >= floor).reverse();
-    const ahead = recent.length ? recent.slice(0, MAX_READS) : names.filter((n) => n >= newest).slice(0, MAX_READS);
-    const candidates = [...ahead, ...names.filter((n) => n < newest).slice(0, MAX_OLDER)];
+    const candidates = [...names.filter((n) => n >= newest).slice(0, MAX_READS), ...names.filter((n) => n < newest).slice(0, MAX_OLDER)];
     if (candidates.length) await this.fetchStaged(checkout, work, objects, candidates.map((n) => `refs/tags/${TAG_PREFIX}${n}`), from);
     // The ids ls-remote named, where they came (a tag moved in between
     // isn't there, and waits for the next check).
@@ -1054,6 +1042,17 @@ export class Upstream {
       const signed = await this.verified(staged, ref, tag, signers);
       if (!signed) {
         this.deps.log.warn('skipped an upstream release tag that is not signed with the pinned key', { tag });
+        continue;
+      }
+      // A weekly key's release is taken only while its certificate is good
+      // by this clock, not just when the tag says it was made: a weekly key
+      // that leaked can't get a release taken after its week, however the
+      // tags upstream are arranged (Codex's reviews, 25 Nov 2026). Once
+      // kept, it stays (sweep checks it at its own time).
+      const cert = signatureCert(signed.signature);
+      const now = this.deps.clock.now();
+      if (cert && (now < cert.validAfter || now >= cert.validBefore)) {
+        this.deps.log.warn("skipped a weekly key's release whose certificate isn't good now", { tag });
         continue;
       }
       if (!(await this.onUpstreamMain(staged, signed.commit))) {
