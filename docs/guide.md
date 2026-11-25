@@ -1176,27 +1176,6 @@ few things that matter most. To have something pinned, ask the thread
 ## Projects
 <!-- slug: projects -->
 
-With the **Project coordinators** experiment enabled, a project's page offers
-**Add a coordinator** with the ordinary pool and model picker. The first version
-supports Claude models and runs on this Mac. Its conversation stays in a
-Coordinators section above Starred, while routine helpers stay out of the inbox.
-
-The project home has Conversation, Activity, To-dos and Threads tabs. Highlights
-keeps the project's shared goals, state and notes beside them. You can edit that
-document directly; if another thread changed a field while you were editing,
-your draft stays open so you can merge it. Helpers report to the coordinator,
-which checks their results and brings you decisions it cannot settle. Pause
-stops it and its helpers. Resume first reconciles interrupted work.
-
-Other Macs, the phones and the website show the coordinator's conversation and
-questions. Setup and the living document are desktop controls in this version.
-The coordinator can follow project-thread completions, literal interest keywords
-and times it schedules itself. Automatic email, Slack and Sentry routing is not
-part of this first experiment. Account usage remains in Usage.
-
-When a project update needs your approval, its details show the current
-project name and ID alongside the proposed changes.
-
 <!-- picture: /docs-img/projects.webp alt: The Projects view: each project with its threads, what it's for and where it's up to -->
 
 A project gathers the threads about one thing, whatever folder they ran
@@ -1232,7 +1211,8 @@ parent's page lists its parts. A thread in a part is told the parent's
 goals as well as the part's own; a thread in the parent is told which
 parts there are. One level only: a part can't have parts. Agents can do
 the same with update_project. The phone and the website list parts as
-projects of their own for now.
+projects of their own for now. When a project update needs your approval, its details show the current
+project name and ID alongside the proposed changes.
 
 A project can show a task board from Notion. Give it a Notion page with a
 Tasks database on it (a board grouped by Status): Add Notion page… under
@@ -1254,6 +1234,23 @@ Notion. The menu also offers Copy Link and, when another thread is working
 on the card, Open the Thread Working on It. Boards are read through
 a Connectors gateway (see [Connectors](#connectors)); without one, the
 project's page says so and nothing is read.
+
+With the **Project coordinators** experiment enabled, a project's page offers
+**Add a coordinator** with the ordinary pool and model picker. The first version
+supports Claude models and runs on this Mac. Its conversation stays in a
+Coordinators section above Starred, while routine helpers stay out of the inbox.
+The project home has Conversation, Activity, To-dos and Threads tabs, with
+Highlights keeping the project's shared goals, state and notes beside them. You
+can edit that document directly; if another thread changed a field while you
+were editing, your draft stays open so you can merge it. Helpers report to the
+coordinator, which checks their results and brings you decisions it cannot
+settle. Pause stops it and its helpers, and Resume reconciles interrupted work
+first. Other Macs, the phones and the website show the coordinator's
+conversation and questions, while setup and the living document are desktop
+controls in this version. The coordinator can follow project-thread completions,
+literal interest keywords and times it schedules itself; automatic email, Slack
+and Sentry routing is not part of this first experiment. Account usage remains
+in Usage.
 
 ## The librarian
 <!-- slug: librarian -->
@@ -1831,15 +1828,17 @@ reviewer does. `"labPanelLines"` in `runner.json` changes the 150. The review ru
 the same permissions as the thread it reviews, and is told not to edit
 anything. Your thread says who is reviewing and waits. The reviewer gives a
 verdict: a list of concrete findings, or nothing that holds up. Then your
-thread wakes with them numbered, and it can't finish until it has answered
-each one: fixed, disputed (saying why), or left for you to decide, which
-comes to you as a question. Anything it fixed gets reviewed again, just the
-new change, until a round finds nothing. A quiet line in the thread, over
-the reply, shows who reviewed and how it came out. It folds like the
-agent's work: click it for each finding and what was done about it, and
-the review thread's link under them. Findings still open (left for you,
-or not answered) show under it even while it's folded. It
-stays off the done card, as it happens in the background. The review thread is archived when it's
+thread wakes with them as a checklist in the thread: one row per finding with
+its severity dot, clickable file and line, and claim (click a row for the
+reviewer's case and what the agent did about it, and Full reply for the
+reviewer's own words). Your thread can't finish until it has answered each one,
+so once it does each row shows Fixed, Disputed or Left in place, and anything
+left for you comes as a question. Anything it fixed gets reviewed again, just
+the new change, until a round finds nothing. When a round finds nothing (or has
+no verdict or unchecked fixes), a quiet line over the reply shows who reviewed
+and how it came out; it folds like the agent's work, with any open findings
+still visible under it. Either way it stays off the done card, as it happens in
+the background. The review thread is archived when it's
 done, so it stays out of your inbox. That holds however the review ends:
 if it gives no verdict, asks you something or stops with an error, your
 thread still wakes with whatever it said, and carries on. A thread gets at most three reviews
@@ -1884,7 +1883,7 @@ past this, as it could with anything on your Mac.
 ## Open Anything
 <!-- slug: open-anything -->
 
-In the new desktop app (the `gpuiApp` experiment), ⌘K or ⌘P (or Go > Open
+In the new desktop app, ⌘K or ⌘P (or Go > Open
 Anything…) from anywhere in the main window puts a box over it, with the rest
 dimmed. Type part of a name and
 it finds threads, panels, projects and the app's own pages, in that order of
