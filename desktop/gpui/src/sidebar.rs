@@ -4537,14 +4537,36 @@ pub(crate) fn automation(
             // Close without merging and the Runners panel's Paste code sit
             // below their pane's bottom on GitHub's 1024 by 768 Macs. Each
             // scroll whose column it's in is tried till it shows.
+            let pick_target = |elements: &[gpui_kit::base::test_support::ElementSnapshot]| {
+                // If there's an exact match, or a tip with a shortcut suffix ("Archive (⌘E)"),
+                // prefer it over looser prefix matches (e.g. "Archive this thread" when looking for "Archive").
+                elements
+                    .iter()
+                    .rev()
+                    .find(|e| e.label().is_some_and(|l| l == tip))
+                    .cloned()
+                    .or_else(|| {
+                        elements
+                            .iter()
+                            .rev()
+                            .find(|e| {
+                                e.label().is_some_and(|l| {
+                                    l.starts_with(tip) && l[tip.len()..].starts_with(" (")
+                                })
+                            })
+                            .cloned()
+                    })
+                    .or_else(|| elements.last().cloned())
+            };
             let settings = cmd["settings"].as_bool() == Some(true);
             if settings || found.is_empty() {
-                let target = found.last().cloned().or_else(|| {
-                    window
+                let target = pick_target(&found).or_else(|| {
+                    let all = window
                         .elements()
                         .into_iter()
                         .filter(|e| e.label().is_some_and(matches))
-                        .next_back()
+                        .collect::<Vec<_>>();
+                    pick_target(&all)
                 });
                 if let Some(bounds) = target.map(|t| t.bounds()) {
                     if settings {
@@ -4587,7 +4609,7 @@ pub(crate) fn automation(
                     }
                 }
             }
-            let Some(target) = found.last() else {
+            let Some(target) = pick_target(&found) else {
                 return Err(format!("no control with the tip {tip:?}"));
             };
             let at = target.visible_bounds().center();
