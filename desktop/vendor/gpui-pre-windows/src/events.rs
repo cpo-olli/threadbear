@@ -433,28 +433,38 @@ impl WindowsWindowInner {
         if !unsafe { ScreenToClient(handle, &mut cursor) }.as_bool() {
             return;
         }
-        let over_this_window = unsafe { WindowFromPoint(screen) } == handle;
-        let Some(to) = pointer_left_to(cursor, client, over_this_window) else {
+        let under = match unsafe { WindowFromPoint(screen) } {
+            hit if hit == handle => Under::ThisWindow,
+            hit if unsafe { IsChild(handle, hit) }.as_bool() => Under::ChildWindow,
+            _ => Under::AnotherWindow,
+        };
+        let scale_factor = self.state.scale_factor.get();
+        let position = |p: POINT| logical_point(p.x as f32, p.y as f32, scale_factor);
+        // Where the last WM_MOUSEMOVE left it: a window came up over it.
+        let stationary = position(cursor) == self.state.mouse_position.get();
+        let Some(left) = pointer_left_to(cursor, client, under, stationary) else {
             return;
         };
-        let position = logical_point(to.x as f32, to.y as f32, self.state.scale_factor.get());
-        // So a move back in to where it left isn't taken for a repaint's
-        // synthetic `WM_MOUSEMOVE` and dropped.
-        self.state.mouse_position.set(position);
         let Some(mut func) = self.state.callbacks.input.take() else {
             return;
         };
         let modifiers = current_modifiers();
         func(PlatformInput::MouseExited(MouseExitEvent {
-            position,
+            position: position(left.exit_at),
             pressed_button: None,
             modifiers,
         }));
-        func(PlatformInput::MouseMove(MouseMoveEvent {
-            position,
-            pressed_button: None,
-            modifiers,
-        }));
+        if let Some(to) = left.move_to {
+            let to = position(to);
+            // So a move back in to where it left isn't taken for a repaint's
+            // synthetic `WM_MOUSEMOVE` and dropped.
+            self.state.mouse_position.set(to);
+            func(PlatformInput::MouseMove(MouseMoveEvent {
+                position: to,
+                pressed_button: None,
+                modifiers,
+            }));
+        }
         self.state.callbacks.input.set(Some(func));
     }
 
@@ -1885,23 +1895,60 @@ fn notify_frame_changed(handle: HWND) {
     }
 }
 
-/// Where GPUI should be told the pointer went when Windows says it left the
-/// window, in client device pixels; `cursor` is in client coordinates too.
-/// `None` when it only went into this window's own title bar: that's inside the
-/// client area, and `WM_NCMOUSEMOVE` goes on reporting it. Over another window
-/// that covers this one (or a child window, such as a web view), it's a point
-/// just outside the client area, so nothing of this window stays hovered.
-fn pointer_left_to(cursor: POINT, client: RECT, over_this_window: bool) -> Option<POINT> {
+/// What's under the pointer when Windows says it left the window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Under {
+    /// This window, in its own title bar or frame.
+    ThisWindow,
+    /// One of this window's child windows, such as a web view.
+    ChildWindow,
+    /// Another window (or the desktop).
+    AnotherWindow,
+}
+
+/// What to tell GPUI when the pointer leaves, in client device pixels.
+#[derive(Debug, PartialEq)]
+struct PointerLeft {
+    exit_at: POINT,
+    /// A move to send after `MouseExited`, so GPUI's pointer is off the
+    /// window: hover styles and tooltips go by its position.
+    move_to: Option<POINT>,
+}
+
+/// `None` when the pointer only went into this window's own title bar: that's
+/// inside the client area, and `WM_NCMOUSEMOVE` goes on reporting it. Off the
+/// client area, GPUI's pointer goes where it went. Onto a child window, or a
+/// window overlapping this one, just outside the client area, so nothing of
+/// this window stays hovered. But under a window that came up over a pointer
+/// that hadn't moved (`stationary`: a toast, Alt-Tab), only `MouseExited`: a
+/// move would be taken for mouse input and end keyboard mode (its focus rings).
+fn pointer_left_to(
+    cursor: POINT,
+    client: RECT,
+    under: Under,
+    stationary: bool,
+) -> Option<PointerLeft> {
     let inside = cursor.x >= client.left
         && cursor.x < client.right
         && cursor.y >= client.top
         && cursor.y < client.bottom;
-    match (inside, over_this_window) {
-        (false, _) => Some(cursor),
-        (true, true) => None,
-        (true, false) => Some(POINT {
-            x: client.left - 1,
-            y: client.top - 1,
+    let just_outside = POINT {
+        x: client.left - 1,
+        y: client.top - 1,
+    };
+    match (inside, under) {
+        (false, _) => Some(PointerLeft {
+            exit_at: cursor,
+            move_to: Some(cursor),
+        }),
+        (true, Under::ThisWindow) => None,
+        (true, Under::AnotherWindow) if stationary => Some(PointerLeft {
+            exit_at: cursor,
+            move_to: None,
+        }),
+        (true, Under::ChildWindow | Under::AnotherWindow) => Some(PointerLeft {
+            exit_at: cursor,
+            move_to: Some(just_outside),
         }),
     }
 }
@@ -1917,36 +1964,73 @@ mod pointer_left_tests {
         bottom: 1653,
     };
 
+    fn moved(to: POINT, exit_at: POINT) -> Option<PointerLeft> {
+        Some(PointerLeft {
+            exit_at,
+            move_to: Some(to),
+        })
+    }
+
     #[test]
     fn off_the_window_onto_the_desktop_goes_where_the_cursor_is() {
         let cursor = POINT { x: 3140, y: 1820 };
-        assert_eq!(pointer_left_to(cursor, CLIENT, false), Some(cursor));
+        assert_eq!(
+            pointer_left_to(cursor, CLIENT, Under::AnotherWindow, false),
+            moved(cursor, cursor)
+        );
     }
 
     #[test]
     fn onto_its_own_frame_outside_the_client_area_goes_where_the_cursor_is() {
         let cursor = POINT { x: -4, y: 600 };
-        assert_eq!(pointer_left_to(cursor, CLIENT, true), Some(cursor));
+        assert_eq!(
+            pointer_left_to(cursor, CLIENT, Under::ThisWindow, false),
+            moved(cursor, cursor)
+        );
     }
 
     #[test]
     fn into_its_own_title_bar_is_left_to_the_non_client_moves() {
         let cursor = POINT { x: 900, y: 10 };
-        assert_eq!(pointer_left_to(cursor, CLIENT, true), None);
+        assert_eq!(pointer_left_to(cursor, CLIENT, Under::ThisWindow, false), None);
     }
 
     #[test]
-    fn under_a_window_on_top_goes_just_outside() {
+    fn onto_a_child_window_goes_just_outside() {
         let cursor = POINT { x: 900, y: 600 };
         assert_eq!(
-            pointer_left_to(cursor, CLIENT, false),
-            Some(POINT { x: -1, y: -1 })
+            pointer_left_to(cursor, CLIENT, Under::ChildWindow, false),
+            moved(POINT { x: -1, y: -1 }, cursor)
+        );
+    }
+
+    #[test]
+    fn onto_a_window_overlapping_this_one_goes_just_outside() {
+        let cursor = POINT { x: 900, y: 600 };
+        assert_eq!(
+            pointer_left_to(cursor, CLIENT, Under::AnotherWindow, false),
+            moved(POINT { x: -1, y: -1 }, cursor)
+        );
+    }
+
+    #[test]
+    fn under_a_window_that_came_up_over_a_still_pointer_only_exits() {
+        let cursor = POINT { x: 900, y: 600 };
+        assert_eq!(
+            pointer_left_to(cursor, CLIENT, Under::AnotherWindow, true),
+            Some(PointerLeft {
+                exit_at: cursor,
+                move_to: None,
+            })
         );
     }
 
     #[test]
     fn the_right_and_bottom_edges_are_outside() {
         let cursor = POINT { x: 2506, y: 1653 };
-        assert_eq!(pointer_left_to(cursor, CLIENT, true), Some(cursor));
+        assert_eq!(
+            pointer_left_to(cursor, CLIENT, Under::ThisWindow, false),
+            moved(cursor, cursor)
+        );
     }
 }
