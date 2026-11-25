@@ -15,7 +15,7 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
     ].map((e, i) => ({ ...e, seq: i + 1, ts, threadId: id, turnId: 'coordinator_first' }));
     const summary = {
       id, title: p.title, cwd: p.folders[0], accountId: accountFor(selection), poolId: selection.poolId, model: selection.model, effort: selection.effort, provider: 'claude', permissionMode: 'full',
-      status: 'idle', needsYou: false, createdAt: ts, updatedAt: ts, lastActivityAt: ts,
+      status: 'idle', needsYou: false, coordinatorProjectId: p.id, createdAt: ts, updatedAt: ts, lastActivityAt: ts,
       preview: 'Two helpers are working on the project home.', lastSeq: events.length, lastSeenSeq: events.length,
       projects: [{ id: p.id, title: p.title, by: 'mike', pinned: true }],
       subagents: [

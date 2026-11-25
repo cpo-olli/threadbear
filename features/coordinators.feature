@@ -6,11 +6,17 @@ Feature: Project coordinators
     Given the app is connected to a runner with the demo threads
 
   @coordinators.home @coordinators @swift-pending
+  Scenario: Ordinary finished threads keep their Archive button
+    When I open the thread "Tidy the imports in the uploader"
+    Then the ordinary Done card has its Archive button
+
+  @coordinators.home @coordinators @swift-pending
   Scenario: A project can add its coordinator using the ordinary model controls
     When I open the project "Photo sync"
     And I add the project's coordinator
     Then the coordinator's "Conversation" tab is open
     And the transcript shows a reply starting "The project home is taking shape."
+    And the coordinator's Done card has no Archive button
     And the coordinator is listed once in its own sidebar section
 
   @coordinators.home @coordinators @swift-pending
@@ -18,6 +24,7 @@ Feature: Project coordinators
     When I open the project "Threadbear"
     Then the coordinator's "Conversation" tab is open
     And the transcript shows a reply starting "The project home is taking shape."
+    And the coordinator's Done card has no Archive button
     And the coordinator is listed once in its own sidebar section
     And the coordinator's document contains "Two helpers are working"
     When I open the coordinator's "To-dos" tab

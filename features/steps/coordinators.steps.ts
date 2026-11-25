@@ -14,6 +14,18 @@ When("I open the coordinator's {string} tab", async function (this: ThreadbearWo
   await this.app.do({ cmd: 'click', tip: `Show the project's ${tab.toLowerCase()}` });
 });
 
+Then("the coordinator's Done card has no Archive button", async function (this: ThreadbearWorld) {
+  await this.until('the coordinator Done card', (d) => d.composer.card?.[0] === 'Done');
+  const labels = JSON.parse(await this.app.do({ cmd: 'labels' })) as { label: string }[];
+  assert.equal(labels.some((control) => control.label === 'Archive this thread'), false);
+});
+
+Then('the ordinary Done card has its Archive button', async function (this: ThreadbearWorld) {
+  await this.until('the ordinary Done card', (d) => d.composer.card?.[0] === 'Done');
+  const labels = JSON.parse(await this.app.do({ cmd: 'labels' })) as { label: string }[];
+  assert.equal(labels.some((control) => control.label === 'Archive this thread'), true);
+});
+
 Then("the coordinator's {string} tab is open", async function (this: ThreadbearWorld, tab: string) {
   await this.until(`the ${tab} coordinator tab`, (d) => Boolean(coordinator(d)?.thread) && coordinator(d)?.tab === tab);
 });

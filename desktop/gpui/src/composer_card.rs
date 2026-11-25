@@ -6,6 +6,7 @@
 use crate::composer::Composer;
 use crate::style;
 use gpui_kit::assets::IconName;
+use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::input::{Enter, InputEvent, Textarea, TextareaState};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::*;
@@ -797,6 +798,10 @@ impl Composer {
         // spinner, as it hasn't finished (19 Nov: one waiting to land read
         // Done and was archived with nothing landed).
         let heading = self.done_heading(tick, cx);
+        let can_archive = self
+            .pane
+            .upgrade()
+            .is_none_or(|pane| !pane.read(cx).summary.is_coordinator());
         column = column.child(
             h_flex()
                 .w_full()
@@ -804,24 +809,28 @@ impl Composer {
                 .justify_between()
                 .gap(px(8.))
                 .child(heading)
-                .child(
-                    card_button(
-                        ("done-archive", 0usize),
-                        "Archive",
-                        ButtonLook::Plain,
-                        "Archive this thread",
-                        cx,
-                    )
-                    .on_click({
-                        let this = this.clone();
-                        move |ev, window, cx| {
-                            if let Some(this) = this.upgrade() {
-                                let at = ev.position();
-                                this.update(cx, |this, cx| this.archive_thread(at, window, cx));
+                .when(can_archive, |row| {
+                    row.child(
+                        card_button(
+                            ("done-archive", 0usize),
+                            "Archive",
+                            ButtonLook::Plain,
+                            "Archive this thread",
+                            cx,
+                        )
+                        .test_support()
+                        .aria_label("Archive this thread")
+                        .on_click({
+                            let this = this.clone();
+                            move |ev, window, cx| {
+                                if let Some(this) = this.upgrade() {
+                                    let at = ev.position();
+                                    this.update(cx, |this, cx| this.archive_thread(at, window, cx));
+                                }
                             }
-                        }
-                    }),
-                ),
+                        }),
+                    )
+                }),
         );
         // What's still open (doneText): a booked check-in alone goes under
         // "Coming back", as it doesn't stop an archive.

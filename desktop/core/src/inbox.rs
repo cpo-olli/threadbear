@@ -1445,7 +1445,7 @@ mod tests {
             3,
             json!({"coordinatorProjectId":"p_c", "archivedAt":"2026-11-06T09:00:00Z"}),
         );
-        let rows = vec![sleeping, gone, row];
+        let rows = [sleeping, gone, row];
         let sections = sections(rows.iter(), now());
         assert_eq!(ids(&sections, "coordinators"), ["t1", "t2"]);
         assert_eq!(ids(&sections, "archived"), ["t3"]);
