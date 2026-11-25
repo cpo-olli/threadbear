@@ -769,6 +769,36 @@ impl Composer {
         )
     }
 
+    fn render_done_archive(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self
+            .pane
+            .upgrade()
+            .is_some_and(|pane| pane.read(cx).summary.is_coordinator())
+        {
+            return None;
+        }
+        let this = cx.entity().downgrade();
+        Some(
+            card_button(
+                ("done-archive", 0usize),
+                "Archive",
+                ButtonLook::Plain,
+                "Archive this thread",
+                cx,
+            )
+            .test_support()
+            .aria_label("Archive this thread")
+            .on_click(move |event, window, cx| {
+                if let Some(this) = this.upgrade() {
+                    this.update(cx, |this, cx| {
+                        this.archive_thread(event.position(), window, cx)
+                    });
+                }
+            })
+            .into_any_element(),
+        )
+    }
+
     /// RowRenderer.doneText: Done, with Archive at the right, and the agent's
     /// follow-ups under "Or carry on", each a row with a tick and a "?".
     fn render_done_card(
@@ -798,10 +828,6 @@ impl Composer {
         // spinner, as it hasn't finished (19 Nov: one waiting to land read
         // Done and was archived with nothing landed).
         let heading = self.done_heading(tick, cx);
-        let can_archive = self
-            .pane
-            .upgrade()
-            .is_none_or(|pane| !pane.read(cx).summary.is_coordinator());
         column = column.child(
             h_flex()
                 .w_full()
@@ -809,27 +835,8 @@ impl Composer {
                 .justify_between()
                 .gap(px(8.))
                 .child(heading)
-                .when(can_archive, |row| {
-                    row.child(
-                        card_button(
-                            ("done-archive", 0usize),
-                            "Archive",
-                            ButtonLook::Plain,
-                            "Archive this thread",
-                            cx,
-                        )
-                        .test_support()
-                        .aria_label("Archive this thread")
-                        .on_click({
-                            let this = this.clone();
-                            move |ev, window, cx| {
-                                if let Some(this) = this.upgrade() {
-                                    let at = ev.position();
-                                    this.update(cx, |this, cx| this.archive_thread(at, window, cx));
-                                }
-                            }
-                        }),
-                    )
+                .when_some(self.render_done_archive(cx), |row, button| {
+                    row.child(button)
                 }),
         );
         // What's still open (doneText): a booked check-in alone goes under
