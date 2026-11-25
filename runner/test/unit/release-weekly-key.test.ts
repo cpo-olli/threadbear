@@ -288,7 +288,7 @@ test("Mike's runner waits for UTC's day rather than ask for Touch ID, unless he 
 
 // Codex's and Gemini's reviews: tags that will never verify mustn't hold
 // every check's places, or a release revoking a key stays out of sight.
-test("a flood of tags that never verify doesn't hide a revocation, not even for a check", async () => {
+test("a flood of tags that never verify doesn't hide a revocation, not even for a check", { timeout: 240_000 }, async () => {
   const w = world();
   const up = forkAt(w);
   assert.equal((await up.check()).release?.tag, 'release/2026-10-01', 'what the fork had');
@@ -379,7 +379,7 @@ test('revokedPath is where a fork keeps revoked keys', () => {
 
 // Codex's reviews: a weekly key's release is taken only in its week, so
 // however the tags are arranged, a leaked one is good for that long.
-test("a weekly key's release isn't taken once its week is over, fresh copy or not", async () => {
+test("a weekly key's release isn't taken once its week is over, fresh copy or not", { timeout: 240_000 }, async () => {
   const w = world();
   const leaked = weekly(w, 'leaked', '20261102Z:20261110Z');
   commit(w.mike, 'b.txt', 'Something bad');
@@ -390,7 +390,8 @@ test("a weekly key's release isn't taken once its week is over, fresh copy or no
   assert.equal((await forkAt(w, '2026-11-20T00:00:00Z').check()).release?.tag, 'release/2026-11-05', 'and kept after');
 });
 
-test('a copy away for weeks catches up', async () => {
+// Twenty-five signed tags: git on Windows CI takes over a minute for them.
+test('a copy away for weeks catches up', { timeout: 240_000 }, async () => {
   const w = world();
   const up = upstreamFor(w.theirs, w.home);
   assert.equal((await up.check()).release?.tag, 'release/2026-10-01');
@@ -467,7 +468,7 @@ test("Mike's runner puts a quiet main out again before its weekly key's release 
 
 // Gemini's tenth look: weekly releases whose week is over still have their
 // revocations read, even when none of them can be taken.
-test("a revocation in weekly releases whose week is over still counts", async () => {
+test("a revocation in weekly releases whose week is over still counts", { timeout: 240_000 }, async () => {
   const w = world();
   const next = key(w.root, 'next');
   fs.appendFileSync(signersPath(w.home), fs.readFileSync(next.signers, 'utf8'));
