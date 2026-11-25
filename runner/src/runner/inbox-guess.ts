@@ -32,8 +32,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Runner, ThreadState } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
-import type { ArchiveVerdict, LooseEnd } from '../protocol.ts';
+import type { ArchivedBy, ArchiveVerdict, LooseEnd, PersistedEvent } from '../protocol.ts';
 import { experimentOn } from '../experiments.ts';
+import { placeOf } from '../place.ts';
 import { latestMessages } from './card-review.ts';
 import { OPUS } from '../models/index.ts';
 
@@ -143,6 +144,40 @@ export function guessPrompt(runner: Runner, st: ThreadState, reply: string, tag 
   ]
     .filter(Boolean)
     .join('\n\n');
+}
+
+// Who put a thread away, on a `revive` line (noteRevive). "quiet" is the
+// quiet inbox (quietArchive), "threadbear" anything else it does itself.
+type PutAwayBy = 'quiet' | 'user' | 'agent' | 'threadbear' | 'unknown';
+const BY: Record<ArchivedBy, PutAwayBy> = { mike: 'user', agent: 'agent', threadbear: 'threadbear' };
+// How far back the thread's log is read for the grey line that put it
+// away: nothing much is said in a thread while it's put away.
+const REVIVE_LOOK_BACK = 400;
+
+// A hibernating thread's record keeps who asked only for some waits.
+function hibernatedBy(rec: ThreadState['rec']): PutAwayBy | undefined {
+  if (rec.hibernatedForApp) return 'threadbear';
+  if (rec.waitingOn?.length) return 'agent'; // end_turn's waitFor
+  if (rec.wakeWhen) return rec.wakeWhen.by === 'agent' ? 'agent' : 'user';
+  return undefined;
+}
+
+// The latest grey line that archived or hibernated it (place-notes.ts, the
+// Archive menu's, end_turn's and the quiet inbox's own).
+function putAwayNote(events: PersistedEvent[], from: 'archived' | 'hibernated'): string | undefined {
+  const head = from === 'archived' ? /^(Archived|Back in the archive)/ : /^Hibernat/;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.type === 'system.note' && typeof e.text === 'string' && head.test(e.text)) return e.text;
+  }
+  return undefined;
+}
+
+function byLine(note: string): PutAwayBy | undefined {
+  if (/\bby you\b|you next talk about|You said "/.test(note)) return 'user';
+  if (/\bby an agent\b|the agent was asked|The agent said "/.test(note)) return 'agent';
+  if (/\bby Threadbear\b|Threadbear app restarts/.test(note)) return 'threadbear';
+  return undefined;
 }
 
 export const inboxGuessPart = {
@@ -302,6 +337,37 @@ export const inboxGuessPart = {
     const label = verdict && LABELS[verdict];
     const guesses = rec.inboxGuess?.seq === seq ? rec.inboxGuess.guesses : undefined;
     this.writeInboxGuess({ kind: 'archive', threadId: rec.id, seq, ...(label ? { label } : {}), ...(guesses ? { guesses } : {}) });
+  },
+
+  // Mike writing to a thread that's archived or hibernating, which brings
+  // it back (sendTo, before the message moves it): a `revive` line saying
+  // who put it away, when and why, so the quiet inbox's review can see the
+  // threads he wanted back that no Archive menu pick would show. Written
+  // with or without quietInboxMine. The log is read after the send has
+  // gone on, so it never waits on this.
+  noteRevive(this: Runner, st: ThreadState, text: string): void {
+    const { rec } = st;
+    try {
+      const place = placeOf(rec);
+      if (place.kind === 'inbox' || !experimentOn(this.cfg.home, INBOX_GUESS)) return;
+      const from = place.kind === 'archived' ? 'archived' : 'hibernated';
+      const quiet = from === 'archived' ? rec.quietlyArchived : undefined;
+      const byRecord: PutAwayBy | undefined = quiet ? 'quiet' : from === 'archived' ? (rec.archivedBy && BY[rec.archivedBy]) : hibernatedBy(rec);
+      const base = { kind: 'revive', at: this.isoNow(), threadId: rec.id, from, putAwayAt: (from === 'archived' ? rec.archivedAt : rec.snoozedAt) ?? null };
+      const upTo = rec.lastSeq;
+      setImmediate(() => {
+        let note: string | undefined;
+        try {
+          note = putAwayNote(this.store.log(rec.id).read(upTo - REVIVE_LOOK_BACK + 1, upTo), from);
+        } catch {
+          // The line is still worth having without its why.
+        }
+        const putAwayBy = byRecord ?? (note && byLine(note)) ?? 'unknown';
+        this.writeInboxGuess({ ...base, putAwayBy, putAwayWhy: quiet?.why ?? note ?? null, text: text.slice(0, 300) });
+      });
+    } catch (e) {
+      this.log.warn("couldn't note a thread brought back", { threadId: rec.id, error: String(e) });
+    }
   },
 
   writeInboxGuess(this: Runner, line: Record<string, unknown>): void {

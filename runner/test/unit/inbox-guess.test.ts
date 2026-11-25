@@ -14,6 +14,7 @@ import { nullLogger } from '../../src/log.ts';
 import { PATIENCE_MS } from '../helpers/patience.ts';
 import type { GenerateParams, ModelResult } from '../../src/models/index.ts';
 import { GUESS_CATCH_UP_MS, INBOX_GUESS_FILE, readGuess } from '../../src/runner/inbox-guess.ts';
+import { AGENT_MESSAGE_PREFIX } from '../../src/protocol.ts';
 
 const END_TURN = 'mcp__threadbear__end_turn';
 
@@ -571,4 +572,32 @@ test('an edit under way while the models think archives nothing', async () => {
   await until(() => h.lines().length === 1, 'the guess written down');
   await settle();
   assert.equal(h.runner.get(id).archivedAt, undefined);
+});
+
+test('Mike writing to a quietly archived thread writes a revive line, and an agent’s send_message nothing', async () => {
+  const h = setup({ quiet: true, strong: '{"guess":"skip","why":"A receipt for what he asked."}' });
+  const id = mine(h);
+  finish(h, id);
+  await until(() => Boolean(h.runner.get(id).quietlyArchived), 'quietly archived');
+  const archivedAt = h.runner.get(id).archivedAt;
+  const agent = mine(h, 'Rename the panel');
+  finish(h, agent);
+  await until(() => Boolean(h.runner.get(agent).quietlyArchived), 'the other quietly archived');
+  h.runner.send(agent, `${AGENT_MESSAGE_PREFIX}"Another thread" (abcd1234)]\n\nIt's done over here.`);
+  h.runner.send(id, 'Wait, did that land on main? '.repeat(20));
+  await until(() => h.lines().some((l) => l.kind === 'revive'), 'the revive line');
+  await settle();
+  const revives = h.lines().filter((l) => l.kind === 'revive');
+  assert.equal(revives.length, 1);
+  const { at, ...line } = revives[0];
+  assert.equal(typeof at, 'string');
+  assert.deepEqual(line, { kind: 'revive', threadId: id, from: 'archived', putAwayBy: 'quiet', putAwayAt: archivedAt, putAwayWhy: 'A receipt for what he asked.', text: 'Wait, did that land on main? '.repeat(20).slice(0, 300) });
+  // One he hibernated himself: its why is the grey line that said so.
+  h.runner.update({ threadId: agent, snoozedUntil: 'restart' });
+  h.runner.send(agent, 'Back to this one');
+  await until(() => h.lines().filter((l) => l.kind === 'revive').length === 2, 'the second revive line');
+  const second = h.lines().filter((l) => l.kind === 'revive')[1];
+  assert.equal(second.from, 'hibernated');
+  assert.equal(second.putAwayBy, 'user');
+  assert.match(String(second.putAwayWhy), /^Hibernated by you on .*, until the runner next starts\.$/);
 });

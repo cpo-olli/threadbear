@@ -2102,7 +2102,9 @@ export class Runner {
     // message notes it came out of the archive, so the run can put it back
     // if it ends with nothing for Mike (the end of the turn, below).
     // Answering it from his phone without opening it counts as having seen
-    // it woke (place.ts, message).
+    // it woke (place.ts, message). Mike doing it is written down first, while
+    // the record still says who put it away (runner/inbox-guess.ts).
+    if (fromMike(text, opts)) this.noteRevive(st, text);
     if (placeOf(rec).kind !== 'inbox') this.cli(st, { kind: 'stay' });
     this.park(st, { kind: 'message', fromSchedule: opts.origin === 'schedule', fromMike: fromMike(text, opts) });
     this.supersedeReviews(st, text, opts);
