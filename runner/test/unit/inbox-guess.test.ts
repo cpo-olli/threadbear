@@ -482,6 +482,20 @@ test("one he's already looked at, starred, or once brought back is his to put aw
   assert.deepEqual(quietLines(h), []);
 });
 
+test('a reminder he set himself (an X bookmark) stays in the inbox, though its guess is still written down', async () => {
+  const h = setup({ quiet: true, strong: '{"guess":"skip","why":"A routine note on a post."}' });
+  const bookmark = h.runner.create({ text: 'I bookmarked this X post. Write me a short note on it.', accountId: 'claude-main', startedBy: { kind: 'tool', label: 'X bookmarks', icon: 'bookmark' } }).thread.id;
+  finish(h, bookmark);
+  await until(() => h.lines().length === 1, 'the guess written down');
+  await settle();
+  assert.equal(h.runner.get(bookmark).archivedAt, undefined);
+  assert.deepEqual(quietLines(h), []);
+  // Another tool's thread is the model's to judge, as before.
+  const other = h.runner.create({ text: 'Triage this Sentry issue', accountId: 'claude-main', startedBy: { kind: 'tool', label: 'Sentry' } }).thread.id;
+  finish(h, other);
+  await until(() => Boolean(h.runner.get(other).archivedAt), 'the other tool thread archived');
+});
+
 test('"Should have shown me" brings it back, writes the wrong hide down, and clears the mark', async () => {
   const h = setup({ quiet: true });
   const id = mine(h);

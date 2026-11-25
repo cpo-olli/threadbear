@@ -74,8 +74,9 @@ const LABELS: Partial<Record<ArchiveVerdict, 'skip' | 'show' | 'unsure'>> = { di
 // this" picks it would have caught 13 (Opus). Replayed on the same picks,
 // this one caught 69 and hid 1 of his 8 "Glad I saw this" (a short "yes,
 // we're done" to his "anything else?"). It was written from those picks,
-// so the week after is the real test.
-export const GUESS_PROMPT = 2;
+// so the week after is the real test. 3 (25 Nov 2026): a reminder he set
+// himself is a show (the X bookmark note Opus hid, below).
+export const GUESS_PROMPT = 3;
 export const GUESS_SYSTEM = `You help the user of Threadbear, an app that runs AI coding agents in threads, keep their inbox short. A thread's agent has just finished a turn and says it needs nothing more from the user. Decide whether the user needs to read its reply, or whether the thread could have gone straight to the archive unread.
 
 The user runs many threads at once and archives most finished ones after a glance: about nine in ten, they later say they didn't need to see. Each one they open costs them a few seconds of reloading what it was about. So "skip" is the usual answer. Answer "show" only when the reply holds something they'd be sorry to have missed.
@@ -86,6 +87,7 @@ Answer "show" when:
 - The user asked a real question and the reply is a considered answer they're waiting on: an analysis, a recommendation, a comparison with numbers, an explanation of a trade-off. Not a reply that only says "yes, done" or "no, fixed it".
 - Something is broken now and needs the user, or something they'll notice later went wrong (a post that failed, data lost, money spent, a release that didn't go out).
 - The reply asks or invites them to decide or do something soon.
+- The user started the thread as a reminder to themselves to look into something (a bookmarked post, a saved link): the reply is what they meant to come back to.
 
 Answer "skip" for:
 - Receipts: the user told the agent to do something and the reply says it's done, landed, merged, fixed or sent.
@@ -115,6 +117,13 @@ export function readGuess(text: string): { skip: boolean; why: string } | undefi
 }
 
 export const QUIET_ARCHIVED_NOTE = "Archived quietly: it finished with nothing for you, and a model judged you didn't need to see it.";
+
+// Tools whose threads are reminders Mike set himself: bookmarking an X post
+// means "look into this later" (25 Nov 2026, after the quiet inbox hid one's
+// note as routine), so the quiet inbox never archives them. Matched on the
+// `--from` label mikerosoft-tools/x-bookmarks gives `tb new`.
+const REMINDER_TOOLS = new Set(['X bookmarks']);
+const isReminder = (rec: { startedBy?: { kind: string; label: string } }): boolean => rec.startedBy?.kind === 'tool' && REMINDER_TOOLS.has(rec.startedBy.label);
 
 const clip = (text: string, most: number): string => (text.length <= most ? text : `${text.slice(0, Math.floor(most * 0.6))}\n[... ${text.length - most} characters left out ...]\n${text.slice(-Math.floor(most * 0.4))}`);
 
@@ -244,7 +253,8 @@ export const inboxGuessPart = {
   // does (settleQuietly). Only Opus decides: Haiku alone, or a rule's
   // guess (always a show), never archives. Not one he's starred, already
   // looked at the done card of, or brought back out of the archive once
-  // (keptOut, which "Should have shown me" sets too): those are his.
+  // (keptOut, which "Should have shown me" sets too), nor a reminder he set
+  // himself (isReminder): those are his.
   quietArchive(this: Runner, st: ThreadState, seq: number, guesses: Guess[]): void {
     const { rec, rt } = st;
     if (!experimentOn(this.cfg.home, QUIET_INBOX_MINE)) return;
@@ -252,7 +262,7 @@ export const inboxGuessPart = {
     // default model, labelled so (models/index.ts), which doesn't count.
     const strong = guesses.find((g) => g.strong && (g.by === OPUS || g.by.startsWith(`${OPUS} on `)));
     if (!strong?.skip || guesses.some((g) => g.by === 'rule')) return;
-    if (rec.starredAt || rec.keptOut || rec.reviewOf || rec.lastSeenSeq >= seq) return;
+    if (rec.starredAt || rec.keptOut || rec.reviewOf || rec.lastSeenSeq >= seq || isReminder(rec)) return;
     // A design review waiting on his answer is his to see (Codex's review).
     if (rec.reviews?.some((r) => r.status === 'pending')) return;
     // The models took a moment: anything since decides instead, as in
