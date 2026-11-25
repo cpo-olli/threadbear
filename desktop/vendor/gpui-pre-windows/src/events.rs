@@ -1915,8 +1915,8 @@ enum Under {
 ///
 /// `None`, sending nothing, when it only went into this window's own title bar
 /// (inside the client area, and `WM_NCMOUSEMOVE` goes on reporting it), or
-/// when a window came up over a pointer that hadn't moved (`stationary`: a
-/// toast, Alt-Tab): a move then would be taken for mouse input and end keyboard
+/// when a window (or a child window) came up over a pointer that hadn't moved
+/// (`stationary`: a toast, Alt-Tab): a move then would be taken for mouse input and end keyboard
 /// mode (its focus rings), and an exit alone is undone at the next paint, as
 /// GPUI's hit test still has the pointer where it was.
 fn pointer_left_to(
@@ -1936,7 +1936,7 @@ fn pointer_left_to(
     match (inside, under) {
         (false, _) => Some(cursor),
         (true, Under::ThisWindow) => None,
-        (true, Under::AnotherWindow) if stationary => None,
+        (true, Under::ChildWindow | Under::AnotherWindow) if stationary => None,
         (true, Under::ChildWindow | Under::AnotherWindow) => Some(just_outside),
     }
 }
@@ -2000,6 +2000,10 @@ mod pointer_left_tests {
     fn under_a_window_that_came_up_over_a_still_pointer_sends_nothing() {
         assert_eq!(
             pointer_left_to(MIDDLE, CLIENT, Under::AnotherWindow, true),
+            None
+        );
+        assert_eq!(
+            pointer_left_to(MIDDLE, CLIENT, Under::ChildWindow, true),
             None
         );
     }
