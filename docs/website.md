@@ -152,7 +152,7 @@ clicked through from a page laid over a hidden frame.
 
 From a terminal, by someone logged in to the Convex team:
 
-    npm run web:sign-in                  # Chrome on this Mac, prod, 90 days
+    npm run web:sign-in                  # the default browser, prod, 90 days
     npm run web:sign-in -- --qr          # a QR code for another device
     npm run web:sign-in -- --dev         # the dev deployment's site
     npm run web:sign-in -- --local       # Vite on localhost:5181, dev data
