@@ -785,17 +785,17 @@ impl Composer {
         let this = cx.entity().downgrade();
         Some(
             card_button(("done-archive", 0usize), label, ButtonLook::Plain, tip, cx)
-            .test_support()
-            .role(Role::Button)
-            .aria_label(tip)
-            .on_click(move |event, window, cx| {
-                if let Some(this) = this.upgrade() {
-                    this.update(cx, |this, cx| {
-                        this.archive_thread(event.position(), window, cx)
-                    });
-                }
-            })
-            .into_any_element(),
+                .test_support()
+                .role(Role::Button)
+                .aria_label(tip)
+                .on_click(move |event, window, cx| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |this, cx| {
+                            this.archive_thread(event.position(), window, cx)
+                        });
+                    }
+                })
+                .into_any_element(),
         )
     }
 
