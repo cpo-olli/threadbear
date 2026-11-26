@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { Then, When } from '@cucumber/cucumber';
 import type { ThreadbearWorld } from '../support/world.ts';
 
-type Coordinator = { on: boolean; thread: string | null; tab: string; state: string | null; tasks: { title: string; state: string }[] | null; documentShown: boolean; editing: { draft: string; reviewCurrent: string | null } | null; document: { state: string; notes: string } | null };
+type Coordinator = { on: boolean; setup: string | null; thread: string | null; tab: string; state: string | null; tasks: { title: string; state: string }[] | null; documentShown: boolean; editing: { draft: string; reviewCurrent: string | null } | null; document: { state: string; notes: string } | null };
 const coordinator = (d: unknown) => (d as { coordinator?: Coordinator }).coordinator;
 
 Then('the coordinator experiment is {string}', async function (this: ThreadbearWorld, state: string) {
@@ -21,6 +21,29 @@ Then('the project offers its Add coordinator control', async function (this: Thr
 
 When('the coordinator setting is restored without a notification', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'mock', method: 'coordinatorExperiment', params: { on: true, notify: false } });
+});
+
+When("I open the project's Add coordinator dialog", async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'click', tip: "Add a coordinator that keeps this project's notes and work current" });
+});
+
+Then('the Add coordinator dialog is open', async function (this: ThreadbearWorld) {
+  await this.until('the Add coordinator dialog to open', (d) => Boolean(coordinator(d)?.setup));
+  const labels = JSON.parse(await this.app.do({ cmd: 'labels' })) as { label: string }[];
+  assert.equal(labels.some((control) => control.label === 'Keep the project as it is'), true);
+  assert.equal(labels.some((control) => control.label === "Start this project's coordinator using the chosen pool and model"), true);
+});
+
+When('I press Escape to dismiss the Add coordinator dialog', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'menu-key', key: 'escape' });
+});
+
+When('I cancel the Add coordinator dialog', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'click', tip: 'Keep the project as it is' });
+});
+
+Then('the Add coordinator dialog is closed', async function (this: ThreadbearWorld) {
+  await this.until('the Add coordinator dialog to close', (d) => coordinator(d)?.setup === null);
 });
 
 When("I add the project's coordinator", async function (this: ThreadbearWorld) {

@@ -48,7 +48,9 @@ pub(crate) struct CoordinatorsState {
     pub(crate) loading: bool,
     pub(crate) tab: Tab,
     pub(crate) setup: Option<String>,
-    pub(crate) setup_controls: Option<Entity<CoordinatorControls>>,
+    pub(crate) setup_id: u64,
+    pub(crate) setup_close_dialog: bool,
+    pub(crate) setup_error: Option<String>,
     pub(crate) saved_picks: Option<threadbear_core::new_thread::NewThreadPicks>,
     pub(crate) busy: HashSet<String>,
     pub(crate) document_scroll: ScrollHandle,
@@ -90,7 +92,8 @@ impl Threadbear {
     pub(crate) fn load_coordinators(&mut self, cx: &mut Context<Self>) {
         if !self.coordinators_on() {
             if self.coordinators.setup.is_some() {
-                self.close_coordinator_setup(cx);
+                self.coordinators.setup_close_dialog = true;
+                self.close_coordinator_setup(None, cx);
             }
             self.receive_coordinators(&json!([]));
             return;
@@ -138,32 +141,12 @@ impl Threadbear {
         self.invalidate_coordinator_sections();
     }
 
-    pub(crate) fn show_coordinator_setup(
-        &mut self,
-        project: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.coordinators.saved_picks.is_none() {
-            self.coordinators.saved_picks = Some(self.new_thread.picks.clone());
+    pub(crate) fn close_coordinator_setup(&mut self, id: Option<u64>, cx: &mut Context<Self>) {
+        if id.is_some_and(|expected| self.coordinators.setup_id != expected) {
+            return;
         }
-        self.choose_new_thread_runner(None, true, cx);
-        let composer = self.ensure_new_composer(window, cx);
-        let app = cx.entity();
-        let project_id = project.to_owned();
-        self.coordinators.setup_controls = Some(cx.new(|cx| CoordinatorControls {
-            app: app.downgrade(),
-            composer,
-            project: project_id,
-            _changes: cx.observe(&app, |_, _, cx| cx.notify()),
-        }));
-        self.coordinators.setup = Some(project.to_owned());
-        cx.notify();
-    }
-
-    pub(crate) fn close_coordinator_setup(&mut self, cx: &mut Context<Self>) {
         self.coordinators.setup = None;
-        self.coordinators.setup_controls = None;
+        self.coordinators.setup_error = None;
         if let Some(picks) = self.coordinators.saved_picks.take() {
             self.new_thread.picks = picks;
         }
@@ -173,6 +156,7 @@ impl Threadbear {
     pub(crate) fn start_coordinator(
         &mut self,
         project: &str,
+        setup_id: u64,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -180,6 +164,7 @@ impl Threadbear {
         if !self.coordinators.busy.insert(key.clone()) {
             return;
         }
+        self.coordinators.setup_error = None;
         let logins = self.draft_logins();
         let selection = self.with_draft(&logins, |d| d.create_params("", Vec::new(), false));
         let mut params = json!({"projectId":project});
@@ -195,6 +180,8 @@ impl Threadbear {
             let result = call(client, "coordinators.start", params).await;
             this.update_in(cx, |this, window, cx| {
                 this.coordinators.busy.remove(&key);
+                let same_dialog = this.coordinators.setup_id == setup_id
+                    && this.coordinators.setup.as_deref() == Some(project.as_str());
                 match result {
                     Ok(value) => {
                         if let Some(coordinator) = Coordinator::decode(&value["coordinator"]) {
@@ -212,21 +199,34 @@ impl Threadbear {
                             {
                                 this.threads.insert(thread.id.clone(), Arc::new(thread));
                             }
-                            this.close_coordinator_setup(cx);
+                            if same_dialog {
+                                this.coordinators.setup_close_dialog = false;
+                                window.close_dialog(cx);
+                                this.close_coordinator_setup(Some(setup_id), cx);
+                            }
                             this.coordinators.tab = Tab::Conversation;
                             this.open(coordinator.thread_id, window, cx);
                             this.projects.open = Some(project);
                             this.show_pane(crate::shell::HIGHLIGHTS, cx);
                             this.load_list(cx);
                         } else {
-                            this.show_error(
-                                "The runner did not return the coordinator it made.".to_owned(),
-                                cx,
-                            );
+                            let message =
+                                "The runner did not return the coordinator it made.".to_owned();
+                            if same_dialog {
+                                this.coordinators.setup_error = Some(message);
+                            } else {
+                                this.show_error(message, cx);
+                            }
                             this.load_coordinators(cx);
                         }
                     }
-                    Err(error) => this.show_error(error.message, cx),
+                    Err(error) => {
+                        if same_dialog {
+                            this.coordinators.setup_error = Some(error.message);
+                        } else {
+                            this.show_error(error.message, cx);
+                        }
+                    }
                 }
                 cx.notify();
             })
@@ -356,40 +356,5 @@ impl Threadbear {
             .ok();
         })
         .detach();
-    }
-}
-
-/// The standard picker row renders as a child view: its composer reads the
-/// app, so it must run after the project's own render has released it.
-pub(crate) struct CoordinatorControls {
-    app: WeakEntity<Threadbear>,
-    composer: Entity<crate::composer::Composer>,
-    project: String,
-    _changes: Subscription,
-}
-
-impl Render for CoordinatorControls {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let busy = self.app.upgrade().is_some_and(|app| {
-            app.read(cx)
-                .coordinators
-                .busy
-                .contains(&format!("start:{}", self.project))
-        });
-        let (app, project) = (self.app.clone(), self.project.clone());
-        let add = crate::coordinator_home::control(
-            "coordinator-confirm-add",
-            "Add coordinator",
-            "Start this project's coordinator using the chosen pool and model",
-            busy,
-            cx,
-            move |_, window, cx| {
-                app.update(cx, |this, cx| this.start_coordinator(&project, window, cx))
-                    .ok();
-            },
-        );
-        self.composer.update(cx, |composer, cx| {
-            composer.render_coordinator_picker(add, window, cx)
-        })
     }
 }

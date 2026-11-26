@@ -1,11 +1,16 @@
 // The coordinator's project home: its real conversation in the centre,
 // shared project records in Highlights, and quiet helper detail on Activity.
+use crate::a11y::A11yRole as _;
 use crate::app::Threadbear;
 use crate::coordinators::Tab;
 use crate::projects::project_icon;
 use crate::spinner::Spinner;
-use crate::style::{self, px};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _};
+use crate::style::{self, px, size};
+use gpui_kit::base::TestSupportExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::{
+    h_flex, v_flex, ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _,
+};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use serde_json::{json, Value};
@@ -176,34 +181,83 @@ impl Threadbear {
     pub(crate) fn render_add_coordinator(
         &mut self,
         project: &Project,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if !self.coordinators_on() || project.archived {
             return None;
         }
         let id = project.id.clone();
-        if self.coordinators.setup.as_deref() != Some(id.as_str()) {
-            return Some(control(
-                "project-add-coordinator",
-                "Add a coordinator",
-                "Add a coordinator that keeps this project's notes and work current",
-                false,
-                cx,
-                cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.show_coordinator_setup(&id, window, cx)
-                }),
-            ));
+        Some(control(
+            "project-add-coordinator",
+            "Add a coordinator",
+            "Add a coordinator that keeps this project's notes and work current",
+            false,
+            cx,
+            cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.show_coordinator_setup(&id, window, cx)
+            }),
+        ))
+    }
+
+    pub(crate) fn show_coordinator_setup(
+        &mut self,
+        project: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.coordinators.setup.is_some() {
+            return;
         }
-        let busy = self.coordinators.busy.contains(&format!("start:{id}"));
-        let _ = window;
-        let controls = self.coordinators.setup_controls.clone();
-        Some(v_flex().w_full().gap(px(15.)).p(px(20.)).rounded(px(10.)).border_1().border_color(cx.theme().border)
-            .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child(format!("Add a {} coordinator",project.title)))
-            .child(div().text_size(px(13.)).line_height(px(20.)).text_color(style::secondary_text(cx)).child("It starts from this project's goals, state and notes. Helpers report here, and it brings you decisions that need you."))
-            .when_some(controls, |s, controls| s.child(controls))
-            .child(control("coordinator-cancel-add","Cancel","Keep the project as it is",busy,cx,cx.listener(|this, _: &ClickEvent, _,cx| this.close_coordinator_setup(cx))))
-            .into_any_element())
+        if self.coordinators.saved_picks.is_none() {
+            self.coordinators.saved_picks = Some(self.new_thread.picks.clone());
+        }
+        self.choose_new_thread_runner(None, true, cx);
+        let composer = self.ensure_new_composer(window, cx);
+        let app = cx.entity();
+        let project_id = project.to_owned();
+        let start_key = format!("start:{project_id}");
+        self.coordinators.setup_id = self.coordinators.setup_id.wrapping_add(1);
+        let setup_id = self.coordinators.setup_id;
+        self.coordinators.setup_close_dialog = false;
+        self.coordinators.setup_error = None;
+        self.coordinators.setup = Some(project_id.clone());
+        let view = cx.new(|cx| CoordinatorSetupSheet {
+            id: setup_id,
+            app: app.downgrade(),
+            composer,
+            project: project_id,
+            closing: false,
+            _changes: cx.observe(&app, |_, _, cx| cx.notify()),
+        });
+        let app_for_busy = app.downgrade();
+        let app_for_close = app.downgrade();
+        cx.notify();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let busy = app_for_busy
+                .upgrade()
+                .is_some_and(|a| a.read(cx).coordinators.busy.contains(&start_key));
+            let close_app = app_for_close.clone();
+            dialog
+                .w(px(460.))
+                .centered()
+                .entrance(gpui_kit::component::dialog::DialogEntrance::FadeSlide)
+                .p(px(22.))
+                .bg(cx.theme().popover)
+                .rounded(px(14.))
+                .close_button(false)
+                .overlay_closable(!busy)
+                .keyboard(!busy)
+                .child(view.clone())
+                .on_close(move |_, _, cx| {
+                    if let Some(app) = close_app.upgrade() {
+                        app.update(cx, |this, cx| {
+                            this.close_coordinator_setup(Some(setup_id), cx)
+                        });
+                    }
+                })
+        });
+        crate::web_panels::keyboard_to_app(window);
     }
 
     pub(crate) fn render_coordinator_document(
@@ -467,7 +521,175 @@ impl Threadbear {
             let current = self.project(&e.project).map(|p| e.field.text(p).to_owned());
             json!({"field":e.field.title(),"draft":e.input.read(cx).value().to_string(),"reviewCurrent":current.filter(|text| !e.saving && *text != e.baseline)})
         });
-        json!({"on":self.coordinators_on(),"count":self.coordinators.list.len(),"tab":self.coordinators.tab.title(),"project":current.map(|c|c.project_id.clone()),"thread":current.map(|c|c.thread_id.clone()),"state":current.map(|c|if c.state==State::Paused{"paused"}else{"active"}),"tasks":current.map(|c|c.tasks.iter().map(|t|json!({"title":t.title,"state":t.status_label()})).collect::<Vec<_>>()),"documentShown":document_shown,"editing":editing,"document":project.map(|p|json!({"goals":p.goals,"state":p.state,"notes":p.notes}))})
+        json!({"on":self.coordinators_on(),"count":self.coordinators.list.len(),"tab":self.coordinators.tab.title(),"setup":self.coordinators.setup.clone(),"project":current.map(|c|c.project_id.clone()),"thread":current.map(|c|c.thread_id.clone()),"state":current.map(|c|if c.state==State::Paused{"paused"}else{"active"}),"tasks":current.map(|c|c.tasks.iter().map(|t|json!({"title":t.title,"state":t.status_label()})).collect::<Vec<_>>()),"documentShown":document_shown,"editing":editing,"document":project.map(|p|json!({"goals":p.goals,"state":p.state,"notes":p.notes}))})
+    }
+}
+
+/// Centered dialog sheet for adding a coordinator to a project. Renders as a
+/// child view so its composer can read the app cleanly outside the app render.
+struct CoordinatorSetupSheet {
+    id: u64,
+    app: WeakEntity<Threadbear>,
+    composer: Entity<crate::composer::Composer>,
+    project: String,
+    closing: bool,
+    _changes: Subscription,
+}
+
+impl Render for CoordinatorSetupSheet {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(app_entity) = self.app.upgrade() else {
+            return div().into_any_element();
+        };
+        let (active, close_now, project, busy, error) = {
+            let app = app_entity.read(cx);
+            let same = app.coordinators.setup_id == self.id;
+            let active = same
+                && app.coordinators_on()
+                && app.coordinators.setup.as_deref() == Some(self.project.as_str());
+            let close_now = same && app.coordinators.setup_close_dialog;
+            let project = app.project(&self.project).cloned();
+            let busy = app
+                .coordinators
+                .busy
+                .contains(&format!("start:{}", self.project));
+            let error = app.coordinators.setup_error.clone();
+            (active, close_now, project, busy, error)
+        };
+        if !active {
+            if close_now && !self.closing {
+                self.closing = true;
+                let id = self.id;
+                let app = self.app.clone();
+                window.defer(cx, move |window, cx| {
+                    let should_close = app.upgrade().is_some_and(|a| {
+                        a.update(cx, |this, _| {
+                            if this.coordinators.setup_id == id
+                                && this.coordinators.setup_close_dialog
+                            {
+                                this.coordinators.setup_close_dialog = false;
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                    });
+                    if should_close {
+                        window.close_dialog(cx);
+                    }
+                });
+            }
+            return div().into_any_element();
+        }
+        let title = project
+            .as_ref()
+            .map_or_else(|| "project".to_owned(), |p| p.title.clone());
+        let icon = project_icon(project.as_ref(), &title, 36., cx);
+        let picker = self.composer.update(cx, |composer, cx| {
+            composer.render_coordinator_picker(busy, window, cx)
+        });
+        let cancel_tip = "Keep the project as it is";
+        let add_tip = "Start this project's coordinator using the chosen pool and model";
+        v_flex()
+            .id("coordinator-setup-sheet")
+            .w_full()
+            .gap(px(18.))
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_start()
+                    .gap(px(12.))
+                    .child(icon)
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .text_size(px(15.))
+                                    .line_height(px(20.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(cx.theme().foreground)
+                                    .child(format!("Add a {title} coordinator")),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(size::LABEL))
+                                    .line_height(px(18.))
+                                    .text_color(style::secondary_text(cx))
+                                    .child("Starts from this project's goals, state and notes. Helpers report here, and it brings you decisions that need you."),
+                            ),
+                    ),
+            )
+            .child(picker)
+            .when_some(error, |s, message| {
+                s.child(
+                    div()
+                        .pl(px(60.))
+                        .text_size(px(size::DETAIL))
+                        .line_height(px(17.))
+                        .text_color(style::failed(cx))
+                        .child(message),
+                )
+            })
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_end()
+                    .items_center()
+                    .gap(px(8.))
+                    .pt(px(2.))
+                    .child(
+                        div()
+                            .id("coordinator-cancel-add")
+                            .test_support()
+                            .a11y_role(Role::GenericContainer)
+                            .aria_label(cancel_tip.to_owned())
+                            .child(
+                                Button::new("coordinator-cancel-add-button")
+                                    .label("Cancel")
+                                    .outline()
+                                    .disabled(busy)
+                                    .tooltip(cancel_tip)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.closing = true;
+                                        window.close_dialog(cx);
+                                        if let Some(app) = this.app.upgrade() {
+                                            let id = this.id;
+                                            app.update(cx, |app, cx| {
+                                                app.close_coordinator_setup(Some(id), cx)
+                                            });
+                                        }
+                                    })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("coordinator-confirm-add")
+                            .test_support()
+                            .a11y_role(Role::GenericContainer)
+                            .aria_label(add_tip.to_owned())
+                            .child(
+                                Button::new("coordinator-confirm-add-button")
+                                    .label("Add coordinator")
+                                    .primary()
+                                    .loading(busy)
+                                    .disabled(busy)
+                                    .tooltip(add_tip)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        if let Some(app) = this.app.upgrade() {
+                                            let project_id = this.project.clone();
+                                            let id = this.id;
+                                            app.update(cx, |app, cx| {
+                                                app.start_coordinator(&project_id, id, window, cx)
+                                            });
+                                        }
+                                    })),
+                            ),
+                    ),
+            )
+            .into_any_element()
     }
 }
 
@@ -480,7 +702,7 @@ fn heading(text: &str, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-pub(crate) fn control(
+fn control(
     id: impl Into<ElementId>,
     label: &str,
     tip: &str,

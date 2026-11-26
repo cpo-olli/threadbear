@@ -455,25 +455,107 @@ impl Composer {
 
     // ---- The row ----
 
-    /// The ordinary pool/model menu without message-only controls. Project
+    /// The ordinary pool/model menu rendered as dialog form fields. Project
     /// coordinators belong to this runner and always use its permissions.
     pub(crate) fn render_coordinator_picker(
         &mut self,
-        add: AnyElement,
+        busy: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let data = self.chip_data(cx);
-        let mut row = h_flex().w_full().items_center().gap(px(8.));
-        if let Some(settings) = data.settings() {
-            if !settings.uses_pools() {
-                row = row
-                    .child(self.render_account_chip(&data, cx))
-                    .child(chip_divider(cx));
-            }
-            row = row.child(self.render_model_chip(&data, window, cx));
+        let Some(settings) = data.settings() else {
+            return div().into_any_element();
+        };
+        let uses_pools = settings.uses_pools();
+        let field_busy = busy || self.chips_busy(cx).0;
+        let label_color = style::secondary_text(cx);
+        let label = move |text: &'static str| {
+            div()
+                .w(px(48.))
+                .flex_none()
+                .text_right()
+                .text_size(px(size::LABEL))
+                .text_color(label_color)
+                .child(text)
+        };
+        let mut rows = v_flex().w_full().gap(px(10.));
+        if !uses_pools {
+            let composer = cx.entity().downgrade();
+            let trigger = CoordinatorFieldTrigger {
+                id: "coordinator-account-field".into(),
+                title: settings.account_chip_title().into(),
+                icon: Icon::from(IconName::CircleUser),
+                accent_icon: false,
+                tip: settings.account_chip_help().into(),
+                badge: settings.account_badge(),
+                busy: field_busy,
+                selected: false,
+            };
+            let field = if field_busy {
+                trigger.into_any_element()
+            } else {
+                Popover::new("coordinator-account")
+                    .trigger_style(StyleRefinement::default().w_full().min_w_0())
+                    .anchor(Anchor::BottomCenter)
+                    .trigger(trigger)
+                    .content(move |_, window, cx| {
+                        crate::composer_account::picker(composer.clone(), window, cx)
+                    })
+                    .into_any_element()
+            };
+            rows = rows.child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(label("Login"))
+                    .child(div().flex_1().min_w_0().child(field)),
+            );
         }
-        row.child(div().flex_1()).child(add).into_any_element()
+        let model_trigger = CoordinatorFieldTrigger {
+            id: "coordinator-model-field".into(),
+            title: settings.model_chip_title().into(),
+            icon: model_chip_icon(&settings),
+            accent_icon: uses_pools && settings.pool().is_some(),
+            tip: settings.model_chip_help().into(),
+            badge: settings.model_chip_badge(),
+            busy: field_busy,
+            selected: false,
+        };
+        let model_field = if field_busy {
+            model_trigger.into_any_element()
+        } else {
+            let picker = self.picker_state(window, cx);
+            Popover::new("coordinator-model")
+                .trigger_style(StyleRefinement::default().w_full().min_w_0())
+                .anchor(Anchor::BottomCenter)
+                .trigger(model_trigger)
+                .content(move |_, _, _| div().m(gpui_kit::px(-12.)).child(picker.clone()))
+                .into_any_element()
+        };
+        rows = rows
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(label("Model"))
+                    .child(div().flex_1().min_w_0().child(model_field)),
+            )
+            .child(
+                div()
+                    .pl(px(60.))
+                    .text_size(px(size::DETAIL))
+                    .line_height(px(17.))
+                    .text_color(style::quiet_text(cx))
+                    .child(if uses_pools {
+                        "Runs on this Mac \u{00B7} Uses the same pool and model picker as a normal thread."
+                    } else {
+                        "Runs on this Mac \u{00B7} Uses the same login and model picker as a normal thread."
+                    }),
+            );
+        rows.into_any_element()
     }
 
     pub(crate) fn render_controls(
@@ -909,27 +991,13 @@ impl Composer {
         };
         let title = settings.model_chip_title();
         let tip = settings.model_chip_help();
-        // The pool's own icon when one was picked for it, a pinned login's
-        // person, else the provider's logo (`modelChipLogo`, `modelChipIcon`).
-        let icon: Icon = if !settings.uses_pools() {
-            crate::icons::provider_mark(&settings.provider)
-        } else {
-            match settings.pool() {
-                None => Icon::from(IconName::CircleUser),
-                Some(pool) => match pool.icon.as_deref().filter(|i| !i.is_empty()) {
-                    Some(symbol) => crate::icons::try_symbol(symbol)
-                        .unwrap_or_else(|| Icon::from(IconName::Layers)),
-                    None => crate::icons::provider_mark(&settings.provider),
-                },
-            }
-        };
         let trigger = ChipTrigger {
             busy: self.chips_busy(cx).0,
             badge: settings.model_chip_badge(),
             id: "composer-model-chip".into(),
             kind: TriggerKind::Chip,
             title: title.into(),
-            icon: Some(icon),
+            icon: Some(model_chip_icon(&settings)),
             tip: tip.into(),
             selected: false,
         };
@@ -1360,6 +1428,154 @@ impl RenderOnce for ChipTrigger {
                 })
                 .into_any_element(),
         }
+    }
+}
+
+/// The pool's own icon when one was picked for it, a pinned login's person,
+/// else the provider's logo (`modelChipLogo`, `modelChipIcon`).
+fn model_chip_icon(settings: &ChipSettings<'_>) -> Icon {
+    if !settings.uses_pools() {
+        return crate::icons::provider_mark(&settings.provider);
+    }
+    match settings.pool() {
+        None => Icon::from(IconName::CircleUser),
+        Some(pool) => match pool.icon.as_deref().filter(|i| !i.is_empty()) {
+            Some(symbol) => {
+                crate::icons::try_symbol(symbol).unwrap_or_else(|| Icon::from(IconName::Layers))
+            }
+            None => crate::icons::provider_mark(&settings.provider),
+        },
+    }
+}
+
+/// Full-width dropdown field trigger used inside the Add a coordinator dialog,
+/// opening the ordinary pool/model or login popover.
+#[derive(IntoElement)]
+struct CoordinatorFieldTrigger {
+    id: ElementId,
+    title: SharedString,
+    icon: Icon,
+    accent_icon: bool,
+    tip: SharedString,
+    badge: Option<ChipBadge>,
+    busy: bool,
+    selected: bool,
+}
+
+impl Selectable for CoordinatorFieldTrigger {
+    fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+    fn is_selected(&self) -> bool {
+        self.selected
+    }
+}
+
+impl RenderOnce for CoordinatorFieldTrigger {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let label: SharedString = if self.title.is_empty() {
+            self.tip.clone()
+        } else {
+            self.title.clone()
+        };
+        let fill = if cx.theme().mode.is_dark() {
+            style::primary_opacity(cx, 0.05)
+        } else {
+            style::button_fill(cx)
+        };
+        let icon_color = if self.accent_icon {
+            style::accent(cx)
+        } else {
+            style::faint_icon(cx)
+        };
+        let title_el = if let Some((pool, model)) = self.title.split_once(" \u{00B7} ") {
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap(px(5.))
+                .text_size(px(size::LABEL))
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(cx.theme().foreground)
+                        .child(pool.to_owned()),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(style::secondary_text(cx))
+                        .child(format!("\u{00B7} {model}")),
+                )
+                .into_any_element()
+        } else {
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(size::LABEL))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(cx.theme().foreground)
+                .child(self.title)
+                .into_any_element()
+        };
+        h_flex()
+            .id(self.id)
+            .w_full()
+            .min_w_0()
+            .h(px(34.))
+            .px(px(10.))
+            .gap(px(8.))
+            .items_center()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(style::hairline(cx))
+            .bg(fill)
+            .when(!self.busy, |s| {
+                s.cursor_pointer()
+                    .hover(|h| h.bg(style::primary_opacity(cx, 0.09)))
+            })
+            .test_support()
+            .role(Role::Button)
+            .aria_label(label)
+            .tip(self.tip)
+            .child(div().flex_none().flex().child(if self.busy {
+                crate::spinner::Spinner::new()
+                    .color(style::secondary_text(cx))
+                    .with_size(px(13.))
+                    .into_any_element()
+            } else {
+                self.icon
+                    .with_size(px(14.))
+                    .text_color(icon_color)
+                    .into_any_element()
+            }))
+            .child(title_el)
+            .when_some(self.badge, |s, badge| {
+                let color = if badge.is_stop() {
+                    cx.theme().danger
+                } else {
+                    style::needs_you(cx)
+                };
+                s.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(size::DETAIL))
+                        .text_color(color)
+                        .whitespace_nowrap()
+                        .child(badge_words(&badge)),
+                )
+            })
+            .child(
+                div().flex_none().flex().child(
+                    Icon::from(IconName::ChevronDown)
+                        .with_size(px(12.))
+                        .text_color(style::faint_icon(cx)),
+                ),
+            )
     }
 }
 

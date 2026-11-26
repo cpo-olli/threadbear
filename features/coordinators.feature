@@ -39,10 +39,20 @@ Feature: Project coordinators
     And the coordinator's document contains "Two helpers are working"
 
   @coordinators.home @coordinators @swift-pending
-  Scenario: A project can add its coordinator using the ordinary model controls
+  Scenario: A project can add its coordinator from a pop-up dialog
     When I open the project "Photo sync"
-    And I add the project's coordinator
-    Then the coordinator's "Conversation" tab is open
+    And I open the project's Add coordinator dialog
+    Then the Add coordinator dialog is open
+    When I press Escape to dismiss the Add coordinator dialog
+    Then the Add coordinator dialog is closed
+    When I open the project's Add coordinator dialog
+    Then the Add coordinator dialog is open
+    When I cancel the Add coordinator dialog
+    Then the Add coordinator dialog is closed
+    And the project offers its Add coordinator control
+    When I add the project's coordinator
+    Then the Add coordinator dialog is closed
+    And the coordinator's "Conversation" tab is open
     And the transcript shows a reply starting "The project home is taking shape."
     And the coordinator's Done card has no Archive button
     And the coordinator is listed once in its own sidebar section
