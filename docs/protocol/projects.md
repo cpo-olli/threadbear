@@ -743,7 +743,11 @@ Only the user-facing app may start or pause a coordinator. The coordinator's
 `coordinator` tool may read its own registry, add tasks, select/complete/archive
 tasks, start or resume hidden helpers, manage open loops (`openLoop`,
 `updateLoop`, `closeLoop`), update its charter and interests, set a wake time
-and record answers to helper questions. Thread-owned RPC credentials
+and record answers to helper questions. It may also use `add_button` to offer a
+side job outside the project as a new thread; only the user's press starts it,
+so it can't use one to get round its own boundary. A Claude coordinator may also call Agent
+Archive's read tools (exact names in `coordinator-policy.ts`) to look back
+before asking the user something already settled. Thread-owned RPC credentials
 cannot start or reconfigure another coordinator, and neither coordinator nor
 helper shells may use thread-owned RPC to create threads or mutate other work.
 Coordinator read-only and helper non-escalation boundaries are enforced in each

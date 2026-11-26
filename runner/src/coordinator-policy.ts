@@ -11,9 +11,21 @@ const HELPER_BLOCKED_TOOLS = new Set(['Agent', 'Task', 'TaskOutput', 'TaskStop',
 const ACP_READ_KINDS = new Set(['read', 'search', 'fetch', 'think']);
 
 export const PROJECT_READS = new Set(['list_projects', 'read_project', 'list_threads', 'read_thread', 'list_schedules', 'list_accounts']);
-export const COORDINATOR_TOOLS = new Set(['update_project', 'send_message', 'end_turn', 'ask_secret', 'pin', 'unpin', 'show_options', 'show_panel', 'coordinator']);
+// add_button lets the coordinator offer an unrelated side job as a new
+// thread that only Mike's press starts, so it can't escape its own boundary.
+export const COORDINATOR_TOOLS = new Set(['update_project', 'send_message', 'end_turn', 'ask_secret', 'pin', 'unpin', 'show_options', 'show_panel', 'add_button', 'coordinator']);
 export const COORDINATOR_THREADBEAR_TOOLS = new Set([...PROJECT_READS, ...COORDINATOR_TOOLS]);
 export const HELPER_THREADBEAR_TOOLS = PROJECT_READS;
+
+// Agent Archive's tools (agent-archive.ts), which only search and read past
+// threads, so a coordinator can look back before asking the user something
+// already settled. Exact names, not a prefix: a server called
+// "agent-archive__x" must not ride on it. Claude only: Threadbear gives the
+// archive to Claude and Codex sessions, and ACP sessions don't get it.
+const ARCHIVE_READ_TOOLS = new Set(['get_archive_context', 'search_archive', 'list_recent_threads', 'list_user_messages', 'read_archive_thread', 'find_computer_history', 'read_computer_history_summary']);
+export function readOnlyMcpTool(name: string): boolean {
+  return name.startsWith('mcp__agent-archive__') && ARCHIVE_READ_TOOLS.has(name.slice('mcp__agent-archive__'.length));
+}
 
 export const HELPER_REPORT = 'Report this question or blocked operation to the coordinator in your result and stop this job. The coordinator will answer from its instructions or ask the user, then resume you. Do not open a user card or try another way to get approval.';
 
@@ -42,7 +54,7 @@ export function coordinatorTool(name: string, _input: Record<string, unknown>, h
   if (name === 'Agent' || name === 'Task' || name === 'TaskOutput' || name === 'TaskStop') {
     return { reason: 'Delegate implementation to a helper with the coordinator tool (startHelper or resumeHelper), not native sub-agents.' };
   }
-  if (READ_TOOLS.has(name) || CONTROL_TOOLS.has(name) || (tb !== undefined && COORDINATOR_THREADBEAR_TOOLS.has(tb))) return {};
+  if (READ_TOOLS.has(name) || CONTROL_TOOLS.has(name) || readOnlyMcpTool(name) || (tb !== undefined && COORDINATOR_THREADBEAR_TOOLS.has(tb))) return {};
   return { reason: 'The project coordinator can read and orchestrate. Delegate implementation to a helper with the coordinator tool (startHelper); this tool is not available to the coordinator.' };
 }
 

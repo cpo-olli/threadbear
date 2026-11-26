@@ -364,6 +364,7 @@ test('coordinator and helper restrictions apply to thread-owned RPC, MCP tool li
   assert.equal(coordBoundary.checkTool({ name: 'mcp__threadbear__update_project', input: { project: project.id } }), undefined);
   assert.match(coordBoundary.checkTool({ name: 'mcp__threadbear__update_project', input: { project: 'another-project' } })!, /own project/);
   assert.match(coordBoundary.checkTool({ name: 'mcp__threadbear__create_thread', input: {} })!, /not available/);
+  assert.equal(coordBoundary.checkTool({ name: 'mcp__threadbear__add_button', input: { title: 'Tidy contacts', start: { text: 'Brief' } } }), undefined);
 
   // Helper boundary only permits read-only Threadbear tools.
   const helperBoundary = c.session(started.helperId)!;
@@ -384,12 +385,23 @@ test('coordinator and helper restrictions apply to thread-owned RPC, MCP tool li
   assert.ok(coordTools.includes('update_project'));
   assert.equal(coordTools.includes('create_thread'), false);
   assert.equal(coordTools.includes('delete_thread'), false);
+  assert.ok(coordTools.includes('add_button'), 'side jobs are offered as a button only Mike can press');
+  const buttonTool = buildThreadbearTools(h.runner, coordinator.threadId, () => h.clock.now(), undefined, pc, undefined, { coordinators: () => c }).find((t) => t.name === 'add_button') as unknown as { handler: (p: Record<string, unknown>, extra: unknown) => Promise<{ content: { text: string }[]; isError?: boolean }> };
+  for (const extra of [{ panel: { folder: '.', panel: 'missing' } }, { send: { threadId: coordinator.threadId, text: 'Hi' } }, {}]) {
+    const r = await buttonTool.handler({ title: 'Do it', ...extra }, {});
+    assert.equal(r.isError, true, JSON.stringify(extra));
+    assert.match(r.content[0]!.text, /only make start buttons/);
+  }
+  const made = await buttonTool.handler({ title: 'Tidy contacts', start: { text: 'Find duplicate contacts and suggest merges.' } }, {});
+  assert.notEqual(made.isError, true, made.content[0]!.text);
+  assert.match(made.content[0]!.text, /starts a thread/);
 
   const helperTools = buildThreadbearTools(h.runner, started.helperId, () => h.clock.now(), undefined, pc, undefined, { coordinators: () => c }).map((t) => t.name);
   assert.ok(helperTools.every((n) => HELPER_THREADBEAR_TOOLS.has(n)));
   assert.equal(helperTools.includes('end_turn'), false);
   assert.equal(helperTools.includes('coordinator'), false);
   assert.equal(helperTools.includes('create_thread'), false);
+  assert.equal(helperTools.includes('add_button'), false);
 
   // Shared ACP & Claude policies block coordinator writes/sub-agents and helper escalation.
   assert.ok(acpCoordinatorTool({ role: 'coordinator', kind: 'edit', name: 'write_to_file' }).reason);
@@ -398,6 +410,13 @@ test('coordinator and helper restrictions apply to thread-owned RPC, MCP tool li
   assert.ok(acpCoordinatorTool({ role: 'coordinator', external: true, name: 'external_write' }).reason);
   assert.equal(acpCoordinatorTool({ role: 'coordinator', kind: 'read', name: 'view_file' }).reason, undefined);
   assert.equal(acpCoordinatorTool({ role: 'coordinator', mcpName: 'threadbear__coordinator' }).reason, undefined);
+  // Agent Archive only reads, so a coordinator can look back before asking; other servers stay out.
+  assert.ok(acpCoordinatorTool({ role: 'coordinator', external: true, mcpName: 'agent-archive__search_archive' }).reason, 'ACP sessions have no archive, so nothing claiming to be it is let through');
+  assert.ok(coordinatorTool('mcp__agent-archive__evil__write_file', {}, false).reason, 'a server named agent-archive__evil is not the archive');
+  assert.ok(coordinatorTool('mcp__agent-archive__write', {}, false).reason, 'only the known read tools');
+  assert.deepEqual(coordinatorTool('mcp__agent-archive__get_archive_context', {}, false), {});
+  assert.ok(coordinatorTool('mcp__connectors__gmail__send_message', {}, false).reason);
+  assert.ok(coordinatorTool('mcp__agent-archive__search_archive', {}, true).reason === undefined, 'helpers already have non-escalating tools');
   assert.equal(acpCoordinatorTool({ role: 'helper', kind: 'edit', name: 'write_to_file' }).reason, undefined);
   assert.ok(acpCoordinatorTool({ role: 'helper', name: 'invoke_subagent' }).reason);
   assert.ok(acpCoordinatorTool({ role: 'helper', name: 'ask_question' }).reason);

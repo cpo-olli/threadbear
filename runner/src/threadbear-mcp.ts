@@ -862,6 +862,12 @@ export function buildThreadbearTools(
           },
           handle(async ({ title, start, send, panel }) => {
             if (!control.createButton) throw new Error("This runner can't make buttons.");
+            // A coordinator only offers side jobs as new threads. Checked before
+            // any folder or patch is resolved: resolving a panel loads that
+            // folder's patches, which runs code outside its boundary.
+            if (opts.coordinators?.()?.forThread(selfId) && (send || panel || !start)) {
+              throw new Error('A project coordinator can only make start buttons: offer a side job as a new thread the user presses to start.');
+            }
             const input: Parameters<Runner['createButton']>[1] = { title };
             if (start) {
               input.start = {

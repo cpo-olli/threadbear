@@ -1257,7 +1257,9 @@ bottom for technical notes read and written by the coordinator and its helpers.
 You can edit the brief or open Agent memory to edit the raw notes directly; if
 another thread changed a field while you were editing, your draft stays open so
 you can merge it. Helpers report to the coordinator, which checks their results
-and brings you decisions it cannot settle. Pause stops it and its helpers, and
+and brings you decisions it cannot settle. Ask it for a side job that isn't part of the
+project and it offers a button in its reply that starts a new thread for it,
+only when you press it, rather than filing the job under the project. Pause stops it and its helpers, and
 Resume reconciles interrupted work first. Other Macs, the phones and the
 website show the coordinator's
 conversation and questions, while setup and the living document are desktop
