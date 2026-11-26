@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { coordinatorMethods, Coordinators, runMove } from '../../src/coordinators.ts';
+import { coordinatorMethods, Coordinators, runMove, type CoordinatorView } from '../../src/coordinators.ts';
 import { acpCoordinatorTool, coordinatorTool, HELPER_THREADBEAR_TOOLS } from '../../src/coordinator-policy.ts';
 import { Projects } from '../../src/projects.ts';
 import { FakeClock } from '../../src/clock.ts';
@@ -2108,4 +2108,373 @@ test('coordinator refusals say what to use instead, and the ids it is given work
   assert.match((await send.handler({ threadId: started.helperId.slice(0, 8), text: 'Hi' }, {})).content[0]!.text, /No thread with id/);
   assert.match((await send.handler({ threadId: started.helperId, text: 'Hi' }, {})).content[0]!.text, /hidden helper/);
   c.stop();
+});
+
+test('task board is additive to the old action payloads and retains decision answers', () => {
+  const { c, project } = setup();
+  c.create({ projectId: project.id });
+  const rpc = coordinatorMethods(c);
+  const { coordinator: added } = rpc['coordinators.addTask']({
+    projectId: project.id, title: 'Book the hall', doneWhen: 'Booking confirmed',
+  }) as { coordinator: CoordinatorView };
+  assert.equal(added.tasks[0]?.state, 'todo');
+  assert.deepEqual(Object.keys(added.tasks[0]!).sort(), ['doneWhen', 'id', 'state', 'title']);
+  c.selectTask(project.id, added.tasks[0]!.id);
+  const { loopId } = c.openLoop(project.id, {
+    kind: 'waiting_on_user', title: 'Which hall?', options: ['Blue room', 'Red room'], sourceSeq: 17,
+  });
+  c.updateLoop(project.id, loopId, { summary: 'Both are free', options: ['Blue room', 'Green room'] });
+  const view = c.get(project.id);
+  assert.equal(view.selectedTaskId, added.tasks[0]!.id);
+  assert.deepEqual(view.loops[0]!.options, ['Blue room', 'Green room']);
+  assert.equal('work' in view.loops[0]!, false);
+  const decision = () => c.get(project.id).taskBoard.tasks.find((t) => t.id === loopId)!;
+  assert.deepEqual(decision().decision?.options, [{ label: 'Blue room' }, { label: 'Green room' }]);
+  assert.deepEqual(decision().source, { threadId: view.threadId, seq: 17 });
+  c.setWorkTaskDetails(project.id, added.tasks[0]!.id, {
+    kind: 'action', owner: { kind: 'user' }, doneWhen: 'Deposit received',
+  });
+  assert.equal(c.get(project.id).tasks[0]!.doneWhen, 'Deposit received');
+  c.setWorkTaskDetails(project.id, loopId, { kind: 'decision', owner: { kind: 'user' }, decision: {
+    options: [{ label: 'Blue room', does: 'Seats 20' }, { label: 'Pink room' }], recommendation: 'Blue room',
+  } });
+  assert.deepEqual(c.get(project.id).loops[0]!.options, ['Blue room', 'Pink room']);
+  c.updateLoop(project.id, loopId, { options: ['Blue room', 'Grey room'] });
+  assert.deepEqual(decision().decision?.options, [{ label: 'Blue room', does: 'Seats 20' }, { label: 'Grey room' }]);
+  rpc['coordinators.replyLoop']({ projectId: project.id, loopId, text: 'Blue room' });
+  assert.equal(c.get(project.id).loops[0]!.state, 'closed');
+  assert.equal(decision().decision?.answer, 'Blue room');
+  assert.equal(decision().state, 'done');
+  c.completeTask(project.id, added.tasks[0]!.id);
+  c.archiveTask(project.id, added.tasks[0]!.id);
+  const [saved] = c.readTaskHistory(project.id);
+  assert.equal(saved?.archivedAt, c.get(project.id).updatedAt);
+  assert.equal(c.get(project.id).tasks.length, 0);
+  c.stop();
+});
+
+test('work items derive progress and retain one sub-task level across reload', () => {
+  const { c, h, home, project } = setup();
+  const { coordinator } = c.create({ projectId: project.id });
+  const { workItemId } = c.addWorkItem(project.id, 'Booking');
+  const action = { kind: 'action', owner: { kind: 'person', name: 'Venue contact' } } as const;
+  const { taskId: parentTaskId } = c.addWorkTask(project.id, {
+    title: 'Book the hall', doneWhen: 'Venue confirmed', work: { ...action, workItemId },
+  });
+  const { taskId: child } = c.addWorkTask(project.id, {
+    title: 'Check availability', doneWhen: 'Date is free', work: { ...action, parentTaskId },
+  });
+  assert.throws(() => c.addWorkTask(project.id, {
+    title: 'Nested child', doneWhen: 'Verified', work: { ...action, parentTaskId: child },
+  }), /one level/);
+  assert.throws(() => c.dropTask(project.id, parentTaskId, 'Plans changed'), /sub-tasks/);
+  c.completeTask(project.id, parentTaskId);
+  c.updateWorkItem(project.id, workItemId, { collapsed: true });
+  const expected = c.get(project.id).taskBoard;
+  assert.deepEqual(expected.workItems[0], { id: workItemId, title: 'Booking', collapsed: true, progress: { total: 1, done: 1 } });
+  assert.equal(expected.tasks.length, 2);
+  assert.equal(expected.tasks.find((task) => task.id === child)?.workItemId, workItemId);
+  const storedChild = c.forThread(coordinator.threadId)?.tasks.find((task) => task.id === child);
+  assert.equal(storedChild?.work?.workItemId, undefined);
+  c.stop();
+  const fresh = recoverFresh(h, home);
+  assert.deepEqual(fresh.c.get(project.id).taskBoard, expected);
+  assert.throws(() => fresh.c.archiveTask(project.id, parentTaskId), /sub-tasks/);
+  fresh.c.completeTask(project.id, child);
+  assert.deepEqual(fresh.c.get(project.id).taskBoard.workItems[0]!.progress, { total: 1, done: 1 });
+  fresh.c.archiveTask(project.id, child);
+  fresh.c.archiveTask(project.id, parentTaskId);
+  assert.equal(fresh.c.readTaskHistory(project.id).length, 2);
+  fresh.c.stop();
+});
+
+test('completion releases postponed dependencies even if the blocker is archived before wake', () => {
+  const { c, h, project } = setup();
+  const { coordinator } = c.create({ projectId: project.id });
+  const blocker = c.addTask(project.id, 'Get the price', 'Quote received').tasks[0]!;
+  const { loopId } = c.openLoop(project.id, { kind: 'waiting_on_user', title: 'Agree to the price?' });
+  const current = () => c.get(project.id).taskBoard.tasks.find((t) => t.id === loopId)!;
+  c.postponeTask(project.id, loopId, { type: 'after_task', taskId: blocker.id });
+  assert.equal(current().state, 'postponed');
+  assert.equal(c.get(project.id).loops[0]!.state, 'open');
+  h.clock.advance(24 * 60 * 60_000);
+  assert.equal(current().state, 'postponed');
+  assert.throws(() => c.dropTask(project.id, blocker.id, 'No quote needed'), /waiting on this task/);
+
+  const sent: string[] = [];
+  const send = h.runner.send.bind(h.runner);
+  h.runner.send = (id, text, ...rest) => {
+    if (id === coordinator.threadId && text.includes('postponed task is due')) sent.push(text);
+    return send(id, text, ...rest);
+  };
+  c.completeTask(project.id, blocker.id);
+  c.archiveTask(project.id, blocker.id);
+  h.clock.advance(0);
+  h.clock.advance(10 * 60_000);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!, new RegExp(loopId));
+  assert.equal(current().state, 'todo');
+  assert.deepEqual(current().due, { type: 'after_task', taskId: blocker.id });
+  c.stop();
+});
+
+test('date wake survives a refused send and restart separately from the legacy wakeAt', () => {
+  const { c, h, home, project } = setup();
+  const { coordinator } = c.create({ projectId: project.id });
+  const task = c.addTask(project.id, 'Check stock', 'Items counted').tasks[0]!;
+  const { threadId } = coordinator;
+  const at = new Date(h.clock.now() + 500).toISOString();
+  const wakeAt = new Date(h.clock.now() + 10 * 60_000 + 2000).toISOString();
+  c.update(project.id, { wakeAt });
+  c.postponeTask(project.id, task.id, { type: 'at', at });
+  const oldSend = h.runner.send.bind(h.runner);
+  h.runner.send = (id, text, ...rest) => {
+    if (id === threadId && text.includes('postponed task is due')) throw Error('Queue refused');
+    return oldSend(id, text, ...rest);
+  };
+  h.clock.advance(499);
+  assert.equal(c.get(project.id).taskBoard.tasks[0]!.state, 'postponed');
+  h.clock.advance(1);
+  assert.equal(c.get(project.id).taskBoard.tasks[0]!.state, 'todo');
+  assert.equal(c.get(project.id).wakeAt, wakeAt);
+  c.stop();
+
+  const sent: string[] = [];
+  const fresh = recoverFresh(h, home, (host) => {
+    const send = host.send.bind(host);
+    host.send = (id, text, ...rest) => {
+      if (id === threadId) sent.push(text);
+      return send(id, text, ...rest);
+    };
+  });
+  (fresh.host.clock as FakeClock).advance(10 * 60_000);
+  assert.equal(sent.filter((text) => text.includes('postponed task is due')).length, 1);
+  assert.equal(fresh.c.get(project.id).wakeAt, wakeAt);
+  (fresh.host.clock as FakeClock).advance(2000);
+  assert.equal(sent.filter((text) => text.includes('The check you scheduled is due.')).length, 1);
+  assert.equal(fresh.c.get(project.id).wakeAt, undefined);
+  fresh.c.stop();
+});
+
+test('rolling a closed legacy loop out of the 100-row list keeps the task, options and answer', () => {
+  const { c, h, home, project } = setup();
+  c.create({ projectId: project.id });
+  const { loopId } = c.openLoop(project.id, { kind: 'waiting_on_user', title: 'Pick a venue', options: ['Blue room', 'Red room'] });
+  c.replyLoop(project.id, loopId, 'Blue room');
+  for (let i = 1; i <= 100; i++) c.openLoop(project.id, { kind: 'user_question', title: 'Question ' + i });
+  const view = c.get(project.id);
+  assert.equal(view.loops.length, 100);
+  assert.equal(view.loops.some((loop) => loop.id === loopId), false);
+  const history = view.taskBoard.tasks.find((task) => task.id === loopId)!;
+  assert.equal(history.state, 'done');
+  assert.deepEqual(history.decision, { options: [{ label: 'Blue room' }, { label: 'Red room' }], answer: 'Blue room' });
+  c.stop();
+  const fresh = recoverFresh(h, home);
+  assert.deepEqual(fresh.c.get(project.id).taskBoard.tasks.find((task) => task.id === loopId), history);
+  assert.throws(() => fresh.c.setWorkTaskState(project.id, loopId, 'todo'), /close an open loop/i);
+  const another = fresh.c.get(project.id).loops[0]!;
+  fresh.c.closeLoop(project.id, another.id);
+  fresh.c.setWorkTaskState(project.id, loopId, 'todo');
+  assert.equal(fresh.c.get(project.id).loops.find((loop) => loop.id === loopId)?.state, 'open');
+  assert.equal(fresh.c.get(project.id).taskBoard.tasks.length, 101);
+  fresh.c.stop();
+});
+
+test('an explicit waiting state survives postponement and resumes on its date', () => {
+  const { c, h, project } = setup();
+  c.create({ projectId: project.id });
+  const { taskId } = c.addWorkTask(project.id, {
+    title: 'Confirm access', doneWhen: 'Access works', state: 'waiting',
+    work: { kind: 'action', owner: { kind: 'person', name: 'Venue manager' }, now: 'Waiting on the access code' },
+  });
+  const { loopId } = c.openLoop(project.id, { kind: 'user_question', title: 'Is there a spare key?' });
+  c.setWorkTaskState(project.id, loopId, 'working');
+  assert.equal(c.get(project.id).loops[0]!.state, 'open');
+  const boardTask = (id: string) => c.get(project.id).taskBoard.tasks.find((t) => t.id === id)!;
+  assert.equal(boardTask(loopId).state, 'working');
+  assert.equal(boardTask(taskId).state, 'waiting');
+  const at = new Date(h.clock.now() + 1000).toISOString();
+  c.postponeTask(project.id, taskId, { type: 'at', at });
+  assert.equal(boardTask(taskId).state, 'postponed');
+  assert.equal(c.get(project.id).tasks[0]!.state, 'blocked');
+  h.clock.advance(1000);
+  assert.equal(boardTask(taskId).state, 'waiting');
+  c.updateLoop(project.id, loopId, { state: 'answered', summary: 'There is a spare' });
+  assert.equal(boardTask(loopId).state, 'ready_to_close');
+  c.stop();
+});
+
+test('a paused coordinator releases a deadline on startup and queues delivery until resume', async () => {
+  const { c, h, home, project } = setup();
+  const { coordinator } = c.create({ projectId: project.id });
+  const task = c.addTask(project.id, 'Check tomorrow', 'Numbers checked').tasks[0]!;
+  const at = new Date(h.clock.now() + 2000).toISOString();
+  await c.pause(project.id, true);
+  c.postponeTask(project.id, task.id, { type: 'at', at });
+  assert.throws(() => c.selectTask(project.id, task.id), /postponed/);
+  c.stop();
+  h.clock.advance(2100);
+  const sent: string[] = [];
+  const fresh = recoverFresh(h, home, (host) => {
+    const send = host.send.bind(host);
+    host.send = (id, text, ...rest) => {
+      if (id === coordinator.threadId && text.includes('postponed task is due')) sent.push(text);
+      return send(id, text, ...rest);
+    };
+  });
+  const clock = fresh.host.clock as FakeClock;
+  clock.advance(0);
+  assert.equal(fresh.c.get(project.id).taskBoard.tasks[0]!.state, 'todo');
+  assert.equal(sent.length, 0);
+  await fresh.c.pause(project.id, false);
+  clock.advance(0);
+  assert.equal(sent.length, 1);
+  fresh.c.stop();
+});
+
+test('a torn history append preserves the readable entries before and after it', () => {
+  const { c, home, project } = setup();
+  c.create({ projectId: project.id });
+  const first = c.addTask(project.id, 'First task', 'Verified').tasks[0]!;
+  c.completeTask(project.id, first.id);
+  c.archiveTask(project.id, first.id);
+  const history = path.join(home, 'coordinator-history.jsonl');
+  fs.appendFileSync(history, '{"projectId":');
+  const second = c.addTask(project.id, 'Second task', 'No longer needed').tasks[0]!;
+  c.dropTask(project.id, second.id, 'It is already covered');
+  assert.match(fs.readFileSync(history, 'utf8'), /\{"projectId":\n/);
+  const saved = c.readTaskHistory(project.id);
+  assert.deepEqual(saved.map((entry) => 'archivedAt' in entry ? 'archived' : 'dropped'), ['archived', 'dropped']);
+  c.stop();
+});
+
+test('postponing again replaces a task wake that has not been dispatched', () => {
+  const { c, h, project } = setup();
+  const { coordinator } = c.create({ projectId: project.id });
+  const work = c.addTask(project.id, 'Finish the checklist', 'Approved').tasks[0]!;
+  const blocker = c.addTask(project.id, 'Get the checklist', 'Received').tasks[1]!;
+  c.postponeTask(project.id, work.id, { type: 'after_task', taskId: blocker.id });
+  c.completeTask(project.id, blocker.id);
+  c.postponeTask(project.id, work.id, { type: 'at', at: new Date(h.clock.now() + 1000).toISOString() });
+
+  const sent: string[] = [];
+  const send = h.runner.send.bind(h.runner);
+  h.runner.send = (id, text, ...rest) => {
+    if (id === coordinator.threadId && text.includes('postponed task is due')) sent.push(text);
+    return send(id, text, ...rest);
+  };
+  h.clock.advance(999);
+  assert.equal(sent.length, 0);
+  h.clock.advance(1);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!, /"type":"at"/);
+  c.stop();
+});
+
+test('a failed delivery backs off while other postponed tasks still become due', () => {
+  const { c, h, project } = setup();
+  const { coordinator } = c.create({ projectId: project.id });
+  const first = c.addTask(project.id, 'First check', 'Checked').tasks[0]!;
+  const second = c.addTask(project.id, 'Second check', 'Checked').tasks[1]!;
+  const at = (ms: number) => new Date(h.clock.now() + ms).toISOString();
+  c.postponeTask(project.id, first.id, { type: 'at', at: at(1000) });
+  c.postponeTask(project.id, second.id, { type: 'at', at: at(2000) });
+  assert.throws(() => c.startHelper(project.id, { taskId: second.id, brief: 'Check the second item' }), /postponed/);
+
+  const send = h.runner.send.bind(h.runner);
+  const attempts: string[] = [];
+  h.runner.send = (id, text, ...rest) => {
+    if (id === coordinator.threadId && text.includes('postponed task is due')) {
+      attempts.push(text);
+      if (attempts.length === 1) throw Error('Queue refused');
+    }
+    return send(id, text, ...rest);
+  };
+  h.clock.advance(2000);
+  assert.deepEqual(c.get(project.id).taskBoard.tasks.map((task) => task.state), ['todo', 'todo']);
+  assert.equal(attempts.length, 1);
+  h.clock.advance(59_000);
+  assert.equal(attempts.length, 3);
+  assert.equal(attempts[1], attempts[0]);
+  assert.ok(attempts[2]!.includes(second.id));
+  c.stop();
+});
+
+test('the turn desk shows postpone triggers and legacy completion and drop wait for the wake', (t) => {
+  const { c, h, project } = setup();
+  t.after(() => c.stop());
+  const { coordinator } = c.create({ projectId: project.id });
+  const blocker = c.addTask(project.id, 'Get the permit', 'Permit received').tasks[0]!;
+  const task = c.addTask(project.id, 'Reserve the room', 'Reservation confirmed').tasks[1]!;
+  const { loopId } = c.openLoop(project.id, { kind: 'waiting_on_user', title: 'Confirm the dates' });
+  const due = { type: 'after_task', taskId: blocker.id } as const;
+  const loopDue = { type: 'at', at: new Date(h.clock.now() + 1000).toISOString() } as const;
+  c.postponeTask(project.id, task.id, due);
+  c.postponeTask(project.id, loopId, loopDue);
+
+  const deskJson = c.context(coordinator.threadId)?.match(/Open loops, tasks and helper questions:\n([^\n]+)/)?.[1];
+  assert.ok(deskJson);
+  const desk = JSON.parse(deskJson);
+  assert.deepEqual(desk.tasks.find((entry: { id: string }) => entry.id === task.id), {
+    id: task.id, title: task.title, state: 'postponed', due, doneWhen: task.doneWhen,
+  });
+  assert.deepEqual(desk.loops.find((entry: { id: string }) => entry.id === loopId)?.due, loopDue);
+  assert.equal(desk.loops.find((entry: { id: string }) => entry.id === loopId)?.state, 'postponed');
+
+  const wait = /postponed.*wait for its wake/i;
+  assert.throws(() => c.completeTask(project.id, task.id), wait);
+  assert.throws(() => c.dropTask(project.id, task.id, 'Unneeded'), wait);
+  assert.equal(c.get(project.id).tasks[1]!.state, 'todo');
+  assert.equal(c.get(project.id).taskBoard.tasks[1]!.state, 'postponed');
+  assert.deepEqual(c.readTaskHistory(project.id), []);
+
+  c.completeTask(project.id, blocker.id);
+  h.clock.advance(0);
+  c.completeTask(project.id, task.id);
+  assert.equal(c.get(project.id).taskBoard.tasks[1]!.state, 'done');
+});
+
+for (const { name, selected, other } of [
+  { name: 'the only to-do is selected', selected: true },
+  { name: 'a postponed selection has a ready sibling', selected: true, other: 'ready' },
+  { name: 'all unstarted tasks are postponed', selected: false, other: 'postponed' },
+]) {
+  test(`an implicit helper start refuses postponed work when ${name}`, (t) => {
+    const { c, h, project } = setup();
+    t.after(() => c.stop());
+    c.create({ projectId: project.id });
+    const task = c.addTask(project.id, 'Check the permit', 'Permit checked').tasks[0]!;
+    if (selected) c.selectTask(project.id, task.id);
+    const at = new Date(h.clock.now() + 1000).toISOString();
+    c.postponeTask(project.id, task.id, { type: 'at', at });
+    if (other) {
+      const second = c.addTask(project.id, 'Get a quote', 'Quote received').tasks[1]!;
+      if (other === 'postponed') c.postponeTask(project.id, second.id, { type: 'at', at });
+    }
+    const before = c.get(project.id);
+    assert.throws(() => c.startHelper(project.id, { brief: 'Check the permit' }), /postponed.*wait for its wake/i);
+    assert.deepEqual(c.get(project.id), before);
+    assert.equal(h.runner.threadRecords().length, 1);
+    h.clock.advance(1000);
+    if (!selected) c.selectTask(project.id, task.id);
+    const started = c.startHelper(project.id, { brief: 'Check the permit' });
+    assert.equal(started.taskId, task.id);
+    assert.equal(started.coordinator.tasks.length, before.tasks.length);
+  });
+}
+
+test('a loop-backed entry cannot become a child that blocks its parent from archiving', (t) => {
+  const { c, project } = setup();
+  t.after(() => c.stop());
+  c.create({ projectId: project.id });
+  const task = c.addTask(project.id, 'Book the room', 'Reservation confirmed').tasks[0]!;
+  const { loopId } = c.openLoop(project.id, { kind: 'user_question', title: 'What is the capacity?' });
+  const before = c.get(project.id);
+  assert.throws(() => c.setWorkTaskDetails(project.id, loopId, {
+    kind: 'action', owner: { kind: 'agent' }, parentTaskId: task.id,
+  }), /legacy.*loop.*sub-task/i);
+  assert.deepEqual(c.get(project.id), before);
+  c.completeTask(project.id, task.id);
+  c.archiveTask(project.id, task.id);
+  assert.deepEqual(c.get(project.id).taskBoard.tasks.map(({ id }) => id), [loopId]);
 });

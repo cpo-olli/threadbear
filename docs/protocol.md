@@ -46,7 +46,7 @@ It was all this one file once. Work made on that comes across by itself in `tb l
 | [patches.md](protocol/patches.md) | Patches, The Convex panel |
 | [trust.md](protocol/trust.md) | Trusting a folder's patches, What changed, Trusting a folder's Claude Code hooks |
 | [panels.md](protocol/panels.md) | Highlights, Worktrees, Showing panels, The Browser panel, Pull requests, Connectors |
-| [projects.md](protocol/projects.md) | Projects, Project tasks, Schedules, Recipes, Habits, Project coordinators, Handing a project to its coordinator |
+| [projects.md](protocol/projects.md) | Projects, Project tasks, Schedules, Recipes, Habits, Project coordinators, Tasks and work items, Handing a project to its coordinator |
 | [runners.md](protocol/runners.md) | Other runners' threads, Other runners' threads through the backend, Asking another runner, Sharing |
 | [moves.md](protocol/moves.md) | Moving a thread to another runner, Sync, Devices |
 | [keys.md](protocol/keys.md) | Runner keys, Virtual runners |

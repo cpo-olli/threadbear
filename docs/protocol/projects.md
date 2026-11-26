@@ -779,6 +779,46 @@ saved checkpoint. Compaction (on CLIs that support `/compact`)
 waits for helpers to finish, retains the charter and rereads canonical project
 records after compaction.
 
+### Tasks and work items
+
+Coordinator responses and `coordinators.updated` can include `taskBoard`.
+Existing clients and coordinator tools can keep reading `tasks`, `loops`,
+`questions` and `wakeAt` with their original shapes and actions. The board is
+local to the coordinator's runner. The Convex mirror still carries the thread's
+optional `coordinatorProjectId`, with no backend version change.
+
+- `taskBoard.workItems` contains `{ id, title, collapsed, progress: { done,
+  total } }`. Progress counts current top-level tasks assigned to the group.
+- `taskBoard.tasks` contains `{ id, title, kind, owner, state, doneWhen?,
+  now?, source?, due?, workItemId?, parentTaskId?, decision?, createdAt?,
+  updatedAt?, closedAt? }`. `owner` is `{ kind: "user" | "agent" }` or
+  `{ kind: "person", name }`. `source` can carry `threadId`, `runId` and
+  `seq`. A child inherits its parent's `workItemId` in this view. Only the
+  parent stores that field. Legacy open loops appear as top-level tasks during
+  the transition. A task can still have no group.
+- States are `todo`, `working`, `waiting`, `postponed`, `ready_to_close` and
+  `done`. Legacy blocked work maps to waiting and a finished helper awaiting
+  review maps to ready to close. User questions become agent actions. An
+  answered question is ready to close until the user signs off. Decisions
+  waiting on the user become user-owned decisions, with any saved options as
+  `{ label, does? }`. A decision can also carry a recommendation and the
+  recorded answer.
+- An absolute due trigger is `{ type: "at", at, preset? }` with an ISO
+  timestamp. Following the runner's Tomorrow preset, date picks use 9 a.m.
+  in the runner's local time. The runner stores the resolved instant. An
+  `{ type: "after_task", taskId }` trigger is satisfied when that task is done.
+  Only postponed tasks trigger a wake. The runner clears the postponement
+  and queues a durable wake together, including while the coordinator is
+  paused. A postponed task returns to its underlying state when released.
+  The coordinator's turn context shows the postponement and its trigger.
+  Selecting, starting, resuming, completing or dropping a postponed to-do
+  waits for its wake.
+- Old records keep their identities, run and loop data, and coordinator wake
+  times. The registry adds task details to the old records in place.
+  Existing JSONL history stays append-only. The runner reads old archived,
+  dropped, and removed-coordinator entries as task history without rewriting
+  them. Closed loops that roll out of the old list stay on the task board.
+
 ### Handing a project to its coordinator
 
 An ordinary thread starts a project's coordinator, or hands the one it has more

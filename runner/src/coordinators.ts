@@ -5,7 +5,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { z } from 'zod';
 import type { Runner, Notification, ThreadState } from './runner.ts';
 import type { Projects } from './projects.ts';
 import type { Clock, TimerHandle } from './clock.ts';
@@ -22,7 +21,14 @@ import { resetTime } from './usage.ts';
 import { CARRY_ON_HELPER_RESTART, STOPPED_CARRY_ON_MAX_AGE_MS } from './runner/carry-on.ts';
 import { COORDINATOR_TB_REFUSAL, COORDINATOR_THREADBEAR_TOOLS, COORDINATOR_WORKER, COORDINATOR_WORKER_PROMPT, HELPER_REPORT, HELPER_THREADBEAR_TOOLS, threadbearToolName } from './coordinator-policy.ts';
 
-const runStates = ['queued', 'running', 'interrupted', 'completed', 'failed', 'stopped'] as const;
+import {
+  boardRecords, coordinatorView as view, defaultTaskDetails, ensureTaskDetails, getTaskDetails, hasRemovedDesk, isTaskDone,
+  legacyStateFor, loopKinds, migrateCoordinatorHistoryEntry, migrateCoordinatorRegistry, resolveTaskDue, runStates,
+  taskDetailsSchema, validateTaskBoard, workItemSchema,
+} from './coordinator-desk.ts';
+import type { Coordinator, CoordinatorHistoryEntry, CoordinatorLoop, CoordinatorView, LegacyTaskState as TaskState, LoopKind, TaskDetails, TaskDueInput, UnpostponedTaskState, WorkItem } from './coordinator-desk.ts';
+export type { Coordinator, CoordinatorLoop, CoordinatorView, LoopKind, LoopState } from './coordinator-desk.ts';
+
 export type RunState = typeof runStates[number];
 const moves: Record<RunState, readonly RunState[]> = {
   queued: ['running', 'interrupted', 'failed', 'stopped'],
@@ -33,79 +39,44 @@ export function runMove(before: RunState, after: RunState): RunState {
   if (before === after || moves[before].includes(after)) return after;
   throw new Error(`A coordinator run cannot move from ${before} to ${after}.`);
 }
-const runSchema = z.object({
-  id: z.string(),
-  agentId: z.string().optional(),
-  helperThreadId: z.string().optional(),
-  nativeTaskId: z.string().optional(),
-  nativeRunId: z.string().optional(),
-  status: z.enum(runStates),
-  summary: z.string().optional(),
-  brief: z.string(),
-  updatedAt: z.string(),
-  // Registry only (not in the view): an interrupted run a runner stop cut
-  // off, for the next runner to carry on by itself (`update`: a handover or a
-  // clean stop; `stop`: a crash or a power cut). See carryOnAfterRestart().
-  restart: z.enum(['update', 'stop']).optional(),
-  // How many times the runner has carried this run on after a restart, and
-  // how many of those in a row came after a crash.
-  restartResumes: z.number().int().nonnegative().optional(),
-  crashResumes: z.number().int().nonnegative().optional(),
-});
-const taskStates = ['todo', 'working', 'blocked', 'review', 'done'] as const;
-type TaskState = typeof taskStates[number];
 const taskMoves: Record<TaskState, readonly TaskState[]> = { todo: ['working', 'done'], working: ['review', 'blocked'], blocked: ['working', 'done'], review: ['working', 'blocked', 'done'], done: ['working'] };
 function taskMove(task: Coordinator['tasks'][number], after: TaskState): void {
   if (task.state !== after && !taskMoves[task.state].includes(after)) throw bad(`A project task cannot move from ${task.state} to ${after}.`);
   task.state = after;
+  if (after === 'working' || after === 'done') clearPostponement(task);
 }
-const taskSchema = z.object({ id: z.string(), title: z.string(), doneWhen: z.string(), state: z.enum(taskStates).optional(), run: runSchema.optional() }).transform((t) => ({ ...t, state: t.state ?? (t.run?.status === 'completed' ? 'review' : t.run ? 'blocked' : 'todo') as TaskState }));
-const questionSchema = z.object({ id: z.string(), agentId: z.string(), questions: z.array(z.object({ question: z.string() }).passthrough()), state: z.enum(['open', 'answered']), answer: z.string().optional() });
-const loopKinds = ['user_question', 'waiting_on_user'] as const;
-export type LoopKind = typeof loopKinds[number];
-const loopStates = ['open', 'answered', 'closed'] as const;
-export type LoopState = typeof loopStates[number];
-const loopSchema = z.object({
-  id: z.string(),
-  kind: z.enum(loopKinds),
-  state: z.enum(loopStates),
-  title: z.string(),
-  summary: z.string().optional(),
-  options: z.array(z.string()).max(4).optional(),
-  sourceSeq: z.number().int().nonnegative().optional(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  closedAt: z.string().optional(),
-});
-export type CoordinatorLoop = z.infer<typeof loopSchema>;
-const eventSchema = z.object({ key: z.string(), text: z.string() });
-const recordSchema = z.object({
-  projectId: z.string(), threadId: z.string(), state: z.enum(['active', 'paused']), charter: z.string(),
-  interests: z.array(z.string()).max(40), tasks: z.array(taskSchema).max(100), questions: z.array(questionSchema).max(100),
-  loops: z.array(loopSchema).max(100).default([]),
-  updatedAt: z.string(), wakeAt: z.string().optional(), selectedTaskId: z.string().optional(), events: z.array(eventSchema), seen: z.array(z.string()).max(256),
-  delivery: z.object({ id: z.string(), text: z.string(), eventKeys: z.array(z.string()), wakeAt: z.string().optional() }).optional(),
-  // Helper results saved with their run's end (onHelperTurn), kept until
-  // the coordinator's turn that reads one finishes (observe). `sentAs` is the
-  // turn it went as; `attempt` counts sends. No cap here: a registry that
-  // fails to parse stops the runner, so onHelperTurn bounds it instead.
-  reports: z.array(z.object({ id: z.string(), text: z.string(), at: z.string().optional(), attempt: z.number().int().optional(), sentAs: z.string().optional() })).optional(),
-  // Set with helper runs a restart or handover interrupted, cleared once the
-  // coordinator is woken for them (start()): saved, so a crash or a handover
-  // before that wake doesn't lose it.
-  // Retired: the restart wake is a report now (restartReport). Read only to
-  // turn into one, whatever shape an earlier build saved it in.
-  wakeInterrupted: z.union([z.string(), z.boolean()]).optional(),
-});
-export type Coordinator = z.infer<typeof recordSchema>;
-export type CoordinatorView = Omit<Coordinator, 'events' | 'seen' | 'tasks' | 'delivery' | 'reports'> & { tasks: (Omit<Coordinator['tasks'][number], 'run'> & { run?: Omit<NonNullable<Coordinator['tasks'][number]['run']>, 'brief'> })[] };
-function view(row: Coordinator): CoordinatorView {
-  const { events: _events, seen: _seen, delivery: _delivery, reports: _reports, tasks, ...rest } = row;
-  return structuredClone({ ...rest, tasks: tasks.map(({ run, ...task }) => {
-    if (!run) return task;
-    const { brief: _brief, restart: _restart, restartResumes: _resumes, crashResumes: _crashes, ...publicRun } = run;
-    return { ...task, run: publicRun };
-  }) });
+
+function clearPostponement(record: { work?: TaskDetails }): void {
+  if (record.work) delete record.work.state;
+}
+
+function requireTaskAwake(task: { work?: TaskDetails }): void {
+  if (task.work?.state === 'postponed') throw bad('That task is postponed. Wait for its wake.');
+}
+
+function deskTaskTiming(record: { state: string; work?: TaskDetails }) {
+  return { state: record.work?.state ?? record.state, due: record.work?.due };
+}
+
+function setLoopOptions(loop: CoordinatorLoop, options?: string[]): void {
+  if (options?.length) loop.options = options;
+  else delete loop.options;
+  const work = loop.work;
+  if (work?.kind !== 'decision' || !work.decision?.options) return;
+  const previous = new Map(work.decision.options.map((option) => [option.label, option]));
+  work.decision.options = (options ?? []).map((label) => previous.get(label) ?? { label });
+}
+
+function closeDecisionOrQuestion(loop: CoordinatorLoop, now: string, answer?: string): void {
+  if (answer?.trim()) {
+    const work = getTaskDetails(loop);
+    if (work.kind === 'decision') loop.work = { ...work, decision: { ...work.decision, answer: answer.trim().slice(0, 4000) } };
+  }
+  clearPostponement(loop);
+  if (loop.work) delete loop.work.openState;
+  loop.state = 'closed';
+  loop.closedAt = now;
+  loop.updatedAt = now;
 }
 function desk(row: Coordinator): string {
   const tasks = [...row.tasks].sort((a, b) => Number(a.run?.status === 'completed') - Number(b.run?.status === 'completed'));
@@ -113,7 +84,7 @@ function desk(row: Coordinator): string {
   const loops = row.loops.filter((l) => l.state !== 'closed');
   const out: { loops: unknown[]; tasks: unknown[]; questions: unknown[]; more: string } = { loops: [], tasks: [], questions: [], more: 'Use coordinator action get for the full records and saved answers.' };
   for (const loop of loops) {
-    const item = { id: loop.id, kind: loop.kind, state: loop.state, title: loop.title.slice(0, 240), ...(loop.summary ? { summary: loop.summary.slice(0, 400) } : {}), ...(loop.options?.length ? { options: loop.options } : {}) };
+    const item = { id: loop.id, kind: loop.kind, ...deskTaskTiming(loop), title: loop.title.slice(0, 240), ...(loop.summary ? { summary: loop.summary.slice(0, 400) } : {}), ...(loop.options?.length ? { options: loop.options } : {}) };
     if (JSON.stringify(out).length + JSON.stringify(item).length > 6000) break;
     out.loops.push(item);
   }
@@ -124,7 +95,7 @@ function desk(row: Coordinator): string {
   }
   for (const task of tasks) {
     const { run } = task;
-    const item = { id: task.id, title: task.title, state: task.state, doneWhen: task.doneWhen.slice(0, 300), run: run ? { id: run.id, agentId: run.agentId, helperThreadId: run.helperThreadId, status: run.status, summary: run.summary?.slice(0, 512) } : undefined };
+    const item = { id: task.id, title: task.title, ...deskTaskTiming(task), doneWhen: task.doneWhen.slice(0, 300), run: run ? { id: run.id, agentId: run.agentId, helperThreadId: run.helperThreadId, status: run.status, summary: run.summary?.slice(0, 512) } : undefined };
     if (JSON.stringify(out).length + JSON.stringify(item).length > 20_000) break;
     out.tasks.push(item);
   }
@@ -206,6 +177,7 @@ export class Coordinators {
   private readonly rows = new Map<string, Coordinator>();
   private readonly timers = new Map<string, TimerHandle>();
   private readonly timerAt = new Map<string, number>();
+  private readonly deliveryRetryAt = new Map<string, number>();
   private readonly compactTimers = new Map<string, TimerHandle>();
   private readonly reportTimers = new Map<string, TimerHandle>();
   private wasEnabled = false;
@@ -224,7 +196,7 @@ export class Coordinators {
     this.file = path.join(deps.home, 'coordinators.json');
     if (!fs.existsSync(this.file)) return;
     try {
-      const saved = z.array(recordSchema).parse(JSON.parse(fs.readFileSync(this.file, 'utf8')));
+      const saved = migrateCoordinatorRegistry(JSON.parse(fs.readFileSync(this.file, 'utf8')));
       for (const row of saved) {
         if (this.rows.has(row.projectId) || [...this.rows.values()].some((r) => r.threadId === row.threadId)) throw Error('Duplicate coordinator identity');
         // An earlier build's flag for a restart wake still owed: a report.
@@ -279,10 +251,9 @@ export class Coordinators {
   // coordinators are turned back on: its timers, its reports, its held
   // queue and the restart wake. One coordinator failing doesn't stop the rest.
   private activate(row: Coordinator): void {
-    if (row.state !== 'active' || !this.deps.enabled() || this.stopped) return;
     try {
-      if (row.events.length || row.delivery) this.schedule(row, BATCH_MS);
-      if (row.wakeAt) this.schedule(row, Math.max(0, Date.parse(row.wakeAt) - this.deps.clock.now()));
+      this.schedulePending(row);
+      if (row.state !== 'active' || !this.deps.enabled() || this.stopped) return;
       this.reconcileReports(row);
       this.deliverReports(row, true);
       const st = this.deps.host.threads.get(row.threadId);
@@ -315,7 +286,7 @@ export class Coordinators {
     let reconcile = false;
     for (const task of row.tasks) {
       const run = task.run;
-      if (!run?.restart || run.status !== 'interrupted') continue;
+      if (!run?.restart || run.status !== 'interrupted' || task.work?.state === 'postponed') continue;
       // Done since: the coordinator has dealt with it.
       if (task.state === 'done') { this.unmark(run); this.changed(row); continue; }
       const kind = run.restart;
@@ -403,7 +374,7 @@ export class Coordinators {
     this.stopped = true;
     this.unlisten?.();
     for (const timer of [...this.timers.values(), ...this.compactTimers.values(), ...this.reportTimers.values()]) timer.cancel();
-    this.timers.clear(); this.timerAt.clear(); this.compactTimers.clear(); this.reportTimers.clear();
+    this.timers.clear(); this.timerAt.clear(); this.deliveryRetryAt.clear(); this.compactTimers.clear(); this.reportTimers.clear();
   }
   // `afterError`: the handover is the restart after an uncaught error, which
   // may have been a helper's doing, so its helpers count as a crash's.
@@ -439,9 +410,15 @@ export class Coordinators {
   on(): boolean { return this.deps.enabled() && !this.stopped; }
   // A runner handing over has stopped: the new one is the registry's only writer.
   private requireOn(): void { if (!this.deps.enabled() || this.stopped) throw bad('Project coordinators are not enabled on this runner.'); }
-  private save(): void { atomicWriteFileSync(this.file, JSON.stringify([...this.rows.values()])); }
+  private save(): void {
+    for (const row of this.rows.values()) ensureTaskDetails(row);
+    atomicWriteFileSync(this.file, JSON.stringify([...this.rows.values()]));
+  }
   private changed(row: Coordinator): void {
-    row.updatedAt = this.now(); this.save();
+    this.releaseDueTasks(row);
+    row.updatedAt = this.now();
+    this.save();
+    this.schedulePending(row);
     this.deps.host.publish({ method: 'coordinators.updated', params: { coordinators: this.list() } });
     // A helper starting or stopping changes the coordinator's wait state.
     const st = this.deps.host.threads.get(row.threadId);
@@ -463,7 +440,7 @@ export class Coordinators {
   helpersWorking(threadId: string): number {
     if (!this.deps.enabled()) return 0;
     const row = this.forThread(threadId);
-    const toCarryOn = (t: Coordinator['tasks'][number]) => row?.state === 'active' && t.state !== 'done' && t.run?.status === 'interrupted' && (t.run.restart === 'update' || t.run.restart === 'stop');
+    const toCarryOn = (t: Coordinator['tasks'][number]) => row?.state === 'active' && t.state !== 'done' && t.work?.state !== 'postponed' && t.run?.status === 'interrupted' && (t.run.restart === 'update' || t.run.restart === 'stop');
     return row?.tasks.filter((t) => t.run && (['queued', 'running'].includes(t.run.status) || toCarryOn(t))).length ?? 0;
   }
   // Whether a helper thread's run is one its active coordinator still has going.
@@ -518,7 +495,7 @@ export class Coordinators {
       throw bad(`No ${providerName(draft.account.provider)} login in ${pool.title} has room${back.accountId ? ` until ${resetTime(back.waitUntil, this.deps.clock.now())}` : ' just now'}. Add the coordinator then, or pick another model or pool.`);
     }
     const { st } = this.deps.host.makeThread(params);
-    const row: Coordinator = { projectId: project.id, threadId: st.rec.id, state: 'active', charter: handed?.charter ?? INITIAL_CHARTER, interests: [], tasks: (handed?.tasks ?? []).map((t) => ({ id: crypto.randomUUID(), ...t, state: 'todo' as const })), questions: [], loops: [], events: [], seen: [], updatedAt: this.now() };
+    const row: Coordinator = { projectId: project.id, threadId: st.rec.id, state: 'active', charter: handed?.charter ?? INITIAL_CHARTER, interests: [], tasks: (handed?.tasks ?? []).map((t) => ({ id: crypto.randomUUID(), ...t, state: 'todo' as const })), questions: [], loops: [], workItems: [], retiredLoops: [], events: [], seen: [], updatedAt: this.now() };
     this.rows.set(project.id, row); this.save();
     this.deps.projects.changeMembership(st.rec.id, { add: [project.id], by: 'mike' });
     if (handed) this.deps.host.send(st.rec.id, `You are this project’s coordinator. ${this.handOffText(handed)}`, [], { origin: 'runner', wakeReason: 'Coordinator update', ...(handed.ceiling ? { ceiling: handed.ceiling } : {}) });
@@ -631,19 +608,194 @@ export class Coordinators {
       this.save();
       this.reconcileReports(row);
       this.deliverReports(row, true);
-      if (row.events.length || row.delivery || row.wakeAt) this.schedule(row, row.events.length || row.delivery ? BATCH_MS : Math.max(0, Date.parse(row.wakeAt!) - this.deps.clock.now()));
     }
     return this.get(projectId);
   }
   addTask(projectId: string, title: string, doneWhen: string, fromUser = false): CoordinatorView {
+    const added = this.addWorkTask(projectId, { title, doneWhen, work: defaultTaskDetails() });
+    if (!fromUser) return added.coordinator;
+    this.wake(this.must(projectId), `The user added a project to-do: ${JSON.stringify({ title, doneWhen })}. Plan it within the charter.`);
+    return this.get(projectId);
+  }
+
+  // Step 2 can expose these operations through scoped tools. Old RPC and MCP
+  // callers still use addTask, the original state moves and the loop actions.
+  addWorkTask(projectId: string, input: { title: string; doneWhen: string; work: TaskDetails; state?: UnpostponedTaskState }): { coordinator: CoordinatorView; taskId: string } {
     this.requireOn();
     const row = this.must(projectId);
     if (row.tasks.length >= 100) throw bad('The project has 100 coordinator tasks. Remove or archive old work before adding more.');
-    row.tasks.push({ id: crypto.randomUUID(), title: text(title, 200), doneWhen: text(doneWhen, 1000), state: 'todo' });
+    const createdAt = this.now();
+    const { doneWhen, ...work } = this.parseTaskDetails(input.work);
+    const task = {
+      id: crypto.randomUUID(), title: text(input.title, 200), doneWhen: text(doneWhen ?? input.doneWhen, 1000),
+      state: this.legacyTaskState(input.state ?? 'todo'), work, createdAt, updatedAt: createdAt,
+    };
+    this.checkTaskBoard({ ...row, tasks: [...row.tasks, task] });
+    row.tasks.push(task);
     this.changed(row);
-    if (fromUser) this.wake(row, `The user added a project to-do: ${JSON.stringify({ title, doneWhen })}. Plan it within the charter.`);
+    return { coordinator: this.get(projectId), taskId: task.id };
+  }
+
+  addWorkItem(projectId: string, title: string): { coordinator: CoordinatorView; workItemId: string } {
+    this.requireOn();
+    const row = this.must(projectId);
+    const item = { id: crypto.randomUUID(), title: text(title, 200), collapsed: false };
+    row.workItems.push(item);
+    this.changed(row);
+    return { coordinator: this.get(projectId), workItemId: item.id };
+  }
+
+  updateWorkItem(projectId: string, id: string, input: Partial<Pick<WorkItem, 'title' | 'collapsed'>>): CoordinatorView {
+    this.requireOn();
+    const row = this.must(projectId);
+    const item = row.workItems.find((group) => group.id === id);
+    if (!item) throw bad('That work item is not on this desk.');
+    const updated = workItemSchema.safeParse({ ...item, ...input, id });
+    if (!updated.success) throw bad('Use a work item title of at most 200 characters and true or false for collapsed.');
+    Object.assign(item, updated.data);
+    this.changed(row);
     return this.get(projectId);
   }
+
+  setWorkTaskDetails(projectId: string, id: string, details: TaskDetails): CoordinatorView {
+    this.requireOn();
+    const row = this.must(projectId);
+    const record = this.workTask(row, id);
+    const work = this.parseTaskDetails(details);
+    const replace = <T extends { id: string }>(r: T) => r.id === id ? { ...r, work } : r;
+    this.checkTaskBoard({ ...row, tasks: row.tasks.map(replace), loops: row.loops.map(replace), retiredLoops: row.retiredLoops.map(replace) });
+    record.work = work;
+    if (work.state === 'postponed') {
+      const sending = new Set(row.delivery?.eventKeys);
+      row.events = row.events.filter((event) => event.taskWake !== id || sending.has(event.key));
+    }
+    const task = row.tasks.find((t) => t.id === id);
+    if (task) {
+      if (work.doneWhen !== undefined) {
+        task.doneWhen = work.doneWhen;
+        delete work.doneWhen;
+      }
+      if (work.state === 'postponed' && task.run?.restart) this.unmark(task.run);
+    } else if (work.kind === 'decision' && work.decision?.options) {
+      const loop = row.loops.find((l) => l.id === id) ?? row.retiredLoops.find((l) => l.id === id);
+      if (loop) setLoopOptions(loop, work.decision.options.map(({ label }) => label));
+    }
+    record.updatedAt = this.now();
+    this.changed(row);
+    return this.get(projectId);
+  }
+
+  // A board state change is explicit. The old task and loop actions still
+  // apply their own transition rules, including the helper review boundary.
+  setWorkTaskState(projectId: string, id: string, state: UnpostponedTaskState): CoordinatorView {
+    this.requireOn();
+    const row = this.must(projectId);
+    const next = this.legacyTaskState(state);
+    const now = this.now();
+    const task = row.tasks.find((t) => t.id === id);
+    if (task) {
+      if (task.run?.status === 'queued' || task.run?.status === 'running') throw bad('Wait for this task’s helper result before changing its state.');
+      if (state === 'done' && row.questions.some((q) => q.agentId === task.run?.agentId && q.state === 'open')) {
+        throw bad('Resolve this helper’s open questions before marking the task done.');
+      }
+      task.state = next;
+      task.updatedAt = now;
+      clearPostponement(task);
+      if (state === 'done' && task.run) this.unmark(task.run);
+    } else {
+      const loop = this.loopForStateChange(row, id, state);
+      if (state === 'done') closeDecisionOrQuestion(loop, now);
+      else {
+        const work = loop.work ??= getTaskDetails(loop);
+        clearPostponement(loop);
+        delete work.openState;
+        if (state === 'working' || state === 'waiting') work.openState = state;
+        loop.state = state === 'ready_to_close' ? 'answered' : 'open';
+        delete loop.closedAt;
+        loop.updatedAt = now;
+      }
+    }
+    this.changed(row);
+    return this.get(projectId);
+  }
+
+  private loopForStateChange(row: Coordinator, id: string, state: UnpostponedTaskState): CoordinatorLoop {
+    const index = row.retiredLoops.findIndex((loop) => loop.id === id);
+    if (index < 0) return this.mustLoop(row, id, 'setWorkTaskState');
+    if (state === 'done') return row.retiredLoops[index]!;
+    if (!this.makeLoopRoom(row)) throw bad('Close an open loop before reopening this task.');
+    const [loop] = row.retiredLoops.splice(index, 1);
+    row.loops.push(loop!);
+    return loop!;
+  }
+
+  private legacyTaskState(state: UnpostponedTaskState): TaskState {
+    if (!Object.hasOwn(legacyStateFor, state)) throw bad('Unknown task state. Use postponeTask to set a postponement.');
+    return legacyStateFor[state];
+  }
+
+  postponeTask(projectId: string, id: string, input: TaskDueInput): CoordinatorView {
+    this.requireOn();
+    const record = this.workTask(this.must(projectId), id);
+    let due;
+    try {
+      due = resolveTaskDue(input, this.deps.clock.now());
+    } catch {
+      throw bad('Choose Tomorrow, a valid date or ISO time, or another task on this desk.');
+    }
+    return this.setWorkTaskDetails(projectId, id, { ...getTaskDetails(record), state: 'postponed', due });
+  }
+
+  // Backfill history on read. Older runners can still append to the same
+  // journal, and there is no second file to coordinate during migration.
+  readTaskHistory(projectId: string): CoordinatorHistoryEntry[] {
+    const file = path.join(this.deps.home, 'coordinator-history.jsonl');
+    if (!fs.existsSync(file)) return [];
+    const entries: CoordinatorHistoryEntry[] = [];
+    for (const [index, line] of fs.readFileSync(file, 'utf8').split('\n').entries()) {
+      if (!line.trim()) continue;
+      try {
+        const entry = migrateCoordinatorHistoryEntry(JSON.parse(line));
+        if ((hasRemovedDesk(entry) ? entry.coordinator.projectId : entry.projectId) === projectId) entries.push(entry);
+      } catch {
+        this.deps.log.error('could not read a coordinator history entry', { line: index + 1 });
+      }
+    }
+    return entries;
+  }
+
+  private appendTaskHistory(entry: unknown): void {
+    const file = path.join(this.deps.home, 'coordinator-history.jsonl');
+    const fd = fs.openSync(file, 'a+', 0o600);
+    try {
+      const last = Buffer.alloc(1);
+      const size = fs.fstatSync(fd).size;
+      if (size) fs.readSync(fd, last, 0, 1, size - 1);
+      const prefix = size && last[0] !== 10 ? '\n' : '';
+      fs.appendFileSync(fd, prefix + JSON.stringify(entry) + '\n');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  private workTask(row: Coordinator, id: string) {
+    const record = boardRecords(row).find((task) => task.id === id);
+    if (!record) throw bad('That task is not on this desk.');
+    return record;
+  }
+
+  private parseTaskDetails(input: TaskDetails): TaskDetails {
+    const parsed = taskDetailsSchema.safeParse(input);
+    if (!parsed.success) throw bad(parsed.error.issues[0]!.message);
+    return parsed.data;
+  }
+
+  private checkTaskBoard(row: Coordinator): void {
+    const problem = validateTaskBoard(row);
+    if (problem) throw bad(problem);
+  }
+
   update(projectId: string, p: { charter?: string; interests?: string[]; wakeAt?: string | null }, fromThread?: string): CoordinatorView {
     this.requireOn();
     const row = this.must(projectId);
@@ -677,9 +829,8 @@ export class Coordinators {
     } else set();
     if (wakeAt === null) delete row.wakeAt;
     else if (wakeAt !== undefined) row.wakeAt = wakeAt;
-    this.changed(row);
     this.timers.get(projectId)?.cancel(); this.timers.delete(projectId); this.timerAt.delete(projectId);
-    if (row.events.length || row.delivery || row.wakeAt) this.schedule(row, row.events.length || row.delivery ? BATCH_MS : Math.max(0, Date.parse(row.wakeAt!) - this.deps.clock.now()));
+    this.changed(row);
     return this.get(projectId);
   }
   answer(projectId: string, id: string, answer: string): CoordinatorView {
@@ -691,14 +842,12 @@ export class Coordinators {
     this.changed(row); return this.get(projectId);
   }
 
-  private ensureLoopRoom(row: Coordinator): void {
-    if (row.loops.length < 100) return;
+  private makeLoopRoom(row: Coordinator): boolean {
+    if (row.loops.length < 100) return true;
     const closedIdx = row.loops.findIndex((l) => l.state === 'closed');
-    if (closedIdx >= 0) {
-      row.loops.splice(closedIdx, 1);
-      return;
-    }
-    throw bad('The project has 100 open loops. Close older loops before adding more.');
+    if (closedIdx < 0) return false;
+    row.retiredLoops.push(row.loops.splice(closedIdx, 1)[0]!);
+    return true;
   }
 
   private defaultLoopSeq(row: Coordinator): number | undefined {
@@ -722,14 +871,15 @@ export class Coordinators {
     const existing = row.loops.find((l) => l.state !== 'closed' && l.kind === opts.kind && normLoopTitle(l.title) === norm);
     if (existing) {
       existing.state = state;
+      if (existing.work) delete existing.work.openState;
       if (summary !== undefined) existing.summary = summary;
-      if (options !== undefined) existing.options = options;
+      if (options !== undefined) setLoopOptions(existing, options);
       if (sourceSeq !== undefined) existing.sourceSeq = sourceSeq;
       existing.updatedAt = now;
       this.changed(row);
       return { coordinator: this.get(projectId), loopId: existing.id };
     }
-    this.ensureLoopRoom(row);
+    if (!this.makeLoopRoom(row)) throw bad('The project has 100 open loops. Close older loops before adding more.');
     const loop: CoordinatorLoop = {
       id: crypto.randomUUID(),
       kind: opts.kind,
@@ -773,6 +923,7 @@ export class Coordinators {
       if (opts.state !== 'open' && opts.state !== 'answered') throw bad('Loop state must be open or answered.');
       if (opts.state === 'answered' && loop.kind !== 'user_question') throw bad('Only user_question loops can be marked answered.');
       loop.state = opts.state;
+      if (loop.work) delete loop.work.openState;
       delete loop.closedAt;
     }
     if (opts.summary !== undefined) {
@@ -780,11 +931,7 @@ export class Coordinators {
       if (!trimmed) delete loop.summary;
       else loop.summary = text(trimmed, 1000);
     }
-    if (opts.options !== undefined && loop.kind === 'waiting_on_user') {
-      const cleaned = cleanOptions(opts.options);
-      if (cleaned) loop.options = cleaned;
-      else delete loop.options;
-    }
+    if (opts.options !== undefined && loop.kind === 'waiting_on_user') setLoopOptions(loop, cleanOptions(opts.options));
     const seq = parseSeq(opts.sourceSeq);
     if (seq !== undefined) loop.sourceSeq = seq;
     loop.updatedAt = this.now();
@@ -797,10 +944,7 @@ export class Coordinators {
     const row = this.must(projectId);
     const loop = this.mustLoop(row, loopId, 'closeLoop');
     if (loop.state !== 'closed') {
-      const now = this.now();
-      loop.state = 'closed';
-      loop.closedAt = now;
-      loop.updatedAt = now;
+      closeDecisionOrQuestion(loop, this.now());
       this.changed(row);
     }
     return this.get(projectId);
@@ -831,14 +975,12 @@ export class Coordinators {
       : `Follow-up on "${loop.title}": ${reply}`;
     this.deps.host.send(row.threadId, message);
     const now = this.now();
-    if (shouldClose) {
-      loop.state = 'closed';
-      loop.closedAt = now;
-    } else {
+    if (shouldClose) closeDecisionOrQuestion(loop, now, reply);
+    else {
       loop.state = 'open';
       delete loop.closedAt;
+      loop.updatedAt = now;
     }
-    loop.updatedAt = now;
     this.changed(row);
     return this.get(projectId);
   }
@@ -848,9 +990,11 @@ export class Coordinators {
     const row = this.must(projectId);
     const task = row.tasks.find((t) => t.id === id);
     if (!task) throw bad('That task is not in this project.');
+    requireTaskAwake(task);
     if (task.run && ['queued', 'running'].includes(task.run.status)) throw bad('Inspect the helper result before marking this task done.');
     if (row.questions.some((q) => q.agentId === task.run?.agentId && q.state === 'open')) throw bad('Resolve this helper’s open questions before marking the task done.');
     taskMove(task, 'done');
+    task.updatedAt = this.now();
     if (task.run) this.unmark(task.run);
     this.changed(row); return this.get(projectId);
   }
@@ -863,6 +1007,7 @@ export class Coordinators {
     const helper = task.run ? `helper ${task.run.helperThreadId ?? task.run.agentId ?? 'unknown'}` : '';
     if (task.run && ['queued', 'running'].includes(task.run.status)) throw bad(`A helper is already working on that task (${helper}). You are woken when its turn ends; nothing to select.`);
     if (task.state === 'done') throw bad('That task is done: archive it with archiveTask, or addTask for new work.');
+    requireTaskAwake(task);
     if (task.run) {
       this.oneAtATime(row);
       throw bad(`That task already has a helper run (${task.run.status}, ${helper}). Carry it on with resumeHelper and this taskId; selectTask is only for an unstarted to-do.`);
@@ -891,6 +1036,7 @@ export class Coordinators {
     const row = this.must(projectId);
     const task = row.tasks.find((t) => t.id === id);
     if (!task) throw bad('That task is not in this project.');
+    requireTaskAwake(task);
     if (task.state === 'done') throw bad('That task is done: archive it with archiveTask.');
     if (task.run && ['queued', 'running'].includes(task.run.status)) throw bad('A helper is working on this task. Wait for its result before dropping it.');
     const why = reason?.trim().slice(0, 1000);
@@ -900,8 +1046,15 @@ export class Coordinators {
   }
 
   private toHistory(row: Coordinator, task: Coordinator['tasks'][number], extra: Record<string, string>): void {
+    for (const record of boardRecords(row)) {
+      const work = record.work;
+      if (work?.parentTaskId === task.id) throw bad('Move or archive this task’s sub-tasks first.');
+      if (work?.state === 'postponed' && work.due?.type === 'after_task' && work.due.taskId === task.id) {
+        throw bad('Move or reschedule the postponed tasks waiting on this task first.');
+      }
+    }
     const questions = row.questions.filter((q) => task.run?.agentId !== undefined && q.agentId === task.run.agentId);
-    fs.appendFileSync(path.join(this.deps.home, 'coordinator-history.jsonl'), JSON.stringify({ projectId: row.projectId, task, questions, ...extra }) + '\n', { mode: 0o600 });
+    this.appendTaskHistory({ projectId: row.projectId, task, questions, ...extra });
     row.tasks = row.tasks.filter((t) => t.id !== task.id);
     row.questions = row.questions.filter((q) => !questions.includes(q));
     if (row.selectedTaskId === task.id) delete row.selectedTaskId;
@@ -940,7 +1093,11 @@ export class Coordinators {
     const brief = text(opts.brief, 16_000);
     const { project } = this.deps.projects.get(projectId);
     const cwd = this.resolveHelperCwd(project, row, opts.cwd);
-    const pending = row.tasks.filter((t) => !t.run && t.state === 'todo');
+    const unstarted = row.tasks.filter((t) => !t.run && t.state === 'todo');
+    const pending = unstarted.filter((t) => t.work?.state !== 'postponed');
+    const requestedId = opts.taskId || row.selectedTaskId;
+    const requested = row.tasks.find((t) => t.id === requestedId);
+    if (requested) requireTaskAwake(requested);
     let task: Coordinator['tasks'][number] | undefined;
     let createdTask = false;
     if (opts.taskId) {
@@ -955,6 +1112,7 @@ export class Coordinators {
       throw bad('Choose the intended to-do with taskId or coordinator action selectTask before starting a helper.');
     }
     if (!task) {
+      if (!pending.length && unstarted.length) requireTaskAwake(unstarted[0]!);
       if (row.tasks.length >= 100) throw bad('The project task list is full.');
       const fallbackTitle = brief.split(/\r?\n/, 1)[0]!.trim().slice(0, 200) || 'Project work';
       task = {
@@ -1030,6 +1188,7 @@ export class Coordinators {
       return Boolean(opts.taskId || opts.helperId);
     });
     if (!task?.run) throw bad('Resume only a known helper from this project.');
+    requireTaskAwake(task);
     const helperId = task.run.helperThreadId;
     if (!helperId || !this.deps.host.has(helperId)) {
       throw bad('This task has no resumable helper session. Start a new bounded helper with startHelper from the saved checkpoint instead.');
@@ -1321,7 +1480,11 @@ export class Coordinators {
       // Archive is durable before its execution restrictions are removed.
       this.deps.host.store.save(st.rec);
     }
-    fs.appendFileSync(path.join(this.deps.home, 'coordinator-history.jsonl'), JSON.stringify({ coordinator: row, removedAt: this.now() }) + '\n', { mode: 0o600 });
+    this.appendTaskHistory({ coordinator: row, removedAt: this.now() });
+    this.timers.get(row.projectId)?.cancel();
+    this.timers.delete(row.projectId);
+    this.timerAt.delete(row.projectId);
+    this.deliveryRetryAt.delete(row.projectId);
     this.rows.delete(row.projectId); this.save();
     for (const id of helperIds) {
       if (this.deps.host.has(id)) this.deps.host.delete(id);
@@ -1431,17 +1594,13 @@ export class Coordinators {
       const existing = row.loops.find((l) => l.state !== 'closed' && l.kind === 'waiting_on_user' && normLoopTitle(l.title) === norm);
       if (existing) {
         if (summary !== undefined) existing.summary = summary;
-        if (options !== undefined) existing.options = options;
+        if (options !== undefined) setLoopOptions(existing, options);
         existing.sourceSeq = seq;
         existing.updatedAt = now;
         dirty = true;
         continue;
       }
-      if (row.loops.length >= 100) {
-        const closedIdx = row.loops.findIndex((l) => l.state === 'closed');
-        if (closedIdx < 0) break;
-        row.loops.splice(closedIdx, 1);
-      }
+      if (!this.makeLoopRoom(row)) break;
       row.loops.push({
         id: crypto.randomUUID(),
         kind: 'waiting_on_user',
@@ -1497,9 +1656,7 @@ export class Coordinators {
           const norm = normLoopTitle(answer.action);
           for (const loop of own.loops) {
             if (loop.state !== 'closed' && loop.kind === 'waiting_on_user' && normLoopTitle(loop.title) === norm) {
-              loop.state = 'closed';
-              loop.closedAt = now;
-              loop.updatedAt = now;
+              closeDecisionOrQuestion(loop, now, answer.answer);
               dirty = true;
             }
           }
@@ -1525,12 +1682,44 @@ export class Coordinators {
       const key = `${threadId}:${event.turnId}`;
       if (row.seen.includes(key) || row.events.some((e) => e.key === key)) continue;
       row.events.push({ key, text: JSON.stringify({ source: 'project thread', threadId, title: thread.title, outcome: event.outcome, summary: thread.preview.slice(0, 2000) }) });
-      this.changed(row); this.schedule(row, BATCH_MS);
+      this.changed(row);
     }
   }
-  private schedule(row: Coordinator, delay: number, retry = false): void {
-    if (row.state !== 'active' || !this.deps.enabled() || this.stopped) return;
-    if (row.wakeAt && !retry) delay = Math.min(delay, Math.max(0, Date.parse(row.wakeAt) - this.deps.clock.now()));
+  private releaseDueTasks(row: Coordinator): void {
+    const records = boardRecords(row);
+    const done = new Set(records.filter(isTaskDone).map((task) => task.id));
+    const now = this.deps.clock.now();
+    for (const record of records) {
+      const work = record.work;
+      if (work?.state !== 'postponed' || !work.due) continue;
+      const due = work.due.type === 'at' ? Date.parse(work.due.at) <= now : done.has(work.due.taskId);
+      if (!due) continue;
+      delete work.state;
+      row.events.push({
+        key: `task-due:${crypto.randomUUID()}`, taskWake: record.id,
+        text: JSON.stringify({ source: 'postponed task is due', taskId: record.id, title: record.title, due: work.due }),
+      });
+    }
+  }
+
+  private schedulePending(row: Coordinator): void {
+    if (!this.deps.enabled() || this.stopped) return;
+    const now = this.deps.clock.now();
+    const work = boardRecords(row);
+    const done = new Set(work.filter(isTaskDone).map((task) => task.id));
+    const nextTaskWake = work.reduce((next, record) => {
+      const details = record.work;
+      if (details?.state !== 'postponed' || !details.due) return next;
+      if (details.due.type === 'after_task') return done.has(details.due.taskId) ? now : next;
+      return Math.min(next, Date.parse(details.due.at));
+    }, Infinity);
+    const manualWake = Date.parse(row.wakeAt ?? '');
+    const hasBatch = row.events.length > 0 || row.delivery !== undefined;
+    const batchAt = !row.delivery && row.events.some((event) => event.taskWake) ? now : hasBatch ? now + BATCH_MS : Infinity;
+    const retryAt = this.deliveryRetryAt.get(row.projectId);
+    const deliveryAt = row.state === 'paused' ? Infinity : retryAt ?? Math.min(batchAt, Number.isFinite(manualWake) ? manualWake : Infinity);
+    let delay = Math.max(0, Math.min(deliveryAt, nextTaskWake) - now);
+    if (!Number.isFinite(delay)) return;
     // Node turns larger delays into 1 ms. Recheck a distant deadline in
     // bounded intervals instead of spinning on it.
     delay = Math.min(delay, 2_147_483_647);
@@ -1541,8 +1730,16 @@ export class Coordinators {
     this.timers.set(row.projectId, this.deps.clock.setTimeout(() => {
       this.timers.delete(row.projectId);
       this.timerAt.delete(row.projectId);
-      if (row.state !== 'active' || !this.deps.enabled() || this.stopped) return;
+      if (!this.deps.enabled() || this.stopped) return;
+      const retry = this.deliveryRetryAt.get(row.projectId);
+      if (row.state === 'paused' || (retry !== undefined && retry > this.deps.clock.now())) {
+        // Record deadlines while delivery is paused or waiting to retry.
+        this.changed(row);
+        return;
+      }
+      this.deliveryRetryAt.delete(row.projectId);
       const due = row.wakeAt && Date.parse(row.wakeAt) <= this.deps.clock.now();
+      this.releaseDueTasks(row);
       // Deliver whole records only. The undelivered tail stays queued.
       const events: Coordinator['events'] = [];
       let size = 0;
@@ -1550,7 +1747,6 @@ export class Coordinators {
         if (size + event.text.length > 16_000 && events.length) break;
         events.push(event); size += event.text.length + 1;
       }
-      let failed = false;
       try {
         if (!row.delivery && (due || events.length)) {
           row.delivery = {
@@ -1571,11 +1767,10 @@ export class Coordinators {
           delete row.delivery;
         }
       } catch (e) {
-        failed = true;
+        this.deliveryRetryAt.set(row.projectId, this.deps.clock.now() + 60_000);
         this.deps.log.error('coordinator wake failed; its events are kept', { projectId: row.projectId, error: String(e) });
       }
       this.changed(row);
-      if (row.events.length || row.delivery || row.wakeAt) this.schedule(row, failed ? 60_000 : row.events.length || row.delivery ? BATCH_MS : Math.max(0, Date.parse(row.wakeAt!) - this.deps.clock.now()), failed);
     }, delay));
   }
   private wake(row: Coordinator, message: string, delivery?: string, ceiling?: PermissionMode): string | undefined {
