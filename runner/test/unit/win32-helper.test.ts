@@ -41,9 +41,13 @@ test('the helper answers each question by its id, keeps running, and says why wh
   }
 });
 
+// Only the warm limit is short: a new node can take seconds to start on a
+// loaded machine (bruce, 26 Nov), so each new helper's first answer gets
+// PATIENCE_MS, and a ping warms the first one before the hang.
 test("a question it doesn't answer in time fails, and the next one gets a new helper", async () => {
-  const h = standIn(300);
+  const h = standIn(300, PATIENCE_MS);
   try {
+    assert.equal(await h.ask('ping'), 'pong');
     await assert.rejects(h.ask('hang'), /in time/);
     assert.equal(await h.ask('ping'), 'pong');
   } finally {
