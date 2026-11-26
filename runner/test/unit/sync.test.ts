@@ -1364,7 +1364,12 @@ test('commands: website and iPhone create with only a model id use a login that 
   const claude = new FakeAdapter();
   const codex = new FakeAdapter('codex');
   const opencode = new FakeAdapter('opencode');
-  const h = makeHarness(undefined, {}, {
+  const h = makeHarness(undefined, {
+    pools: [
+      { id: 'claude', title: 'Claude', accountIds: ['claude-main', 'claude-3'] },
+      { id: 'codex', title: 'Codex', accountIds: ['codex-main', 'codex-extra'] },
+    ],
+  }, {
     adapters: { claude, codex, opencode },
     accounts: new FakeAccounts([
       ...withCodex().map((account) => account.id === 'claude-main'
@@ -1397,6 +1402,7 @@ test('commands: website and iPhone create with only a model id use a login that 
     ['opencode-main', 'open/router'],
   ]);
   assert.equal(claude.sessions.length, 0);
+  assert.deepEqual(h.runner.list().filter((thread) => thread.provider === 'opencode').map((thread) => thread.poolId), [undefined, undefined, undefined]);
 });
 
 test('an archive command an agent sent (by: "agent") says an agent archived it; one without, the user', async () => {

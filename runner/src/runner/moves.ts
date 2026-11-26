@@ -1145,6 +1145,7 @@ export const movesPart = {
       if (account.provider !== rec.provider) {
         rec.provider = account.provider;
         delete rec.model;
+        delete rec.explicitModel;
         delete rec.effort;
       }
       // Nothing that runs or approves anything comes (dropMovedPowers),

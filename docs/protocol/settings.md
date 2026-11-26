@@ -613,15 +613,19 @@ thread to another login when the one it's on runs out of room.
   using `provider` if given. Otherwise it tries the preferred pool first,
   then the other pools in order, looking for a matching login with room.
   If every match is out of room, the first matching pool and login are
-  used. A picker id takes precedence over a resolved alias on another
-  provider. When the same picker id is listed by several providers, an
-  unhinted request uses Claude, then Codex, then the first other provider
-  that lists it, in the runner's account order. The website and iPhone
-  also give Claude and Codex priority for duplicate picker ids. A prefix
-  can suggest Claude or Codex when no login lists the model. Logins of
-  that provider whose lists are still unknown
-  get first try. If there is still no match, the usual pool fallback
-  chooses a login, and the runner checks the requested model against it.
+  used. If the matching logins are all outside the pools, an unnamed
+  pool lets the thread pin to a signed-in login with no account note.
+  A picker id takes precedence over a resolved alias. When several
+  eligible providers list the same picker id, the runner gives Claude
+  and Codex priority in that order, as the website and iPhone do in
+  their pickers. If no list has the picker id and a candidate ACP
+  login's list is still unknown, the
+  runner asks for its list and returns a retryable error before creating
+  a thread. A known empty list counts as loaded. With no unresolved ACP
+  login, a native Claude or Codex id can use a login of that provider
+  whose list is unknown. If there is still no match, the usual pool
+  fallback checks the model against its chosen login and explains any
+  replacement.
   Without a model the pool's provider and room rules apply as usual. A dev
   runner's `keepAccount` pins new threads to its account instead, unless
   that login's plan has ended (`planEnded`).
@@ -792,9 +796,13 @@ thread to another login when the one it's on runs out of room.
   login isn't OK, or isn't in its pool any more, it moves first. A thread
   stays on one login as long as it can, since every move costs a cold
   prompt cache.
-- **Where it moves.** The pool's pick of the thread's provider (Which
-  login), leaving out the one it's on. If none has room, the first other provider in pool order that
-  has a login with room: a cross-provider move, a handoff like any
+- **Where it moves.** A thread whose request chose a specific model moves
+  automatically only to logins of the same provider that list that model.
+  This applies before a turn, after a limit or sign-out, and while waiting
+  for room. A thread using the default model takes the pool's pick of its
+  provider (Which login), leaving out the one it's on. If none has room,
+  it uses the first other provider in pool order with a login with room:
+  a cross-provider move, a handoff like any
   provider change, onto that provider's default model
   (`defaults.models[provider]`, else the account's own) and effort. A
   thread that spilled over stays there; it doesn't move back by itself. If

@@ -17,7 +17,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { ThreadState } from '../runner.ts';
 import { checkImages, oneLine, titleFrom, userMessage } from './messages.ts';
-import { effortTitle, isClaudeModel, modelRow, modelTitle } from './models.ts';
+import { effortTitle, modelRow, modelTitle, nativeModelProvider, pickerModelRow } from './models.ts';
 import { newRuntime } from './runtime.ts';
 import { providerInfo, providerName } from '../providers.ts';
 import { cutSafely } from '../safe-cut.ts';
@@ -103,12 +103,13 @@ export const newThreadsPart = {
     // login can't run would write a note into the thread.
     const usable = this.usableAccounts();
     const speed = usable.some((a) => a.provider === 'claude')
-      ? { model: HAIKU }
+      ? { model: HAIKU, onlyProvider: 'claude' as const }
       : usable.some((a) => a.provider === 'codex')
-        ? { model: ASK_CODEX_MODEL, effort: 'low' as const }
+        ? { model: ASK_CODEX_MODEL, onlyProvider: 'codex' as const, effort: 'low' as const }
         : {};
     const { st, notes } = this.makeThread({ text: question, origin: 'phone', worktree: false, ...speed });
     const { rec } = st;
+    delete rec.explicitModel;
     const turnId = crypto.randomUUID();
     const sources = (params.sources ?? []).filter((x) => x?.url).slice(0, 10);
     const links = sources.map((x) => `- [${(x.title || x.url).replace(/[[\]]/g, '')}](${x.url})`).join('\n');
@@ -270,6 +271,7 @@ export const newThreadsPart = {
     const account = this.accounts.get(accountId);
     if (!account) throw new RpcError(ErrorCode.accountNotFound, `No account called ${accountId}`);
     this.checkProvider(account);
+    if (params.model && account.models === undefined && account.provider !== 'claude' && account.provider !== 'codex') this.waitForModelLists([account]);
     if (!isDirectory(cwd)) throw new RpcError(ErrorCode.badParams, `Folder not found: ${cwd}`);
     // A folder the old sandbox experiment shut threads in (config.ts).
     const retired = this.retiredSandbox(cwd);
@@ -301,7 +303,10 @@ export const newThreadsPart = {
       ...(params.coordinatorHelperFor ? { coordinatorHelperFor: params.coordinatorHelperFor } : {}),
     };
     const checked = this.checkSettings(account, params.model || this.defaultModelFor(account.provider), params.effort ?? this.defaultEffortFor(account.provider));
-    if (checked.model) rec.model = checked.model;
+    if (checked.model) {
+      rec.model = checked.model;
+      if (params.model === checked.model) rec.explicitModel = pickerModelRow(account, checked.model) ? 'pickerId' : 'modelId';
+    }
     if (checked.effort) rec.effort = checked.effort;
     // Whether the first turn should look for a worktree patch. Reading the
     // patch files is async, so it happens there; a folder with no patch
@@ -363,18 +368,13 @@ export const newThreadsPart = {
     return { ...(model ? { model } : {}), ...(effort ? { effort } : {}), notes };
   },
 
-  // Whether a thread on this account can run this model id. Codex: one the
-  // account lists, or before the list is known anything starting gpt-.
-  // Claude: anything but another provider's id, unless the account itself
-  // lists it.
+  // A loaded list is authoritative. A native id can be tried while its
+  // list loads unless another provider already lists that id.
   modelFits(this: Runner, account: Account, model: string): boolean {
     if (modelRow(account, model)) return true;
-    if (account.provider === 'codex') return !account.models?.length && model.startsWith('gpt-');
-    // An ACP agent runs what it lists, and nothing can be told from the name.
-    if (account.provider !== 'claude') return false;
-    if (isClaudeModel(model)) return true;
-    const elsewhere = this.safeAccounts().filter((a) => a.provider !== 'claude').some((a) => modelRow(a, model));
-    return !model.startsWith('gpt-') && !elsewhere;
+    if (account.models !== undefined) return false;
+    return nativeModelProvider(model) === account.provider
+      && !this.safeAccounts().some((a) => a.provider !== account.provider && modelRow(a, model));
   },
 };
 

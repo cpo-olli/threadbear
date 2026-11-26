@@ -116,7 +116,7 @@ import { CARRY_ON_BACK, CARRY_ON_MOVED, CARRY_ON_NETWORK, CARRY_ON_RESTART, CARR
 export { CARRY_ON_BACK, CARRY_ON_MOVED, CARRY_ON_NETWORK, CARRY_ON_RESTART, CARRY_ON_SIGNED_OUT, CARRY_ON_TOKEN, NET_CARRY_ON_MAX, NET_PROBE_FIRST_MS, NET_PROBE_MAX_MS, NET_WAIT_MAX_MS, STOPPED_CARRY_ON_MAX_AGE_MS, STOPPED_WORK_WAKES, STOPPED_WORK_WAKE_MAX_AGE_MS, WROTE_INSTEAD, isCarryOn, stoppedWorkMessage };
 import { TITLE_PROMPT, askedLine, checkImages, cleanTitle, fromMike, isAutomaticInput, matchAnswers, oneLine, scheduledMessageId, titleFrom, userMessage } from './runner/messages.ts';
 export { TITLE_PROMPT, askedLine, checkImages, cleanTitle, fromMike, isAutomaticInput, matchAnswers, oneLine, scheduledMessageId, titleFrom, userMessage };
-import { effortTitle, isClaudeModel, modelRow, modelTitle } from './runner/models.ts';
+import { effortTitle, isClaudeModel, modelAccounts, modelRow, modelTitle, pickerModelRow } from './runner/models.ts';
 export { effortTitle, isClaudeModel, modelRow, modelTitle };
 import { newRuntime } from './runner/runtime.ts';
 export { newRuntime };
@@ -854,6 +854,8 @@ export class Runner {
   unvouchedSettled = false;
   // Accounts whose CLI has been asked for its models (or is being asked).
   probed = new Set<string>();
+  // Queued or active probes, including a fresh read after a CLI update.
+  private modelProbes = new Map<string, number>();
   rescanTimer?: TimerHandle;
   landRecheckAt = 0;
   liveTimer?: TimerHandle;
@@ -1074,18 +1076,30 @@ export class Runner {
   // after a Codex update (a new version can change the list).
   async probeModels(only?: (a: Account) => boolean): Promise<void> {
     const targets = this.safeAccounts().filter((a) => !only || only(a));
-    for (const a of targets) this.probed.add(a.id);
+    for (const a of targets) {
+      this.probed.add(a.id);
+      this.modelProbes.set(a.id, (this.modelProbes.get(a.id) ?? 0) + 1);
+    }
     for (const account of targets) {
-      if (this.stopping) return;
-      const adapter = this.adapters[account.provider];
-      if (!adapter?.models) continue;
       try {
+        const adapter = this.adapters[account.provider];
+        if (this.stopping || !adapter?.models) continue;
         const models = await adapter.models(account);
         this.learnAccount(account.id, { models });
       } catch (e) {
         this.log.warn('could not read the model list', { accountId: account.id, error: String(e) });
+      } finally {
+        const pending = this.modelProbes.get(account.id) ?? 1;
+        if (pending > 1) this.modelProbes.set(account.id, pending - 1);
+        else this.modelProbes.delete(account.id);
       }
     }
+  }
+
+  waitForModelLists(accounts: Account[]): never {
+    const pending = new Set(accounts.map((a) => a.id));
+    void this.probeModels((a) => pending.has(a.id) && a.models === undefined && !this.modelProbes.has(a.id));
+    throw new RpcError(ErrorCode.busy, "Couldn't confirm which login offers that model while model lists are unavailable. Try again, or choose the default model.");
   }
 
   learnAccount(accountId: string, info: LearnedAccountInfo): void {
@@ -3889,18 +3903,16 @@ export class Runner {
     const pool = this.poolById(rec.poolId);
     if (!pool) return;
     const accounts = this.usableAccounts();
+    const eligible = this.poolTurnAccounts(rec, accounts);
     const current = accounts.find((a) => a.id === rec.accountId);
     const inPool = pool.accountIds.includes(rec.accountId);
-    if (current && inPool && loginOk(current)) return;
+    if (current && eligible.includes(current) && inPool && loginOk(current)) return;
     const now = this.clock.now();
-    // A new thread's first turn keeps the advertised model picked for it,
-    // even if every login listing it is out of room.
-    const model = rec.model;
-    const keepModel = !rec.sessionUsed && !rec.lastTurnCompletedSeq && current && modelRow(current, model);
-    const eligible = keepModel ? accounts.filter((a) => a.provider === rec.provider && modelRow(a, model)) : accounts;
     const next = nextLogin(pool, eligible, rec, now);
     if ('waitUntil' in next) return;
-    const why = !current ? `${rec.accountId} isn't on this Mac` : !inPool ? `${current.title} isn't in ${pool.title}` : current.planEnded ? `${current.title}'s plan has ended` : current.signedOut ? `${current.title} is signed out` : `${current.title} ${limitWhy(current, now)}`;
+    const why = !current ? `${rec.accountId} isn't on this Mac` : !inPool ? `${current.title} isn't in ${pool.title}`
+      : !eligible.includes(current) ? `${current.title} no longer lists the selected model`
+        : current.planEnded ? `${current.title}'s plan has ended` : current.signedOut ? `${current.title} is signed out` : `${current.title} ${limitWhy(current, now)}`;
     this.moveLogin(st, accounts.find((a) => a.id === next.accountId)!, why);
   }
 
@@ -4170,20 +4182,23 @@ export class Runner {
     // when moving pools or picking a model from another provider in the same pool.
     const activePool = pool ?? (params.accountId === undefined && params.poolId === undefined && rec.poolId ? this.poolById(rec.poolId) : undefined);
     let toAccountId = params.accountId;
-    // The provider the call asks for, when it says (or its model does): in
-    // a pool with both, a Codex or Antigravity model picked from the menu goes
-    // to that provider's login, even when the thread's current login is in that pool too.
-    const wanted = params.provider ?? (params.model ? this.modelProvider(params.model) : undefined);
+    const accounts = activePool ? this.usableAccounts() : [];
+    const modelMembers = activePool && params.model
+      ? modelAccounts(poolAccounts(activePool, accounts).filter((a) => !params.provider || a.provider === params.provider), params.model)
+      : [];
+    const wanted = params.provider ?? modelMembers.find((a) => a.provider === rec.provider)?.provider ?? modelMembers[0]?.provider;
     const otherProvider = wanted !== undefined && wanted !== rec.provider && activePool?.accountIds.some((id) => this.accounts.get(id)?.provider === wanted);
-    if (activePool && (pool ? !activePool.accountIds.includes(rec.accountId) || otherProvider : otherProvider)) {
-      const accounts = this.usableAccounts();
+    const needsModelLogin = modelMembers.length > 0 && !modelMembers.some((a) => a.id === rec.accountId);
+    if (activePool && (otherProvider || needsModelLogin || (pool && !pool.accountIds.includes(rec.accountId)))) {
       const provider = otherProvider ? wanted : rec.provider;
-      let id = pickInPool(activePool, accounts, { provider });
-      if (!id && !otherProvider) {
+      const candidates = modelMembers.length ? modelMembers : accounts;
+      let id = pickInPool(activePool, candidates, { provider });
+      if (!id && !otherProvider && !modelMembers.length) {
         const next = nextLogin(activePool, accounts, rec, this.clock.now());
         if (!('waitUntil' in next)) id = next.accountId;
       }
-      toAccountId = id ?? poolAccounts(activePool, accounts).find((a) => !otherProvider || a.provider === wanted)?.id ?? poolAccounts(activePool, accounts)[0]?.id;
+      const members = poolAccounts(activePool, candidates);
+      toAccountId = id ?? members.find((a) => a.provider === provider)?.id ?? members[0]?.id;
     }
     if (params.title !== undefined) {
       rec.title = cutSafely(params.title.trim(), 200) || rec.title;
@@ -4279,6 +4294,10 @@ export class Runner {
       model = checked.model;
       effort = checked.effort;
       for (const text of checked.notes) this.emit(st, { type: 'system.note', text }, rt.turn?.turnId);
+    }
+    if (params.model !== undefined || providerChanged || model !== rec.model) {
+      if (account && model && model === params.model) rec.explicitModel = pickerModelRow(account, model) ? 'pickerId' : 'modelId';
+      else delete rec.explicitModel;
     }
     if (model !== rec.model) {
       if (model) rec.model = model;

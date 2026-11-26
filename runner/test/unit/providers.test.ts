@@ -67,8 +67,6 @@ test('an ACP model is only ever the one its account lists', () => {
   assert.equal(h.runner.modelFits(oc, 'fake/one'), true);
   assert.equal(h.runner.modelFits(oc, 'claude-opus-5-5'), false, 'not by its name');
   assert.equal(h.runner.modelFits(claude, 'fake/one'), false);
-  assert.equal(h.runner.modelProvider('fake/one'), 'opencode');
-  assert.equal(h.runner.modelProvider('gpt-9'), 'codex', 'another provider keeps what it has always claimed');
 });
 
 test('a saved pool of only an agent this runner does not offer is gone', () => {

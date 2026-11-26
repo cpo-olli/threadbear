@@ -1596,8 +1596,8 @@ If a login stops working (you signed out, or its sign-in ended), the
 thread's turn fails and a line above its messages says so, naming the login
 and its email ("claude-1 (you@example.com) is signed out."). Sign in… opens Terminal on that login's own sign-in, and Send
 again sends your last message again once you're done. A thread in a pool
-doesn't wait for you: it moves to another login in the pool and carries on,
-and the pool leaves the signed-out login alone until you sign it back in.
+moves and carries on if another login can run it. If you picked a
+specific model, the other login has to offer it.
 A schedule pinned to a signed-out login runs on another login in a pool
 that login is in, and its thread says which. If no pool has another login
 for it (a login kept apart for work, say), the run fails once with the
@@ -1728,7 +1728,8 @@ none picked or no supported login in the pool, threads keep the first line
 of their first message as their title.
 
 Logins are grouped into pools, one for Claude and one for Codex to begin
-with (Settings > Pools). A new thread in a pool starts on the login with room whose
+with (Settings > Pools). Picking a model starts the thread on a login
+that offers it. A new thread in a pool starts on the login with room whose
 weekly limit resets soonest, so a week's leftover gets spent before it's
 lost rather than draining the login with the most room. A login is used
 until it's all but out (under 1% left), so none of a week goes to waste. When
@@ -1737,9 +1738,10 @@ another login in the pool with room, and carries on from where it was. A
 quiet line in the conversation says so each time: the login it moved to,
 the one that ran out, and when that one is back (for a thread on another
 of your machines too, and on the phone and the website). When
-none has room, the thread waits and carries on by itself once a limit
-resets, and the line says when that is. With only one login, that means it waits for that login's limit to
-reset. A thread pinned to one login does the same on that login. Either
+no eligible login has room, the thread waits for a limit to reset. If
+you picked a specific model, the thread only moves automatically to
+another login on the same provider that offers that model. A pinned
+thread waits for its own login's limit to reset. Either
 way, the box at the top of the message field says what happened and offers
 Switch to another login now; set its Carry on by itself to No and the
 thread waits for your next message instead.

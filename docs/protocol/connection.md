@@ -467,13 +467,15 @@ answering `-32602`, because an older app always sends a model and can't
 recover from an error. (An `effort` that isn't an `EffortLevel` at all is
 still `-32602`.)
 
-- Claude models are `opus`, `sonnet`, `haiku` and anything starting
-  `claude-`. Codex models are those in a Codex account's `models`, or
-  anything starting `gpt-` before the list is known.
-- A model of the other provider, or a Codex id that isn't in the account's
-  `models` once they're known, is replaced by the provider's default, with a
-  `system.note` ("sonnet isn't a Codex model, so this thread uses
-  GPT-6.1-Sol").
+- When a login's model list is known, the runner uses its picker ids and
+  resolved model ids. Before the list is known, Claude can try its native
+  ids and aliases, and Codex can try `gpt-` ids, unless another provider
+  already advertises the id. A new thread with no exact picker id and an
+  unresolved ACP login in scope returns `-32020` so it can be retried
+  once the list is available.
+- A model the chosen account doesn't support is replaced by the provider's
+  default, with a `system.note` ("sonnet isn't a Codex model, so this
+  thread uses GPT-6.1-Sol").
 - An effort the model doesn't list in `effortLevels` (when known) is dropped
   with a note; when other models on the same account list `effortLevels`, a
   model that omits them takes no effort level. `ultra` on a provider with
