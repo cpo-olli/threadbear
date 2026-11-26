@@ -1830,7 +1830,7 @@ fn waiting_text(app: &WeakEntity<Threadbear>, cx: &App) -> String {
         return "Not connected to the runner.".into();
     };
     let t = app.read(cx);
-    if t.settings_unsupported {
+    if t.settings_unsupported() {
         "This runner is too old for settings. It gets them when it next updates.".into()
     } else if !t.connected() {
         "Not connected to the runner.".into()
@@ -2166,8 +2166,8 @@ impl Render for SettingsWindow {
             Some(app) => {
                 let t = app.read(cx);
                 (
-                    t.runner_settings.as_ref().map(RunnerSettings::decode),
-                    t.settings_error.clone(),
+                    t.runner_settings().map(RunnerSettings::decode),
+                    t.settings_error().map(str::to_owned),
                 )
             }
             None => (None, None),
@@ -2255,12 +2255,10 @@ impl Render for SettingsWindow {
 #[cfg(feature = "automation")]
 impl SettingsWindow {
     pub(crate) fn dump(&self, cx: &App) -> Value {
-        let settings = self.app.upgrade().and_then(|a| {
-            a.read(cx)
-                .runner_settings
-                .as_ref()
-                .map(RunnerSettings::decode)
-        });
+        let settings = self
+            .app
+            .upgrade()
+            .and_then(|a| a.read(cx).runner_settings().map(RunnerSettings::decode));
         json!({
             "tab": self.tab.name(),
             "appearance": style::appearance().name(),

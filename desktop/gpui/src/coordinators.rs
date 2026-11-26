@@ -44,6 +44,8 @@ impl Tab {
 #[derive(Default)]
 pub(crate) struct CoordinatorsState {
     pub(crate) list: Vec<Coordinator>,
+    pub(crate) generation: u64,
+    pub(crate) loading: bool,
     pub(crate) tab: Tab,
     pub(crate) setup: Option<String>,
     pub(crate) setup_controls: Option<Entity<CoordinatorControls>>,
@@ -56,6 +58,20 @@ pub(crate) struct CoordinatorsState {
 impl Threadbear {
     pub(crate) fn coordinators_on(&self) -> bool {
         self.experiment_on("coordinators")
+    }
+
+    pub(crate) fn confirmed_coordinators_on(&self) -> bool {
+        match self
+            .runner_settings_state
+            .confirmed_experiment_on("coordinators")
+        {
+            Some(on) => on,
+            // Across a reconnect, wait for `settings.get` on the new session
+            // rather than trusting cached pre-reconnect settings or a mock
+            // hello that ignores runtime experiment toggles.
+            None if self.runner_settings_state.confirmed().is_some() => false,
+            None => self.remote.experiments.iter().any(|e| e == "coordinators"),
+        }
     }
 
     pub(crate) fn coordinator_for_project(&self, id: &str) -> Option<&Coordinator> {
@@ -79,13 +95,28 @@ impl Threadbear {
             self.receive_coordinators(&json!([]));
             return;
         }
+        // Wait for any in-flight/queued toggle of the coordinator experiment
+        // to settle on the runner before asking for `coordinators.list`, so a
+        // runner that still has it off does not reject the call.
+        if !self.connected()
+            || !self.confirmed_coordinators_on()
+            || self
+                .runner_settings_state
+                .has_pending_experiment("coordinators")
+        {
+            return;
+        }
+        self.coordinators.generation += 1;
+        self.coordinators.loading = true;
+        let generation = self.coordinators.generation;
         let client = self.client.clone();
         cx.spawn(async move |this, cx| {
             let result = call(client, "coordinators.list", json!({})).await;
             this.update(cx, |this, cx| {
-                if !this.coordinators_on() {
+                if this.coordinators.generation != generation || !this.coordinators_on() {
                     return;
                 }
+                this.coordinators.loading = false;
                 match result {
                     Ok(value) => this.receive_coordinators(&value["coordinators"]),
                     Err(error) => this.show_error(error.message, cx),
@@ -101,6 +132,8 @@ impl Threadbear {
         if !value.is_array() {
             return;
         }
+        self.coordinators.generation += 1;
+        self.coordinators.loading = false;
         self.coordinators.list = threadbear_core::coordinators::Coordinator::list(value);
         self.invalidate_coordinator_sections();
     }
@@ -165,9 +198,15 @@ impl Threadbear {
                 match result {
                     Ok(value) => {
                         if let Some(coordinator) = Coordinator::decode(&value["coordinator"]) {
+                            let was_loading = this.coordinators.loading;
+                            this.coordinators.generation += 1;
+                            this.coordinators.loading = false;
                             this.coordinators.list.retain(|c| c.project_id != project);
                             this.coordinators.list.push(coordinator.clone());
                             this.invalidate_coordinator_sections();
+                            if was_loading {
+                                this.load_coordinators(cx);
+                            }
                             if let Ok(thread) =
                                 serde_json::from_value::<ThreadSummary>(value["thread"].clone())
                             {
@@ -210,7 +249,7 @@ impl Threadbear {
             this.update(cx, |this, cx| {
                 this.coordinators.busy.remove(&key);
                 match result {
-                    Ok(value) => this.replace_coordinator(&value["coordinator"]),
+                    Ok(value) => this.replace_coordinator(&value["coordinator"], cx),
                     Err(error) => {
                         this.show_error(error.message, cx);
                         this.load_coordinators(cx);
@@ -223,8 +262,11 @@ impl Threadbear {
         .detach();
     }
 
-    fn replace_coordinator(&mut self, value: &Value) {
+    fn replace_coordinator(&mut self, value: &Value, cx: &mut Context<Self>) {
         if let Some(coordinator) = Coordinator::decode(value) {
+            let was_loading = self.coordinators.loading;
+            self.coordinators.generation += 1;
+            self.coordinators.loading = false;
             if let Some(existing) = self
                 .coordinators
                 .list
@@ -236,6 +278,9 @@ impl Threadbear {
                 self.coordinators.list.push(coordinator);
             }
             self.invalidate_coordinator_sections();
+            if was_loading {
+                self.load_coordinators(cx);
+            }
         }
     }
 
@@ -303,7 +348,7 @@ impl Threadbear {
             this.update(cx, |this, cx| {
                 this.coordinators.busy.remove(&key);
                 match result {
-                    Ok(value) => this.replace_coordinator(&value["coordinator"]),
+                    Ok(value) => this.replace_coordinator(&value["coordinator"], cx),
                     Err(error) => this.show_error(error.message, cx),
                 }
                 cx.notify();

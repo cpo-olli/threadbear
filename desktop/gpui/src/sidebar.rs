@@ -864,14 +864,9 @@ impl Threadbear {
     /// first, as it changes without a new hello, else the hello's list.
     /// Agent Archive's search asks it too (archive_search.rs).
     pub(crate) fn experiment_on(&self, id: &str) -> bool {
-        let switch = self.runner_settings.as_ref().and_then(|s| {
-            s["experiments"]
-                .as_array()?
-                .iter()
-                .find(|e| e["id"] == id)
-                .map(|e| e["on"].as_bool() == Some(true))
-        });
-        switch.unwrap_or_else(|| self.remote.experiments.iter().any(|e| e == id))
+        self.runner_settings_state
+            .experiment_on(id)
+            .unwrap_or_else(|| self.remote.experiments.iter().any(|e| e == id))
     }
 
     /// The done card's Archive. With the inboxGuess experiment on it first

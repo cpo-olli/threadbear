@@ -711,8 +711,7 @@ impl Threadbear {
         // A build staged by hand is still noticed, so the app menu and the
         // Updates panel offer Restart to Update for it.
         let follow_main = self
-            .runner_settings
-            .as_ref()
+            .runner_settings()
             .and_then(|s| s["followMain"].as_bool());
         if rules::look(follow_main) == rules::Look::StagedOnly {
             self.updater.settling = false;
@@ -739,11 +738,7 @@ impl Threadbear {
                     .quiet_main
                     .ready(&tree, std::time::Instant::now(), quiet);
                 // followMain can have changed while git was being read.
-                if t.runner_settings
-                    .as_ref()
-                    .and_then(|s| s["followMain"].as_bool())
-                    == Some(false)
-                {
+                if t.runner_settings().and_then(|s| s["followMain"].as_bool()) == Some(false) {
                     t.updater.settling = false;
                     return;
                 }
@@ -1346,8 +1341,7 @@ impl Threadbear {
             building: u.building.is_some(),
             settling: u.settling
                 && self
-                    .runner_settings
-                    .as_ref()
+                    .runner_settings()
                     .and_then(|s| s["followMain"].as_bool())
                     != Some(false),
             quiet_minutes: u.quiet_minutes,

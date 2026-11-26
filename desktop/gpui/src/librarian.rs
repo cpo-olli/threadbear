@@ -731,7 +731,7 @@ impl Threadbear {
     /// what's set. None until the runner's settings have come, or from a
     /// runner too old to have the setting.
     fn render_small_jobs_pool(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let settings = self.runner_settings.as_ref()?;
+        let settings = self.runner_settings()?;
         let models = settings.get("models")?;
         let set = models
             .get("pool")?
