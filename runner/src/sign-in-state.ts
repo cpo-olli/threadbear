@@ -32,11 +32,12 @@ const TIMEOUT_MS = 15_000;
 // sign-in needs no refusal to count (viewOf).
 export const REFUSAL_HOLD_MS = 60 * 60_000;
 // "Your organization has disabled Claude subscription access for Claude
-// Code": signed in, plan paid, and the org's admin has turned Claude Code
-// off (claude-1 on 26 Nov 2026, every turn failing at once). Nothing in its
-// profile or `auth status` says so, only a turn, and signing in again won't
-// help: it's held out a day, then a turn may try it again.
-export const ACCESS_OFF_TEXT = /disabled claude subscription access/i;
+// Code" or "Claude Code can't use your Claude subscription, usually because
+// a payment is past due": signed in, and the CLI refuses turns because of org
+// access or billing. Nothing in its profile or `auth status` says so, only a
+// turn, and signing in again won't help: it's held out a day, then a turn may
+// try it again.
+export const ACCESS_OFF_TEXT = /disabled claude subscription access|can't use your claude subscription|payment is past due/i;
 export const ACCESS_OFF_HOLD_MS = 24 * 3600_000;
 // Refusals still held, kept in the data dir across restarts, and read by
 // test-login.ts so the dev runner and e2e tests don't pick such a login.

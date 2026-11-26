@@ -560,7 +560,7 @@ export class ClaudeNormalizer {
 // A login the CLI couldn't use, when the made-up assistant message saying
 // so didn't come first: "Failed to authenticate: OAuth session expired and
 // could not be refreshed", "Invalid API key · Please run /login".
-export const AUTH_TEXT = /failed to authenticate|oauth (session|token) (has )?expired|authentication_error|invalid api key|please run \/login|not logged in|disabled claude subscription access/i;
+export const AUTH_TEXT = /failed to authenticate|oauth (session|token) (has )?expired|authentication_error|invalid api key|please run \/login|not logged in|disabled claude subscription access|can't use your claude subscription|payment is past due/i;
 
 // What a failed turn says when the API couldn't be reached at all, after
 // the CLI's own retries: its connection-error messages ("API Error: Can't

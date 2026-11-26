@@ -219,10 +219,13 @@ test('checkNow asks about one login straight away, without waiting for the sweep
 // turn does. It counts as signed out for a day, kept across restarts, so
 // pools and the dev runner's login (test-login.ts) move off it.
 const ACCESS_OFF = 'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access';
+const PAST_DUE = "Claude Code can't use your Claude subscription, usually because a payment is past due · Pay or renew at https://claude.ai/settings/billing (if you just paid, try again shortly), or use an Anthropic API key instead";
 
-test('a turn refused because the org turned Claude Code off is an auth failure', () => {
+test('a turn refused because the org turned Claude Code off or payment is past due is an auth failure', () => {
   assert.ok(AUTH_TEXT.test(ACCESS_OFF));
   assert.ok(ACCESS_OFF_TEXT.test(ACCESS_OFF));
+  assert.ok(AUTH_TEXT.test(PAST_DUE));
+  assert.ok(ACCESS_OFF_TEXT.test(PAST_DUE));
   assert.equal(ACCESS_OFF_TEXT.test('Failed to authenticate. API Error: 401'), false);
 });
 
