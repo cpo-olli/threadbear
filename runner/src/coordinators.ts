@@ -172,6 +172,7 @@ const BATCH_MS = 10 * 60_000;
 // of one whose turn failed before a restart or resume tries again.
 const MAX_REPORTS = 50;
 const MAX_REPORT_RETRIES = 3;
+const RESUME_WAKE = 'Resumed by the user. Reconcile any interrupted helper before deciding what to do next.';
 const RESTART_WAKE = 'The runner restarted with interrupted helper work. Inspect the saved records and existing effects before resuming any helper.';
 const RESENT_NOTE = 'Sent again: a restart, pause or failure cut off the turn this came in. You may have seen it already; check before acting on it twice.';
 const COMPACT_MS = 50 * 60_000;
@@ -459,16 +460,14 @@ export class Coordinators {
         try { await ending; } finally { if (this.stoppingSessions.get(projectId) === ending) this.stoppingSessions.delete(projectId); }
       }
     } else {
-      // Reports a pause cut off go again; queued ones (held while paused:
-      // Runner.kickQueue) start behind the wake's own send, in order.
-      // The resume wake says it all: a restart one not yet sent is dropped.
-      if (row.reports?.some((r) => r.id.startsWith('restart:') && !r.sentAs)) {
-        row.reports = row.reports.filter((r) => !(r.id.startsWith('restart:') && !r.sentAs));
-        if (!row.reports.length) delete row.reports;
-      }
+      // Reports a pause cut off go again (reconcileReports). The resume wake rides as a report too, saved in the same write that
+      // drops an unsent restart one it covers, so a crash between them loses
+      // neither (Codex's review, 26 Nov 2026). Queued messages (held while
+      // paused: Runner.kickQueue) start behind its send, in order.
+      row.reports = [...(row.reports ?? []).filter((r) => !(r.id.startsWith('restart:') && !r.sentAs)), { id: `resume:${crypto.randomUUID()}`, at: this.now(), text: RESUME_WAKE }];
+      this.save();
       this.reconcileReports(row);
       this.deliverReports(row, true);
-      this.wake(row, 'Resumed by the user. Reconcile any interrupted helper before deciding what to do next.');
       if (row.events.length || row.delivery || row.wakeAt) this.schedule(row, row.events.length || row.delivery ? BATCH_MS : Math.max(0, Date.parse(row.wakeAt!) - this.deps.clock.now()));
     }
     return this.get(projectId);

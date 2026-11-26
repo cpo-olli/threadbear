@@ -616,6 +616,26 @@ test('a registry saved with the old restart-wake flag still loads, as a restart 
   assert.ok(row.reports?.some((r) => r.id.startsWith('restart:')));
 });
 
+test('the resume wake is kept until a turn that has it finishes, so a crash after resuming does not lose it', async () => {
+  const { c, project, coordinator, claude, h, home } = await withHelper();
+  const pausing = c.pause(project.id, true);
+  for (const x of claude.sessions) if (!x.ended) x.exit();
+  await pausing;
+  await c.pause(project.id, false);
+  await tick();
+  assert.equal(told([claude], coordinator.threadId, 'Resumed by the user'), 1);
+  assert.ok(c.forThread(coordinator.threadId)!.reports?.some((r) => r.id.startsWith('resume:')), 'kept until read');
+  // The runner dies before that turn finishes: the next one sends it again.
+  c.stop();
+  const fresh = recoverFresh(h, home);
+  await tick();
+  assert.equal(told([fresh.adapter], coordinator.threadId, 'Resumed by the user'), 1);
+  fresh.adapter.sessions.filter((x) => x.opts.threadId === coordinator.threadId).at(-1)!.result('completed');
+  await tick();
+  assert.equal(fresh.c.forThread(coordinator.threadId)!.reports, undefined);
+  fresh.c.stop();
+});
+
 test('a coordinator keeps at most 50 undelivered helper reports', async () => {
   const { c, coordinator, finish, h } = await withHelper();
   const row = c.forThread(coordinator.threadId)!;
