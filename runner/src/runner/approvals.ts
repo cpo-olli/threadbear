@@ -261,7 +261,7 @@ export const approvalsPart = {
       this.coordinators?.recordHelperQuestion(st.rec.id, [{ question: `Approval needed: ${req.title}`, header: 'Approval', options: [], multiSelect: false }]);
       return Promise.resolve({ decision: 'deny', message: HELPER_REPORT });
     }
-    if (reviewsCards(this, st)) return this.reviewThenCard(st, st.rt.generation, req, req.signal, () => this.agentApprovalCard(st, req));
+    if (!req.noReview && reviewsCards(this, st)) return this.reviewThenCard(st, st.rt.generation, req, req.signal, () => this.agentApprovalCard(st, req));
     return this.agentApprovalCard(st, req);
   },
 

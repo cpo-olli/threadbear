@@ -133,9 +133,16 @@ export class CallerGate {
   // Throws a refusal, or returns the params to run with (the caller's own
   // mode filled in, what only a client with the token may say taken out).
   check(threadId: string, method: string, p: Params): Params {
-    if (method.startsWith('coordinators.') && !['coordinators.list', 'coordinators.get'].includes(method)) throw new RpcError(ErrorCode.notAllowed, 'Configure project coordinators from the project home. A coordinator changes its own desk through its coordinator tool.');
+    // Pausing a coordinator and answering its helpers' questions are the
+    // user's, from the project home. Starting one and handing it a charter
+    // and to-dos is open to an ordinary thread on Full access (below it,
+    // update_project's coordinator option asks on a card), never to a
+    // coordinator or its helpers (rpcRefusal, next).
+    if (method === 'coordinators.pause' || method === 'coordinators.answer') throw new RpcError(ErrorCode.notAllowed, "Pausing a coordinator and answering its helpers are the user's to do, from the project home.");
     const coordinatorRefusal = this.deps.runner.coordinators?.rpcRefusal(threadId, method, p);
     if (coordinatorRefusal) throw new RpcError(ErrorCode.notAllowed, coordinatorRefusal);
+    // Whoever hands it work is named to the coordinator as this thread, never what the call says.
+    if (method === 'coordinators.start' || method === 'coordinators.addTask' || method === 'coordinators.update') p = { ...p, fromThread: threadId };
     const known = this.authority(threadId);
     // Any agent's move, Full's too: it never starts a turn by itself
     // (Runner.update's carry-on after a limit is Mike's pick from the menu).
@@ -251,6 +258,10 @@ export class CallerGate {
         return this.scheduleRun(caller, p, needs);
       case 'schedules.delete':
         return this.scheduleDelete(caller, p, needs);
+      case 'coordinators.start':
+      case 'coordinators.addTask':
+      case 'coordinators.update':
+        throw needs("starting or changing a project's coordinator", 'update_project');
       default:
         throw needs(`calling ${method}`);
     }

@@ -51,7 +51,7 @@ import { starterIn, type StartRequest } from './cross-runner.ts';
 import { SECRET_TIMEOUT_DEFAULT_MIN, SECRET_TIMEOUT_MAX_MIN } from './secrets.ts';
 import { cutSafely, firstLineSafely } from './safe-cut.ts';
 import { pickRunner } from './moves.ts';
-import { above, LEAST, raises, type Authority } from './access.ts';
+import { above, ceilingMode, higherMode, LEAST, raises, type Authority } from './access.ts';
 export { above, LEAST, raises, type Authority };
 import { FINDINGS_REFUSALS, FINDINGS_REFUSED, MAX_FINDINGS, findingsProblem, refusalsThisTurn } from './runner/lab-review.ts';
 
@@ -138,7 +138,8 @@ export const SERVER_NAME = 'threadbear';
 
 // `review`: what the call changes, worked out by Threadbear itself (a project
 // brief's line diff), for the card reviewer (runner/card-review.ts) alone.
-export type AgentApprovalRequest = { name: string; title: string; input: Record<string, unknown>; review?: string; signal?: AbortSignal };
+// `noReview`: standing authority (a coordinator), so the user's own card, never Auto's reviewer.
+export type AgentApprovalRequest = { name: string; title: string; input: Record<string, unknown>; review?: string; signal?: AbortSignal; noReview?: true };
 
 export const MODE_NAMES: Record<PermissionMode, string> = { full: 'Full access', auto: 'Auto', ask: 'Ask before edits', plan: 'Plan first' };
 const higherOf = (a: PermissionMode, b: PermissionMode): PermissionMode => (raises(a, b) ? a : b);
@@ -634,7 +635,7 @@ export function buildThreadbearTools(
       return { mode: 'full', title: t.title };
     }
   };
-  const confirm = async (tool: string, reasons: string[], input: Record<string, unknown>, signal?: AbortSignal, review?: string): Promise<void> => {
+  const confirm = async (tool: string, reasons: string[], input: Record<string, unknown>, signal?: AbortSignal, review?: string, how: { noReview?: true } = {}): Promise<void> => {
     if (!reasons.length) return;
     const ask = control.requestAgentApproval?.bind(control);
     if (!ask) throw new Error(`${reasons.join('; ')}: that needs the user's OK, which this runner can't ask for here. Nothing changed; ask them to do it in the app.`);
@@ -643,7 +644,7 @@ export function buildThreadbearTools(
     // (tools.ts, cardInput; Daybreak, 7 Nov 2026).
     const card = cardInput(input, 'all');
     if (card.tooLong) throw new Error(`${reasons.join('; ')}: that needs the user's OK. ${tooLongForCard(card.tooLong)}`);
-    const a = await ask(selfId, { name: `mcp__${SERVER_NAME}__${tool}`, title: reasons.join('; '), input: card.input, ...(review ? { review } : {}), ...(signal ? { signal } : {}) });
+    const a = await ask(selfId, { name: `mcp__${SERVER_NAME}__${tool}`, title: reasons.join('; '), input: card.input, ...(review ? { review } : {}), ...(signal ? { signal } : {}), ...how });
     if (a.decision === 'allow' || a.decision === 'allowAlways') return;
     if (a.noApp) throw new Error(a.message ?? 'No card could be put up for this, so nothing changed.');
     if (a.decision === 'expired') throw new Error(`No answer from the user${a.message ? ` (${a.message})` : ''}, so nothing changed.`);
@@ -1355,6 +1356,86 @@ export function buildThreadbearTools(
   const LINKS_HELP =
     'The few places the user goes for this project, at most 8: its live site, admin page, dashboard, store listing, repo. Short titles ("Live site", "Admin"). Not one-off pages, PRs or docs.';
 
+  // Starts a project's coordinator, or hands an existing one a charter and
+  // to-dos (docs/protocol/projects.md, "Handing a project to its
+  // coordinator"). A coordinator thread runs at the runner's default access
+  // and its helpers do the work, so from a thread below Full access that's
+  // raising access: a card first. Coordinators and helpers never get here.
+  const coordinatorArg = z
+    .object({
+      pool: z.string().optional().describe('Pool id or title. Default: as Add a coordinator picks.'),
+      model: z.string().optional(),
+      effort: effortEnum.optional(),
+      charter: z.string().optional().describe('Its standing instructions: what it may do alone and what it asks first. Replaces the old one.'),
+      tasks: z.array(z.object({ title: z.string(), doneWhen: z.string() })).optional().describe('Starting to-dos, added to its desk.'),
+      message: z.string().optional().describe('What it should know first: where things stand, where the handoff notes are.'),
+    })
+    .describe("Starts the project's coordinator (a thread that keeps the project moving and hands work to hidden helpers), or hands the one it has a charter, to-dos and a message.");
+  // Offered only where coordinators are on, so other copies aren't told of it.
+  const coordinatorParam: { coordinator?: ReturnType<typeof coordinatorArg.optional> } = opts.coordinators?.()?.on() ? { coordinator: coordinatorArg.optional() } : {};
+  // Before anything is written or a card put up: the option is usable here.
+  const coordinatorFirst = (arg: z.infer<typeof coordinatorArg>, project?: Pick<Project, 'id' | 'archived'>): Coordinators => {
+    const svc = opts.coordinators?.();
+    if (!svc?.on()) throw new Error("Project coordinators aren't on in this runner (the coordinators experiment). Nothing changed.");
+    if (svc.forThread(selfId) || svc.helperOwner(selfId)) throw new Error("A coordinator changes its own desk with its coordinator tool; it and its helpers can't start or hand work to coordinators. Nothing changed.");
+    if (arg.pool !== undefined) pool(arg.pool);
+    // The project's own checks (paused, archived, task room) once it exists.
+    svc.checkHandOff(project ?? { id: '', archived: false }, { ...(arg.charter !== undefined ? { charter: arg.charter } : {}), ...(arg.tasks ? { tasks: arg.tasks } : {}), ...(arg.message !== undefined ? { message: arg.message } : {}) });
+    return svc;
+  };
+  // The thread most above the caller among the coordinator and the helpers it
+  // could resume (a helper keeps the access it started with), or, for a new
+  // one, the runner's default.
+  const coordinatorReach = async (svc: Coordinators, projectId: string): Promise<{ threadId?: string; top?: { mode: PermissionMode; title: string } }> => {
+    const has = svc.list().find((c) => c.projectId === projectId);
+    if (!has) return {};
+    let top: { mode: PermissionMode; title: string } | undefined;
+    for (const id of svc.reachedThreads(projectId)) {
+      const t = await accessOf(id);
+      if (!top || raises(t.mode, top.mode)) top = t;
+    }
+    return { threadId: has.threadId, ...(top ? { top } : {}) };
+  };
+  const handToCoordinator = async (projectId: string, arg: z.infer<typeof coordinatorArg>, signal?: AbortSignal): Promise<string> => {
+    const current = (await mustProjects().get(projectId)).project;
+    const svc = coordinatorFirst(arg, current);
+    const caller = await restricted();
+    // From a thread below Full, always a card: the charter and to-dos are
+    // kept and read on every later turn, whatever access the coordinator has
+    // by then (Codex's second review). The words carry the access the card
+    // showed, as send_message's do.
+    let ceiling: PermissionMode = 'full';
+    if (caller) {
+      const before = await coordinatorReach(svc, projectId);
+      {
+        // A coordinator is told the whole brief every turn and its helpers work
+        // in its folders, so the card shows all of it, and it's that brief it gets.
+        const linked = current.folders.find((f) => realOr(f) !== f);
+        if (linked) throw new Error(`${linked} in "${current.title}" is a link (to ${realOr(linked)}), so it can't be handed to a coordinator from a thread with less access. Ask the user to do it.`);
+        const shown = await fullBriefShown(current);
+        const why = before.threadId ? `Hand work to "${before.top!.title}" (${accessName(before.top!)}), the coordinator of "${current.title}"` : `Start a coordinator for "${current.title}", at the runner's default access, told this brief every turn`;
+        await confirm('update_project', [why], { project: { title: current.title, id: current.id, ...shown }, coordinator: arg }, signal, undefined, { noReview: true });
+        const after = await coordinatorReach(svc, projectId);
+        const changed = after.threadId !== before.threadId || (after.top && before.top && raises(after.top.mode, before.top.mode)) || (after.top && !before.top);
+        // The same project by id: one deleted meanwhile mustn't resolve to another by title.
+        const now = (await mustProjects().get(projectId)).project;
+        if (changed || now.id !== projectId || JSON.stringify(await fullBriefShown(now)) !== JSON.stringify(shown)) {
+          throw new Error(`"${current.title}" or its coordinator changed while the user was being asked, so nothing was handed over. Ask again.`);
+        }
+        ceiling = before.top ? higherMode(before.top.mode, caller.mode) : 'full';
+      }
+    }
+    const { pool: p, model, effort, charter, tasks, message } = arg;
+    const r = svc.handOff(
+      { projectId, ...(p !== undefined ? { poolId: pool(p) } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) },
+      { ...(charter !== undefined ? { charter } : {}), ...(tasks ? { tasks } : {}), ...(message !== undefined ? { message } : {}), fromThread: selfId, ceiling: ceilingMode(ceiling) },
+    );
+    const where = `thread ${r.thread.id} "${r.thread.title}" on ${r.thread.accountId}${r.thread.model ? ` (${r.thread.model})` : ''}`;
+    if (r.started) return ` Started its coordinator, ${where}.`;
+    const kept = (p ?? model ?? effort) !== undefined ? ' Its pool, model and effort are as they were (the user switches them in its thread).' : '';
+    return ` Handed its coordinator (${where}) the work.${kept}`;
+  };
+
   const projectTools = [
     tool(
       'list_projects',
@@ -1425,8 +1506,10 @@ export function buildThreadbearTools(
         links: linksArg.optional().describe(LINKS_HELP),
         join: z.boolean().optional().describe('Put this thread in it. Default true.'),
         parent: z.string().optional().describe(PARENT_HELP),
+        ...coordinatorParam,
       },
-      handle(async ({ title, folders, goals, state, notes, links, join, parent }, extra) => {
+      handle(async ({ title, folders, goals, state, notes, links, join, parent, coordinator }, extra) => {
+        if (coordinator) coordinatorFirst(coordinator);
         // A part's name goes into its parent's brief (Projects, "Parts"), so
         // making one asks first when that parent's threads have more access
         // than this one, as changing the parent's title would (Codex review).
@@ -1451,12 +1534,18 @@ export function buildThreadbearTools(
           ...(parent?.trim() ? { parent } : {}),
         });
         const above = p.parentId ? (await mustProjects().get(p.parentId)).project.title : undefined;
-        return `Made the project "${p.title}" (${p.id})${above ? `, a part of "${above}"` : ''}${join === false ? '' : ' and put this thread in it'}.`;
+        const made = `Made the project "${p.title}" (${p.id})${above ? `, a part of "${above}"` : ''}${join === false ? '' : ' and put this thread in it'}.`;
+        if (!coordinator) return made;
+        try {
+          return made + (await handToCoordinator(p.id, coordinator, extra?.signal));
+        } catch (e) {
+          throw new Error(`${made} Its coordinator didn't start: ${(e as Error).message}`);
+        }
       }),
     ),
     tool(
       'update_project',
-      "Changes a project: title, goals, state, notes, links, folders, icon or Notion task board. Keep state current as work moves on (what's done, what's next, what's blocked). Notes are for what a later thread should know that the repo doesn't say: decisions and why, gotchas, what's still owed. They're not a log of what landed (git and the docs have that), so when something you note replaces an older note, fix that note with editNotes rather than adding another; notes replaces them all, for a real restructure. When the project gets a place the user will keep going back to (it goes live, gets an admin page, a dashboard, a store listing), add it with addLinks: links show at the top of every one of its threads' Highlights. The librarian finds icons by itself from the project's folders, so only set one when the user asks or the project gets a new app icon somewhere it wouldn't look.",
+      `Changes a project: title, goals, state, notes, links, folders, icon or Notion task board${opts.coordinators?.()?.on() ? ', or hands it to its coordinator' : ''}. Keep state current as work moves on (what's done, what's next, what's blocked). Notes are for what a later thread should know that the repo doesn't say: decisions and why, gotchas, what's still owed. They're not a log of what landed (git and the docs have that), so when something you note replaces an older note, fix that note with editNotes rather than adding another; notes replaces them all, for a real restructure. When the project gets a place the user will keep going back to (it goes live, gets an admin page, a dashboard, a store listing), add it with addLinks: links show at the top of every one of its threads' Highlights. The librarian finds icons by itself from the project's folders, so only set one when the user asks or the project gets a new app icon somewhere it wouldn't look.`,
       {
         project: z.string().describe('Project id, id prefix or title.'),
         title: z.string().optional(),
@@ -1485,10 +1574,15 @@ export function buildThreadbearTools(
             "A Notion page (or database) with the project's task board on it: a database with a Status column (To do, Doing, Waiting, Done), Who, Due and Thread (the thread id working on it). The project page shows the board, read every few minutes. Empty takes it off.",
           ),
         parent: z.string().optional().describe(PARENT_HELP + ' Empty undoes it.'),
+        ...coordinatorParam,
       },
-      handle(async ({ project: q, title, mikeAsked, goals, state, notes, editNotes, appendNote, links, addLinks, removeLinks, addFolders, removeFolders, icon, notion, parent }, extra) => {
+      handle(async ({ project: q, title, mikeAsked, goals, state, notes, editNotes, appendNote, links, addLinks, removeLinks, addFolders, removeFolders, icon, notion, parent, coordinator }, extra) => {
         const pc = mustProjects();
         const p = await project(q);
+        if (coordinator) coordinatorFirst(coordinator, p);
+        // Only a coordinator: nothing else in the brief changes.
+        const briefUntouched = [title, goals, state, notes, editNotes, appendNote, links, addLinks, removeLinks, addFolders, removeFolders, icon, notion, parent].every((x) => x === undefined);
+        if (coordinator && briefUntouched) return `"${p.title}" (${p.id}).${await handToCoordinator(p.id, coordinator, extra?.signal)}`;
         if (editNotes !== undefined && notes !== undefined) throw new Error('Give notes or editNotes, not both: notes replaces them all.');
         // Edits that don't match fail here, before anyone is asked.
         if (editNotes !== undefined) applyNoteEdits(p.notes ?? '', editNotes, appendNote);
@@ -1566,7 +1660,13 @@ export function buildThreadbearTools(
           const choice = v === 'auto' ? {} : /[/~]/.test(v) ? { path: v } : { symbol: v };
           out = await pc.chooseIcon(p.id, choice, 'agent');
         }
-        return `Updated "${out.title}" (${out.id}).`;
+        const updated = `Updated "${out.title}" (${out.id}).`;
+        if (!coordinator) return updated;
+        try {
+          return updated + (await handToCoordinator(out.id, coordinator, extra?.signal));
+        } catch (e) {
+          throw new Error(`${updated} Its coordinator wasn't changed: ${(e as Error).message}`);
+        }
       }),
     ),
     tool(

@@ -677,7 +677,7 @@ Requests (local runner; other clients tolerate the unknown methods/notification)
 | --- | --- | --- |
 | `coordinators.list` | `{}` | `{ coordinators: Coordinator[] }` |
 | `coordinators.get` | `{ projectId }` | `{ coordinator }` |
-| `coordinators.start` | `{ projectId, accountId?, poolId?, model?, effort? }` | `{ coordinator, thread }` |
+| `coordinators.start` | `{ projectId, accountId?, poolId?, model?, effort?, charter?, tasks?, message? }` | `{ coordinator, thread, started? }` |
 | `coordinators.pause` | `{ projectId, paused }` | `{ coordinator }` |
 | `coordinators.addTask` | `{ projectId, title, doneWhen }` | `{ coordinator }` |
 | `coordinators.update` | `{ projectId, charter?, interests?, wakeAt? }` | `{ coordinator }` |
@@ -739,17 +739,54 @@ starts from its saved checkpoint. Compaction (on CLIs that support `/compact`)
 waits for helpers to finish, retains the charter and rereads canonical project
 records after compaction.
 
-Only the user-facing app may start or pause a coordinator. The coordinator's
-`coordinator` tool may read its own registry, add tasks, select/complete/archive
-tasks, start or resume hidden helpers, manage open loops (`openLoop`,
-`updateLoop`, `closeLoop`), update its charter and interests, set a wake time
-and record answers to helper questions. It may also use `add_button` to offer a
-side job outside the project as a new thread; only the user's press starts it,
-so it can't use one to get round its own boundary. A Claude coordinator may also call Agent
-Archive's read tools (exact names in `coordinator-policy.ts`) to look back
-before asking the user something already settled. Thread-owned RPC credentials
-cannot start or reconfigure another coordinator, and neither coordinator nor
-helper shells may use thread-owned RPC to create threads or mutate other work.
+### Handing a project to its coordinator
+
+An ordinary thread starts a project's coordinator, or hands the one it has more
+work, with the `coordinator` option of its `create_project` and `update_project`
+tools (offered only where the experiment is on): `{ pool?, model?, effort?,
+charter?, tasks?: { title, doneWhen }[], message? }`. A new coordinator starts
+with that charter (else the default) and to-dos, and its first message names the
+thread that handed it over and quotes `message`. An existing one gets the charter
+in place of its own and the to-dos added, then a wake saying the same; its pool
+and model stay as they are. The message goes in as quoted data from that
+thread, never as the user's words. A paused coordinator or an archived project
+is refused, and all of it is checked before anything is written or a card is
+put up (text lengths, 100 tasks at most). `coordinators.start` with any of
+`charter`, `tasks` or `message` does the same over RPC and says `started`.
+
+A coordinator thread runs at the runner's default access and its helpers do the
+work, and its charter and to-dos are read on every later turn whatever access
+it has by then, so from a thread below Full access the tool always asks on a
+card first. The card names the most access among the coordinator and the
+helpers it could resume, shows the whole brief the coordinator will be told,
+goes to the user even in Auto (never the card reviewer), and is refused if the
+brief, the coordinator or its access changed while it was up. The handoff's
+words carry that access as their ceiling, so they're held if the coordinator is
+raised before they run. `tasks: null` is refused, not read as none.
+
+Over a thread's key, `coordinators.start`, `coordinators.addTask` and
+`coordinators.update` are open to a thread on Full access and refused below it
+(pointing at `update_project`). The runner names the calling thread as the
+sender (`fromThread`), whatever the call says, and tells the coordinator when
+another thread changed its charter or interests. `addTask` from a thread needs
+a coordinator already there; `update` checks every field before setting any,
+and from a thread refuses a paused coordinator. A handoff or change the
+coordinator couldn't be told of (its message refused) leaves its desk as it was.
+
+Only the user pauses a coordinator or answers its helpers' questions
+(`coordinators.pause` and `coordinators.answer` refuse every thread key). The
+coordinator's `coordinator` tool may read its own registry, add tasks,
+select/complete/archive tasks, start or resume hidden helpers, manage open loops
+(`openLoop`, `updateLoop`, `closeLoop`), update its charter and interests, set a
+wake time and record answers to helper questions. It may also use `add_button`
+to offer a side job outside the project as a new thread; only the user's press
+starts it, so it can't use one to get round its own boundary. A Claude
+coordinator may also call Agent Archive's read tools (exact names in
+`coordinator-policy.ts`) to look back before asking the user something already
+settled. A coordinator and its helpers cannot start or hand work to any
+coordinator (update_project refuses the option there, and their thread keys
+refuse every `coordinators.*` write), and neither coordinator nor helper shells
+may use thread-owned RPC to create threads or mutate other work.
 Coordinator read-only and helper non-escalation boundaries are enforced in each
 adapter before Full access (Claude `PreToolUse`, Codex read-only sandbox and
 approval refusal, ACP `session/request_permission` and Cursor `ask` mode), plus

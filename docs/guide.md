@@ -1245,7 +1245,10 @@ project's page says so and nothing is read.
 
 With the **Project coordinators** experiment enabled, a project's page offers
 **Add a coordinator** with the ordinary pool and model picker, and you can switch
-its model or provider at any time from the composer. It runs on this Mac; its
+its model or provider at any time from the composer. A thread can do the same
+for you: ask it to make a project and hand it to a coordinator, and it starts one
+with a charter, starting to-dos and a note on where things stand (a thread that
+asks before edits puts up a card first). It runs on this Mac; its
 conversation stays in a Coordinators section below Starred by default, while routine helpers
 run as hidden sessions out of the inbox and appear on the Activity tab.
 The project home has Conversation, Activity, To-dos and Threads tabs, with
