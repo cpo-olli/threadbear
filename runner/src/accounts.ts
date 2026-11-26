@@ -219,6 +219,11 @@ export class AccountRegistry {
     return () => this.listeners.delete(fn);
   }
 
+  /** The next list() reads the folders again: a login folder was just made or taken away. */
+  rescanNow(): void {
+    this.at = 0;
+  }
+
   // Re-scans at most every 10 seconds so a newly added login shows up
   // without restarting the runner. Usage is added fresh on every call.
   list(): Account[] {

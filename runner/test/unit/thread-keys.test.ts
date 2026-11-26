@@ -189,6 +189,7 @@ for (const mode of MODES) {
         ['accounts.recheck', {}],
         ['accounts.yearToken', { accountId: 'claude-main' }],
         ['accounts.yearToken', { accountId: 'claude-main', runnerId: 'cb921b2447ea', code: 'abcdefgh#ijklmnop' }],
+        ['runners.shareLogins', { runnerId: 'cb921b2447ea', on: true }],
         ['panels.convexKey', { threadId: me.id, panelId: 'x' }],
         ['no.such.method', {}],
       ];
@@ -257,6 +258,8 @@ test("a Full access thread can't make a year-long token, here or on another runn
     for (const params of [{ accountId: 'claude-main' }, { accountId: 'claude-main', runnerId: 'cb921b2447ea', code: 'abcdefgh#ijklmnop' }]) {
       await assert.rejects(c.call('accounts.yearToken', params), /user's to do/);
     }
+    // Nor send this Mac's logins to another runner (login-share.ts).
+    await assert.rejects(c.call('runners.shareLogins', { runnerId: 'cb921b2447ea', on: true }), /user's to do/);
     c.close();
   } finally {
     await server.close();

@@ -809,6 +809,14 @@ function setupFull(opts: { elsewhereThread?: (threadId: string) => ThreadSummary
         applied.push(`useReset ${accountId}`);
         return { outcome: 'reset' };
       },
+      loginsSealKey: () => {
+        applied.push('sealKey');
+        return 'AAAA';
+      },
+      loginsShare: async (logins) => {
+        applied.push(`share ${logins.length}`);
+        return { logins: [], removed: [] };
+      },
       threadCommands: (id) => {
         applied.push(`commands ${id}`);
         return h.runner.threadCommands(id);
@@ -4465,6 +4473,36 @@ test("accounts.yearToken calls: the main Mac's reach the maker, nobody else's", 
   const y2 = calls.find((c) => c.fn === 'sync:finishCommand' && c.args.commandId === 'y2')!;
   assert.equal(y2.args.ok, false);
   assert.match(String(y2.args.note), /Only the main Mac/);
+  await sync.stop();
+});
+
+// Use this Mac's Claude logins (login-share.ts): only a command the owner
+// key queued (from: "mac") reaches this runner's key or its login folders.
+test("logins.sealKey and logins.share calls: only the main Mac's reach them, and only fresh", async () => {
+  const { sync, push, applied, calls, h } = setupFull();
+  sync.start();
+  await sync.flushNow();
+  const now = h.clock.now();
+  push([{ commandId: 's1', kind: 'call', args: { method: 'logins.sealKey', params: {}, from: 'mac' }, createdAt: now }]);
+  await tick(10);
+  push([{ commandId: 's2', kind: 'call', args: { method: 'logins.share', params: { logins: [{ email: 'a@example.com', box: 'AAAA' }] }, from: 'mac' }, createdAt: now }]);
+  await tick(10);
+  push([{ commandId: 's3', kind: 'call', args: { method: 'logins.share', params: { logins: [] } }, createdAt: now }]);
+  await tick(10);
+  push([{ commandId: 's4', kind: 'call', args: { method: 'logins.sealKey', params: {} }, createdAt: now }]);
+  await tick(10);
+  // Left waiting while this runner was away: an old one could put back logins switched off since.
+  push([{ commandId: 's5', kind: 'call', args: { method: 'logins.share', params: { logins: [{ email: 'a@example.com', box: 'AAAA' }] }, from: 'mac' }, createdAt: now - 6 * 60_000 }]);
+  await tick(10);
+  assert.deepEqual(applied.filter((a) => a === 'sealKey' || a.startsWith('share')), ['sealKey', 'share 1']);
+  const done = (id: string) => calls.find((c) => c.fn === 'sync:finishCommand' && c.args.commandId === id)!;
+  assert.equal(JSON.parse(String(done('s1').args.result)).key, 'AAAA');
+  assert.equal(done('s2').args.ok, true);
+  for (const id of ['s3', 's4']) {
+    assert.equal(done(id).args.ok, false);
+    assert.match(String(done(id).args.note), /Only the main Mac/);
+  }
+  assert.match(String(done('s5').args.note), /a while ago/);
   await sync.stop();
 });
 

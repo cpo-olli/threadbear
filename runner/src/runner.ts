@@ -1262,6 +1262,9 @@ export class Runner {
   // one. Else Send again after New token… runs on the old token, and its
   // refusal marks the new one out (Codex's review, 17 Nov).
   private tokenKeys = new Map<string, string>();
+  // Told after each change to the login list goes out (a token made or
+  // renewed, a login added, hidden or noted): login-share.ts sends again.
+  onAccountsChanged?: () => void;
   renewTokens(accounts: Account[]): void {
     for (const a of accounts) {
       if (a.provider !== 'claude') continue;
@@ -1298,6 +1301,7 @@ export class Runner {
     this.accountsShown = key;
     this.accountsSentAt = this.clock.now();
     this.notify({ method: 'accounts.updated', params: { accounts } });
+    this.onAccountsChanged?.();
   }
 
   // A thread folder whose thread.json can't be read: rebuild what can be

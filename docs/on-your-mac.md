@@ -455,9 +455,33 @@ the owning runner.
   sends back through your Convex backend only the claude.ai page to approve
   it on and whether it worked. The code you paste goes the other way and is
   dropped from the backend once used. The helper writes the same file there;
-  the token never leaves that machine. The one other place a year-long
-  token can go is your own Convex backend, if you pick Use this Mac's token
-  on a cloud token card (below).
+  the token never leaves that machine. A year-long token goes somewhere
+  else in two cases only: your own Convex backend, if you pick Use this
+  Mac's token on a cloud token card (below), and another of your runners,
+  if you switch on Use this Mac's Claude logins for it (next).
+- **This Mac's Claude logins on another of your runners, if you switch it
+  on** (`runner/src/login-share.ts`): Use this Mac's Claude logins on a
+  runner's card in the Runners panel, on your main Mac. Its runner then
+  reads the year-long token and `.claude.json` profile of each Claude login
+  here that has a token (not hidden ones, ones with a note like "Convex work
+  only", or ones only in pools tied to folders), asks that runner through
+  your Convex backend for its public key, seals each login to it (X25519,
+  HKDF-SHA256, AES-256-GCM) and sends them through the backend, which only
+  ever holds the sealed bytes, and only until that runner has taken them.
+  That runner opens them with the private key in its `secrets/` folder and
+  makes a login folder for each in its data folder's `accounts/`
+  (`claude-<n>`: the token file only you can read, a `.claude.json` that is
+  its own with this login's profile, links to its own `~/.claude`'s
+  `CLAUDE.md`, `settings.json` and `skills`, and a `threadbear-shared.json`
+  marker). It sends again when a token here is made or renewed (looked at
+  on every login change and every 10 minutes), and adds those emails to
+  that runner's shared-logins list in your backend. Your main Mac keeps the
+  switches in `login-share.json` in its data folder: which runners, when it
+  last sent, how it went, and a digest of what was sent, never a token.
+  Switched off, that runner removes the folders it made this way (the token
+  deleted, the folder moved to `accounts/.removed/`), and never one you
+  signed in there yourself. Only your main Mac's key can send these, and the
+  runner checks so again.
 - **A cloud token for virtual runners, if you make one** (the
   `virtualRunners` experiment, off unless you turn it on;
   `runner/src/virtual-runners.ts`, `runner/src/cloud-token-helper.py`): Make

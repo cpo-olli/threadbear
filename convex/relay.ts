@@ -235,7 +235,16 @@ type Kind = (typeof KINDS)[number];
 // accounts.useReset (API 104) is the Mac's Use a reset for a login only that
 // runner has: its answer is an outcome and the login, and it spends a reset
 // only on Mike's click (the runner checks it came from the Mac).
-export const CALLS = new Set(['files.list', 'moves.describe', 'moves.preview', 'accounts.yearToken', 'accounts.useReset']);
+// logins.sealKey and logins.share (API 105) are the Runners panel's Use
+// this Mac's Claude logins (docs/protocol/settings.md, "This Mac's logins
+// on another runner"): that runner's public sealing key, then each login
+// sealed to it. Only ciphertext is held, and only until it's finished.
+export const CALLS = new Set(['files.list', 'moves.describe', 'moves.preview', 'accounts.yearToken', 'accounts.useReset', 'logins.sealKey', 'logins.share']);
+// A logins.share's shape: an email and a sealed box (base64) each.
+const SHARED_LOGINS_MAX = 20;
+const SHARED_BOX_MAX = 2800;
+const SHARED_EMAIL = /^[^\s@]{1,100}@[^\s@]{1,100}$/;
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 // A moves.preview's thread description: only these fields, each a short
 // string (or worktree and schedules), so nothing else sits in the row.
 const MOVE_INFO_STRINGS = ['title', 'cwd', 'home', 'provider', 'accountId', 'email', 'model', 'effort', 'permissionMode', 'origin', 'repoTop', 'subdir', 'sessionId'];
@@ -347,6 +356,18 @@ export function commandArgs(kind: Kind, raw: unknown): Record<string, unknown> {
         const p = (a.params && typeof a.params === 'object' ? a.params : {}) as Record<string, unknown>;
         if (typeof p.accountId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(p.accountId)) throw bad('accounts.useReset needs a login');
         out = { method: a.method, params: { accountId: p.accountId } };
+      } else if (a.method === 'logins.sealKey') {
+        out = { method: a.method, params: {} };
+      } else if (a.method === 'logins.share') {
+        const p = (a.params && typeof a.params === 'object' ? a.params : {}) as Record<string, unknown>;
+        if (!Array.isArray(p.logins) || p.logins.length > SHARED_LOGINS_MAX) throw bad(`logins.share takes a list of at most ${SHARED_LOGINS_MAX} logins`);
+        const logins = p.logins.map((l: unknown) => {
+          const o = (l && typeof l === 'object' ? l : {}) as Record<string, unknown>;
+          if (typeof o.email !== 'string' || !SHARED_EMAIL.test(o.email)) throw bad('each shared login needs its email');
+          if (typeof o.box !== 'string' || o.box.length > SHARED_BOX_MAX || !BASE64.test(o.box)) throw bad('each shared login goes sealed');
+          return { email: o.email, box: o.box };
+        });
+        out = { method: a.method, params: { logins } };
       } else if (a.method === 'accounts.yearToken') {
         const p = (a.params && typeof a.params === 'object' ? a.params : {}) as Record<string, unknown>;
         if (typeof p.accountId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(p.accountId)) throw bad('accounts.yearToken needs a login');

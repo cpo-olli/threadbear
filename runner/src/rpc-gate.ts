@@ -164,6 +164,9 @@ export class CallerGate {
     // account of its own choosing. Only the user's click in the app, Full
     // access or not (Codex's review, 19 Nov).
     if (method === 'accounts.yearToken') throw new RpcError(ErrorCode.notAllowed, "Making a year-long token is the user's to do: Year-long token… in the app's Usage or Runners panel.");
+    // Sharing this Mac's logins puts its tokens on another machine: only the
+    // user's switch in the Runners panel, Full access or not.
+    if (method === 'runners.shareLogins') throw new RpcError(ErrorCode.notAllowed, "Sharing this Mac's logins with another runner is the user's to do: Use this Mac's Claude logins in the app's Runners panel.");
     // A login's cloud token, and threads on a virtual runner (a box billed by
     // the hour, holding a year-long token), are the user's own, from the app.
     if (method.startsWith('cloudTokens.')) throw new RpcError(ErrorCode.notAllowed, "A login's cloud token is the user's to set, from the card in the app.");

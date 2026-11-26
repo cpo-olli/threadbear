@@ -173,13 +173,17 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 104;
+export const BACKEND_API_VERSION = 105;
 export const INDEX_POOL_API_VERSION = 101;
 export const COORDINATORS_API_VERSION = 102;
 export const NEXT_PICK_API_VERSION = 103;
 // From this one an account can carry `resetHint` and `usage.resets` (with its
 // readAt), and a `call` can be accounts.useReset.
 export const RESET_HINT_API_VERSION = 104;
+// logins.sealKey and logins.share calls (login-share.ts).
+export const SHARE_LOGINS_API_VERSION = 105;
+// A logins call older than this is refused (the clocks' drift included).
+const SHARE_STALE_MS = 5 * 60_000;
 // From this one sync:removeThreads takes the runner's id and leaves a row
 // that's another runner's alone (a thread moved away), whatever the key.
 export const REMOVE_OWN_ROWS_API_VERSION = 92;
@@ -718,6 +722,11 @@ export type CommandHost = {
   yearToken?: (accountId: string, p: { code?: string; check?: boolean; cancel?: boolean }) => Promise<unknown>;
   // `accounts.useReset` from the main Mac (rpc.ts useResetElsewhere).
   useReset?: (accountId: string) => Promise<unknown>;
+  // The Mac's Runners panel's Use this Mac's Claude logins (login-share.ts):
+  // this runner's public sealing key, and the main Mac's logins sealed to it.
+  // Never on a box.
+  loginsSealKey?: () => string;
+  loginsShare?: (logins: { email: unknown; box: unknown }[]) => Promise<unknown>;
   // The phone's Reviews sheet (API 86).
   listReviews?: (threadId: string) => unknown;
   getReview?: (threadId: string, reviewId: string) => unknown;
@@ -5177,6 +5186,24 @@ export class ConvexSync {
         // Year-long token… from the main Mac's Runners panel: only its own
         // (a phone's command never says from: "mac"), and the answer is a
         // state and the claude.ai page, never the token.
+        // Use this Mac's Claude logins, from the main Mac's Runners panel
+        // (login-share.ts): only a command the owner key queued (from:
+        // "mac"), never a phone's or another runner's. The answers carry
+        // a public key and how each login went, never a token.
+        if (a.method === 'logins.sealKey' || a.method === 'logins.share') {
+          if (a.from !== 'mac') throw new Error("Only the main Mac shares its logins with this runner.");
+          // One left waiting in the backend while this runner was away is
+          // stale: the main Mac sends what's true now when it sees it's back,
+          // and an old one could put back logins switched off since.
+          if (this.deps.clock.now() - c.createdAt > SHARE_STALE_MS) throw new Error('That was sent a while ago; the main Mac sends it again.');
+          if (a.method === 'logins.sealKey') {
+            if (!host.loginsSealKey) throw new Error("This runner can't take another Mac's logins.");
+            return { result: { key: host.loginsSealKey() } };
+          }
+          if (!host.loginsShare) throw new Error("This runner can't take another Mac's logins.");
+          if (!Array.isArray(params.logins)) throw new Error('Which logins?');
+          return { result: await host.loginsShare(params.logins as { email: unknown; box: unknown }[]) };
+        }
         if (a.method === 'accounts.yearToken') {
           if (!host.yearToken) throw new Error("This runner can't make tokens from another Mac.");
           if (a.from !== 'mac') throw new Error('Only the main Mac makes a token for a login here.');

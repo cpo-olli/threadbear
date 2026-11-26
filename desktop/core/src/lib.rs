@@ -45,6 +45,7 @@ pub mod local_files;
 mod local_path;
 pub mod local_preview;
 pub mod login_picker;
+pub mod login_share;
 pub mod logins;
 pub mod milestones;
 pub mod navigation;

@@ -1630,6 +1630,17 @@ ends on, and Paste code back in the panel. That machine makes the token and
 keeps it, and it never leaves there. It needs `python3` on that machine,
 and your main Mac's app (it goes through your Convex backend).
 
+Or skip signing in there at all: a year-long token works on any machine, so
+that machine's card in the Runners panel also has Use this Mac's Claude
+logins. Switch it on and your main Mac sends its Claude logins that have
+year-long tokens there, each sealed so only that machine can open it, and
+they show in its list of logins straight away. A renewed token goes again
+by itself. Logins that are hidden, have a note (like "Convex work only"), or
+are only in pools tied to folders stay on your main Mac. A login already
+signed in on that machine with the same email is left as it is. Switch it
+off and that machine removes the logins it got this way, and nothing else.
+A machine that's offline gets them when it's back.
+
 The sign-in command comes from the runner's provider list, so Cursor opens
 `agent login`, for example. Sign in… is offered only when the login's own
 details can be read.

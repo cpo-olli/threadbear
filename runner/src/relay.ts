@@ -1449,7 +1449,7 @@ export class Relay {
    * (or, with `done`, finished). A runner that's offline is said at once
    * rather than left to pick it up whenever it's back.
    */
-  private async command(runnerId: string, threadId: string | undefined, kind: string, args: Record<string, unknown>, opts: { done?: boolean; ms?: number; settleBy?: number } = {}): Promise<{ state: string; note?: string; threadId?: string; result?: unknown }> {
+  private async command(runnerId: string, threadId: string | undefined, kind: string, args: Record<string, unknown>, opts: { done?: boolean; ms?: number; settleBy?: number; anyway?: boolean } = {}): Promise<{ state: string; note?: string; threadId?: string; result?: unknown }> {
     // settleBy: a send carrying pictures, and when it must answer by
     // (REPLY_BUDGET_MS). That runner marks it taken before it fetches them,
     // and a fetch that fails then fails the command, so taken isn't enough
@@ -1457,7 +1457,9 @@ export class Relay {
     // taken as a yes. Still pending at TAKE_MS is queued, as for any send
     // (Codex's review, 8 Nov).
     const name = this.runnerName(runnerId);
-    this.mustBeOnline(runnerId);
+    // `anyway`: the caller has fresher word than the sidebar's list, which
+    // stops updating while no app is open (login-share.ts).
+    if (!opts.anyway) this.mustBeOnline(runnerId);
     let src: RelaySource;
     try {
       src = this.src();
@@ -1921,6 +1923,24 @@ export class Relay {
    */
   async useReset(runnerId: string, accountId: string): Promise<unknown> {
     const done = await this.command(runnerId, undefined, 'call', { method: 'accounts.useReset', params: { accountId } }, { done: true, ms: CALL_MS });
+    return done.result;
+  }
+
+  /**
+   * Use this Mac's Claude logins (login-share.ts): that runner's public
+   * sealing key, then the logins sealed to it. Both are `call`s the backend
+   * lets only the owner key queue; only ciphertext goes, and the answers
+   * carry no token.
+   */
+  async loginsSealKey(runnerId: string): Promise<string> {
+    const done = await this.command(runnerId, undefined, 'call', { method: 'logins.sealKey', params: {} }, { done: true, ms: CALL_MS, anyway: true });
+    const key = (done.result as { key?: unknown } | undefined)?.key;
+    if (typeof key !== 'string' || !key) throw new RpcError(ErrorCode.other, `${this.runnerName(runnerId)} didn't give a key to seal to.`);
+    return key;
+  }
+
+  async shareLogins(runnerId: string, logins: { email: string; box: string }[]): Promise<unknown> {
+    const done = await this.command(runnerId, undefined, 'call', { method: 'logins.share', params: { logins } }, { done: true, ms: CALL_MS, anyway: true });
     return done.result;
   }
 

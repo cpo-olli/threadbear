@@ -505,4 +505,8 @@
 //    hint. relay:queueCommand's `call` takes accounts.useReset, the Mac's Use
 //    a reset for a login only that runner has. A runner sends the fields only
 //    to a backend of 104 or later.
-export const API_VERSION = 104;
+// 105: relay:queueCommand's `call` takes logins.sealKey and logins.share,
+//    the Runners panel's Use this Mac's Claude logins (docs/protocol/settings.md,
+//    "This Mac's logins on another runner"): owner key only, and a share
+//    carries each login sealed to that runner's key, never in the clear.
+export const API_VERSION = 105;
