@@ -6,9 +6,8 @@
 // Usage button's tooltip and the composer's login lists. Nothing here spends
 // a reset: only Mike's click on Use a reset does (`accounts.useReset`).
 use crate::inbox::parse_ms;
-use crate::logins::short_account_name;
-use crate::logins::{Account, ResetHint};
-use crate::usage::{reset_words, sign_in_label};
+use crate::logins::{short_account_name, sign_in_label, Account, ResetHint};
+use crate::new_thread::reset_words;
 use chrono::TimeZone;
 
 /// The login's hint, unless it can't be counted on any more: none left, the

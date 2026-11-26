@@ -161,6 +161,17 @@ pub fn reset_time<Tz: TimeZone>(date: &DateTime<Tz>, now: &DateTime<Tz>) -> Stri
     format!("{} {}", date.day(), MONTHS[date.month0() as usize])
 }
 
+/// `AccountUsageText.resetTime`: "now", "3:40 pm", "Thu 1 pm", "12 Nov".
+pub fn reset_words<Tz: TimeZone>(at: i64, now: i64, zone: &Tz) -> String {
+    match (
+        zone.timestamp_millis_opt(at).single(),
+        zone.timestamp_millis_opt(now).single(),
+    ) {
+        (Some(at), Some(now)) => reset_time(&at, &now),
+        _ => String::new(),
+    }
+}
+
 /// `AccountUsageText.tooltip`: "mike@example.com: 5-hour 89% left, weekly
 /// 78% left, resets Thu 1 pm."
 pub fn room_tooltip<Tz: TimeZone>(account: &Account, now: &DateTime<Tz>) -> String {

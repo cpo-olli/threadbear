@@ -11,7 +11,7 @@
 // tests can pin one.
 use crate::inbox::parse_ms;
 use crate::logins::{provider_title, Account, Pool};
-use crate::new_thread::{clock, day_name, login_name, percent, pool_providers, reset_time};
+use crate::new_thread::{clock, day_name, login_name, percent, pool_providers};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, TimeZone, Timelike};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -333,13 +333,7 @@ fn same_day<Tz: TimeZone>(a: i64, b: i64, zone: &Tz) -> bool {
     }
 }
 
-/// `AccountUsageText.resetTime`: "now", "3:40 pm", "Thu 1 pm", "12 Nov".
-pub fn reset_words<Tz: TimeZone>(at: i64, now: i64, zone: &Tz) -> String {
-    match (local(at, zone), local(now, zone)) {
-        (Some(at), Some(now)) => reset_time(&at, &now),
-        _ => String::new(),
-    }
-}
+pub use crate::new_thread::reset_words;
 
 /// `AccountUsageText.clock`: "3:40 pm", "1 pm" on the hour.
 pub fn clock_words<Tz: TimeZone>(at: i64, zone: &Tz) -> String {
@@ -2008,16 +2002,7 @@ pub fn sign_in_lines<Tz: TimeZone>(accounts: &[Account], now: i64, zone: &Tz) ->
         .collect()
 }
 
-/// "claude-1 (mike@example.com)": both, so Mike knows which login and which
-/// account to sign in as. Just the id when the name is the id.
-pub fn sign_in_label(account: &Account) -> String {
-    let name = account.name();
-    if name == account.id || name.is_empty() {
-        account.id.clone()
-    } else {
-        format!("{} ({name})", account.id)
-    }
-}
+pub use crate::logins::sign_in_label;
 
 /// One provider's logins in a card, named only when the card mixes
 /// providers.

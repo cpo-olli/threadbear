@@ -1259,6 +1259,17 @@ pub fn short_account_name(id: &str, accounts: &[Account]) -> String {
     }
 }
 
+/// "claude-1 (mike@example.com)": both, so Mike knows which login and which
+/// account to sign in as. Just the id when the name is the id.
+pub fn sign_in_label(account: &Account) -> String {
+    let name = account.name();
+    if name == account.id || name.is_empty() {
+        account.id.clone()
+    } else {
+        format!("{} ({name})", account.id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
