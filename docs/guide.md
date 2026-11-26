@@ -884,7 +884,9 @@ check-in booked. If threads it started itself are still going, it waits for
 them first. A note in the thread says why it went, and it shows as archived
 under "Threads it started" in the Highlights of the thread that started it.
 It stays in the inbox if you've written in it, starred it or brought it back
-out of the archive, and so does one that failed or was stopped. Threads you
+out of the archive, and so does one that failed or was stopped. So does one
+you asked for as its own thread, rather than as part of the work that
+started it: the reply is often what you wanted to read. Threads you
 started, and ones a tool or a schedule started, don't archive this way,
 unless you've turned on the experiment Quiet inbox for your threads.
 

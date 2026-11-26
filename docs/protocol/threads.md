@@ -679,9 +679,13 @@ its wakes rarely had anything to say. A wait the agent asks for itself
 When a turn finishes for good (completed, `needs: "nothing"`, nothing
 queued or running, no card waiting, no lab review of it started or owed,
 and not putting itself away with `archive`, `snooze` or `waitFor`), and the
-thread's `startedBy.kind` is `thread`, its `next` is empty and Mike has had
-nothing to do with it, the runner gathers its loose ends as the done card
-does (above). If nothing is left at all
+thread's `startedBy.kind` is `thread`, it isn't `detached`, its `next` is
+empty and Mike has had nothing to do with it, the runner gathers its loose
+ends as the done card does (above). A `detached` thread is left in the
+inbox. `create_thread`'s `nested: false` is Mike asking for a thread of his
+own about something else, and the reply is often what he wanted to read (26
+Nov 2026: the daily brief started a perpetual spinach lookup that way, and
+quiet inbox archived it before he saw where to buy it). If nothing is left at all
 (no `scheduled` either), it's archived (`archivedBy: "threadbear"`) after a
 `system.note`: "Archived: another thread started this one, and it finished
 with nothing left for you." If all that's left is threads it started
