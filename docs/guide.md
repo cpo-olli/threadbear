@@ -1292,17 +1292,18 @@ It looks after a thread's first message and when a turn ends, then catches
 up at most every 20 minutes while the thread keeps going. A catch-up after
 only a quick reply is skipped without asking anything.
 
-Each look is one short call to Haiku, Claude's small, cheap model, rather
-than the model your threads run on. When it wants to file a thread in a
-project the thread hasn't touched the folders of, one more short call, to
-Opus, checks the thread is really working on that project and doesn't just
-share a subject with it. They run on one of your own Claude
-logins: the one the pool would pick next in the pool chosen under Runs on (the
-same pool that writes thread titles, also in Settings › Models), and they
-count towards that login's usage like any other call. When every login in
-the pool is out of room it waits, and with only Codex logins it doesn't
-run at all. Threads in a private folder (Settings › Models) are never sent
-to it.
+Each look is one short call to a small, cheap model (Haiku on Claude),
+rather than the model your threads run on. When it wants to file a thread
+in a project the thread hasn't touched the folders of, one more short call
+(Opus on Claude) checks the thread is really working on that project and
+doesn't just share a subject with it. They run on the pool chosen under
+Runs on (the same pool that writes thread titles, also in Settings ›
+Models), trying Claude first, then Codex, then Grok or OpenCode logins in
+that pool (or your custom provider order in Settings › Models), and they
+count towards that login's usage like any other call. When every supported
+login in the pool is out of room it waits, and with no pool picked or no
+supported login in it, it doesn't run. Threads in a private folder
+(Settings › Models) are never sent to it.
 
 The Librarian view lists what it did and what it will look at next. Click a
 project name in its log to open that project's page. Hover
@@ -2228,7 +2229,8 @@ Other changes are done on the Mac or by asking an agent. The gear
 has the appearance and Sign out. Pictures you paste show there too: they go to
 your Convex deployment as they are, so nothing can scrub a secret from one, and
 `"sync": { "pastedPictures": false }` in `runner.json` keeps them on the Mac. A tool line opens to what the tool did if its runner has full sync on (it starts off; `tb settings full on|off` changes it, and docs/on-your-mac.md says what it sends), and its screenshots show when you tap them. The pencil beside the search starts a new
-thread on a runner's default folder and login. On your Mac,
+thread in the runner's default folder, with pickers for runner, model and
+effort (or Default for each). On your Mac,
 `threadbear://thread/<id>` opens a thread in the app instead (the Open
 thread button on a tab BrowserBear has marked for an agent uses it). Another
 app can start a thread for you with `threadbear://new?text=<words>`, plus
