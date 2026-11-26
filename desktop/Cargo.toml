@@ -84,6 +84,10 @@ gpui-base = { path = "vendor/gpui-base" }
 # a click that opened a row moved its heading as the transcript followed its
 # tail, and the heading's tip came up over the findings under the pointer and
 # stayed (23 Nov). Its delayed show checks that too before it shows.
+# And scroll events immediately activate InputRateTracker's high-rate state
+# (window.rs): otherwise scrolling an inactive or freshly woken window hits the
+# 33.3 ms throttle on Frame 2 waiting for 6 events, piling wheel deltas into a
+# jerk (Mike, 26 Nov).
 gpui-pre = { path = "vendor/gpui-pre" }
 # gpui-pre-macos 0.3.11 as published, except that with a native view inside
 # the window holding the keyboard (a web panel's page), a key without ⌘ or
