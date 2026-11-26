@@ -716,19 +716,37 @@ export function NewThread({ token }: { token: string }) {
   useEffect(() => {
     if (made) go(threadPath(made));
   }, [made]);
-  const now = Date.now();
-  // A draining runner refuses new threads, so it isn't offered.
-  const online = runnersShown(runners ?? [], now).filter((r) => isOnline(r, now) && !r.draining);
-  // A picked runner that's since gone to sleep: back to the main one, as the select shows.
-  const sentRunner = online.some((r) => r.runnerId === runnerId) ? runnerId : '';
-  // The models the runner it lands on has logins for (phone:create's pick when none is named).
-  const fallback = defaultRunner(runners ?? [], (r) => isOnline(r, now))?.runnerId;
-  const modelsFor = (id: string) => modelsOn(accounts ?? [], id || fallback);
-  const models = modelsFor(sentRunner);
-  const model = models.find((m) => m.id === modelId);
-  // A model this runner has no login for, or an effort the model doesn't offer: back to the default.
-  const sentModel = model ? modelId : '';
-  const sentEffort = models.length && keeps(effort, model) ? effort : '';
+  // Ticks so a runner that stops heartbeating leaves the list without a click.
+  const clock = useClock();
+  // What a send would carry at `at`: the picks the runners and logins can
+  // still take, each back to its default when they can't.
+  const choicesAt = (at: number) => {
+    // A draining runner refuses new threads, so it isn't offered.
+    const online = runnersShown(runners ?? [], at).filter((r) => isOnline(r, at) && !r.draining);
+    // A picked runner that's since gone to sleep: back to the main one, as the select shows.
+    const sentRunner = online.some((r) => r.runnerId === runnerId) ? runnerId : '';
+    // The models the runner it lands on has logins for (phone:create's pick when none is named).
+    const fallback = defaultRunner(runners ?? [], (r) => isOnline(r, at))?.runnerId;
+    const modelsFor = (id: string) => modelsOn(accounts ?? [], id || fallback);
+    const models = modelsFor(sentRunner);
+    const model = models.find((m) => m.id === modelId);
+    // A model this runner has no login for, or an effort the model doesn't offer: back to the default.
+    const sentModel = model ? modelId : '';
+    const sentEffort = models.length && keeps(effort, model) ? effort : '';
+    return { online, sentRunner, modelsFor, models, model, sentModel, sentEffort };
+  };
+  const { online, sentRunner, modelsFor, models, model, sentModel, sentEffort } = choicesAt(Math.max(clock, Date.now()));
+  // A pick the runners or logins can no longer take (a runner asleep or
+  // draining, its logins changed) is dropped, not kept hidden to come back
+  // by itself later. Only once both lists are in, so loading drops nothing.
+  const loaded = runners !== undefined && accounts !== undefined;
+  // Set while rendering (React's "adjusting state when a prop changes"):
+  // each set makes the values equal, so it settles in one more render.
+  if (loaded && !cmd.busy) {
+    if (runnerId !== sentRunner) setRunnerId(sentRunner);
+    if (modelId !== sentModel) setModelId(sentModel);
+    if (effort !== sentEffort) setEffort(sentEffort);
+  }
   // A pick that the new runner or model can't take is dropped, not kept
   // hidden to come back when Mike switches back.
   const pickRunner = (id: string) => {
@@ -745,7 +763,9 @@ export function NewThread({ token }: { token: string }) {
   const submit = async () => {
     const body = text.trim();
     if (!body) return;
-    await cmd.run(() => create({ token, text: body, ...(sentRunner ? { runnerId: sentRunner } : {}), ...(sentModel ? { model: sentModel } : {}), ...(sentEffort ? { effort: sentEffort } : {}) }), undefined);
+    // Worked out again now: the page may have sat untouched while a runner went quiet.
+    const sent = choicesAt(Date.now());
+    await cmd.run(() => create({ token, text: body, ...(sent.sentRunner ? { runnerId: sent.sentRunner } : {}), ...(sent.sentModel ? { model: sent.sentModel } : {}), ...(sent.sentEffort ? { effort: sent.sentEffort } : {}) }), undefined);
   };
   return (
     <div className="page">
