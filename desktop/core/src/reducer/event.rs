@@ -1637,6 +1637,10 @@ pub struct TurnCompletion {
     pub asks: Vec<Ask>,
     /// With needs "nothing": follow-ups the agent suggested.
     pub next: Vec<String>,
+    /// "one" when follow-ups are mutually exclusive directions; None means multi-pick.
+    pub next_pick: Option<String>,
+    /// Recommended follow-up index into `next` when `next_pick` is "one".
+    pub next_suggested: Option<usize>,
     /// On the turn that answered another lab's findings: the ledger
     /// (`review`, docs/protocol/needs-you.md "Review by another lab").
     pub review: Option<LabReview>,
@@ -1656,6 +1660,14 @@ impl TurnCompletion {
                     .unwrap_or_else(|| compact_text(other)),
             ),
         };
+        let next = lossy_strings(c, "next");
+        let next_pick = string(c, "nextPick").filter(|p| p == "one" && next.len() > 1);
+        let next_suggested = next_pick.as_ref().and_then(|_| {
+            c.get("nextSuggested")
+                .and_then(int_value)
+                .filter(|i| (0..next.len() as i64).contains(i))
+                .map(|i| i as usize)
+        });
         TurnCompletion {
             turn_id: string(c, "turnId").unwrap_or_default(),
             outcome: c
@@ -1670,7 +1682,9 @@ impl TurnCompletion {
             error_kind: string(c, "errorKind").and_then(|k| TurnErrorKind::from_raw(&k)),
             needs: string(c, "needs"),
             asks: lossy(c, "asks", Ask::decode),
-            next: lossy_strings(c, "next"),
+            next,
+            next_pick,
+            next_suggested,
             review: c.get("review").and_then(LabReview::decode),
         }
     }

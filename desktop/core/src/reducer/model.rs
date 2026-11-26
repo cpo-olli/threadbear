@@ -1731,6 +1731,8 @@ impl TranscriptModel {
                         let card_id = format!("ak:{seq}");
                         let mut card = AsksCard::new(seq, Vec::new());
                         card.next = completion.next.clone();
+                        card.next_pick = completion.next_pick.clone();
+                        card.next_suggested = completion.next_suggested;
                         card.picked_next = self.next_picks.get(&seq).cloned().unwrap_or_default();
                         card.explain_next =
                             self.next_explains.get(&seq).cloned().unwrap_or_default();

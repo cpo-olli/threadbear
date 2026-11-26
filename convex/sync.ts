@@ -667,11 +667,25 @@ function fitThread<T extends Record<string, any>>(t: T): T | undefined {
   if (docBytes(out) > CAP.threadDoc && Array.isArray(out.asks) && out.asks.some((a: any) => a?.optionNotes)) {
     out.asks = out.asks.map(({ optionNotes: _notes, ...a }: any) => a);
   }
+  // Keep nextPick/nextSuggested coherent with next (runner-key hygiene).
+  if (!Array.isArray(out.next) || out.next.length < 2 || out.nextPick !== 'one') {
+    delete out.nextPick;
+    delete out.nextSuggested;
+  } else if (
+    out.nextSuggested !== undefined &&
+    (typeof out.nextSuggested !== 'number' || !Number.isInteger(out.nextSuggested) || out.nextSuggested < 0 || out.nextSuggested >= out.next.length)
+  ) {
+    delete out.nextSuggested;
+  }
   // Another lab's review goes first, then the done card's loose ends: the
   // Mac has both, and the card still says Done without them.
   for (const f of ['review', 'looseEnds', 'asks', 'next', 'links', 'projects']) {
     if (docBytes(out) <= CAP.threadDoc) break;
     delete out[f];
+    if (f === 'next') {
+      delete out.nextPick;
+      delete out.nextSuggested;
+    }
   }
   // Still too big: option descriptions go, then the card says to answer on the Mac.
   if (card && docBytes(out) > CAP.threadDoc) out.pendingApproval = fitApproval(card, 0);

@@ -202,6 +202,8 @@ private struct RowPressStyle: ButtonStyle {
 /// as on the Mac: plain lines, and a thread one opens that thread.
 struct DoneCard: View {
     let next: [String]
+    var nextPick: String? = nil
+    var nextSuggested: Int? = nil
     var looseEnds: [PhoneLooseEnd] = []
     var openThread: @MainActor (String) -> Void = { _ in }
     @Binding var picked: Set<Int>
@@ -211,6 +213,8 @@ struct DoneCard: View {
     var archive: () -> Void
     @State private var tickTaps = 0
     @State private var sendTaps = 0
+
+    private var pickOne: Bool { nextPick == "one" && next.count > 1 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -229,18 +233,33 @@ struct DoneCard: View {
             }
             if !looseEnds.isEmpty { looseEndsList }
             if !next.isEmpty {
-                Text("Or carry on").font(.footnote).foregroundStyle(.secondary)
+                Text(pickOne ? "Or pick one" : "Or carry on").font(.footnote).foregroundStyle(.secondary)
                 ForEach(Array(next.enumerated()), id: \.offset) { index, step in
                     let ticked = picked.contains(index)
+                    let suggested = pickOne && nextSuggested == index
                     Button {
                         tickTaps += 1
-                        if ticked { picked.remove(index) } else { picked.insert(index) }
+                        if ticked {
+                            picked.remove(index)
+                        } else if pickOne {
+                            picked = [index]
+                        } else {
+                            picked.insert(index)
+                        }
                     } label: {
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            Image(systemName: ticked ? "checkmark.circle.fill" : "circle")
+                            Image(systemName: ticked ? (pickOne ? "largecircle.fill.circle" : "checkmark.circle.fill") : "circle")
                                 .foregroundStyle(ticked ? Color.accentColor : .secondary)
                                 .contentTransition(.symbolEffect(.replace))
-                            Text(step).multilineTextAlignment(.leading)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(step).multilineTextAlignment(.leading)
+                                if suggested {
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "star.fill").font(.system(size: 9)).foregroundStyle(AsksCard.recommendedStar)
+                                        Text("Recommended").font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
                             Spacer(minLength: 0)
                         }
                         .contentShape(Rectangle())

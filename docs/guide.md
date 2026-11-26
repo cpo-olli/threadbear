@@ -236,10 +236,13 @@ the message box, with an Archive button to put the thread away. When something i
 still worth doing (a piece it didn't get to, a check that's due), the
 card lists them under "Or carry on". Click any of them to tick them
 (click again to untick), add anything you like in the message box, and
-send: the ticked ones go to the agent together, with your words. Not
-sure what one means? Click the ? at its right to ask; it toggles the
-same way, so you can ask about several, tick others, and send them all
-together.
+send: the ticked ones go to the agent together, with your words. When
+the follow-ups are mutually exclusive directions rather than independent
+steps, the card shows them under "Or pick one" with radio buttons (and
+a Recommended badge if the agent recommends one) so clicking one picks
+just that direction. Not sure what one means? Click the ? at its right
+to ask; it toggles the same way, so you can ask about several, tick
+others, and send them all together.
 
 Before you archive, the Done card says what's still open, so you don't
 have to ask the agent first. Threadbear checks it itself: commits on the

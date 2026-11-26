@@ -769,6 +769,10 @@ pub struct AsksCard {
     pub picks: BTreeMap<i64, i64>,
     /// The done card's follow-ups (end_turn's `next`).
     pub next: Vec<String>,
+    /// "one" when follow-ups are mutually exclusive directions; None means multi-pick.
+    pub next_pick: Option<String>,
+    /// Index into `next` of the agent's recommendation when `next_pick` is "one".
+    pub next_suggested: Option<usize>,
     pub picked_next: BTreeSet<i64>,
     /// The follow-ups whose "?" is on, by index.
     pub explain_next: BTreeSet<i64>,
@@ -788,11 +792,17 @@ impl AsksCard {
             is_open: true,
             picks: BTreeMap::new(),
             next: Vec::new(),
+            next_pick: None,
+            next_suggested: None,
             picked_next: BTreeSet::new(),
             explain_next: BTreeSet::new(),
             notes: BTreeMap::new(),
             loose_ends: None,
         }
+    }
+
+    pub fn next_pick_one(&self) -> bool {
+        self.next_pick.as_deref() == Some("one") && self.next.len() > 1
     }
 
     pub fn ticked_count(&self) -> usize {

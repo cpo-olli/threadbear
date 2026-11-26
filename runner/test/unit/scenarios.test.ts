@@ -21,7 +21,7 @@ import path from 'node:path';
 test('phone reads review previews and submits a revision-checked answer through Convex', phoneReviewScenario);
 
 type Route = 'relay' | 'phone';
-type Field = 'needs' | 'asks' | 'next' | 'looseEnds' | 'review' | 'plans' | 'messages' | 'notes' | 'pictures' | 'failed' | 'origins' | 'waitState' | 'coordinatorProjectId';
+type Field = 'needs' | 'asks' | 'next' | 'nextPick' | 'nextSuggested' | 'looseEnds' | 'review' | 'plans' | 'messages' | 'notes' | 'pictures' | 'failed' | 'origins' | 'waitState' | 'coordinatorProjectId';
 
 // Differences that are meant, each with why. A test below fails once one
 // of these stops being a difference, so the list can't outlive its reason.
@@ -39,10 +39,10 @@ function pick(v: View, field: Field): unknown {
     case 'origins':
       return v.messages.map((m) => m.origin ?? null);
     default:
-      return field === 'needs' || field === 'review' || field === 'waitState' || field === 'coordinatorProjectId' ? (v[field] ?? null) : v[field];
+      return field === 'needs' || field === 'nextPick' || field === 'nextSuggested' || field === 'review' || field === 'waitState' || field === 'coordinatorProjectId' ? (v[field] ?? null) : v[field];
   }
 }
-const FIELDS: Field[] = ['needs', 'asks', 'next', 'looseEnds', 'review', 'plans', 'messages', 'notes', 'pictures', 'failed', 'origins', 'waitState', 'coordinatorProjectId'];
+const FIELDS: Field[] = ['needs', 'asks', 'next', 'nextPick', 'nextSuggested', 'looseEnds', 'review', 'plans', 'messages', 'notes', 'pictures', 'failed', 'origins', 'waitState', 'coordinatorProjectId'];
 const known = (route: Route, field: Field) => KNOWN.find((k) => k.route === route && k.field === field);
 
 for (const s of SCENARIOS) {

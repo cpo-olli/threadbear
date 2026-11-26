@@ -69,6 +69,11 @@ test("the open card is the last turn's end, and an approval sits at its own seq"
   const noted = relayEvents(T, rows, { ...asksRow, asks: [{ action: 'Pick one', options: ['A', 'B'], optionNotes: ['Does A', 'Does B'] }] }, [], false, 'mac-mini');
   const notedEnd = noted.filter((e) => e.type === 'turn.completed').at(-1) as { asks?: unknown };
   assert.deepEqual(notedEnd.asks, [{ action: 'Pick one', options: ['A', 'B'], optionNotes: ['Does A', 'Does B'] }]);
+  const pickOne = relayEvents(T, rows, { runnerId: 'mac-mini', status: 'idle', needs: 'nothing', next: ['Try A', 'Try B'], nextPick: 'one', nextSuggested: 0 }, [], false, 'mac-mini');
+  const pickOneEnd = pickOne.filter((e) => e.type === 'turn.completed').at(-1) as { next?: string[]; nextPick?: string; nextSuggested?: number };
+  assert.deepEqual(pickOneEnd.next, ['Try A', 'Try B']);
+  assert.equal(pickOneEnd.nextPick, 'one');
+  assert.equal(pickOneEnd.nextSuggested, 0);
   const ap = ev.find((e) => e.type === 'approval.requested')!;
   assert.equal(ap.seq, 13 * SCALE + 1);
   assert.equal(ap.turnId, 'bbbb2222');

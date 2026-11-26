@@ -367,12 +367,23 @@ export function buildThreadbearTools(
   // thread's events, so the once-a-turn mark would never be seen and it
   // would be refused every time (refuseUnread, likewise). A project it
   // can't read in time is left out rather than holding the turn's end.
-  // The turn (its turn.started's seq) the note last went to. A Codex
-  // sub-agent's call runs through these handlers but never reaches the
-  // thread's events either, so the mark in them alone would let it be
-  // refused every time; this caps it at once a turn whoever asks (Codex
-  // and Gemini's second review, 20 Nov).
-  let projectNotedTurn: number | undefined;
+  // Per-turn in-memory memory of once-a-turn end_turn nudges, keyed by nudge
+  // name to the turn's `turn.started` seq. Supplements the event-log checks:
+  // a Codex sub-agent's call never lands in the thread's events (20 Nov), and
+  // an ACP adapter that drops or delays error text would otherwise loop on the
+  // same refusal (Antigravity/Neon, 26 Nov 2026).
+  const notedInTurn = new Map<string, number>();
+  const turnSeqOf = (events: PersistedEvent[]): number | undefined => events.findLast((e) => e.type === 'turn.started')?.seq;
+  const alreadyNoted = (key: string, events: PersistedEvent[], inEvents: boolean): boolean => {
+    if (inEvents) return true;
+    const seq = turnSeqOf(events);
+    return seq !== undefined && notedInTurn.get(key) === seq;
+  };
+  const markNoted = (key: string, events: PersistedEvent[]): void => {
+    const seq = turnSeqOf(events);
+    if (seq !== undefined) notedInTurn.set(key, seq);
+  };
+  let findingsNoted: { seq: number; count: number } | undefined;
   // A schedule that will send to this thread: not paused, with a run still
   // to come. One that can't be read in time counts as none.
   const bookedToSelf = async (): Promise<boolean> => {
@@ -383,12 +394,7 @@ export function buildThreadbearTools(
   // Asks made while a shell job of the thread's own runs: the agent says
   // whether they wait for it (needs.ts, JOBS_NUDGE). And a turn ending with
   // nothing for the user after one that held asks back is asked about them
-  // (HELD_NUDGE). Each once a turn: by the events, and by the turn each
-  // last went to, as a sub-agent's call never reaches the thread's events
-  // and would be refused every time (projectNotedTurn, above). A call that
-  // still doesn't say asks at once, as before.
-  let jobsNotedTurn: number | undefined;
-  let heldNotedTurn: number | undefined;
+  // (HELD_NUDGE). Each once a turn: by the events, and in memory by turn seq.
   const checkJobs = async (input: unknown, needs: string, events: PersistedEvent[]): Promise<void> => {
     const held = needs === 'you' ? [] : (control.heldAsks?.(selfId) ?? []);
     const jobs = needs === 'you' && !askWhenFromTool(input) ? (control.shellJobs?.(selfId) ?? []) : [];
@@ -397,20 +403,19 @@ export function buildThreadbearTools(
     // which is neither held up nor counted as the thread's once (Codex's
     // second review). Codex: capped by the turn, as above.
     if (!codex && !(await replied()).landed) return;
-    const turn = events.findLast((e) => e.type === 'turn.started')?.seq;
     if (held.length) {
-      if (heldNudged(events) || (codex && turn !== undefined && turn === heldNotedTurn)) return;
-      heldNotedTurn = turn;
+      if (alreadyNoted('held', events, heldNudged(events))) return;
+      markNoted('held', events);
       throw new Error(heldNudge(held));
     }
-    if (jobsNudged(events) || (codex && turn !== undefined && turn === jobsNotedTurn)) return;
-    jobsNotedTurn = turn;
+    if (alreadyNoted('jobs', events, jobsNudged(events))) return;
+    markNoted('jobs', events);
     throw new Error(jobsNudge(jobs));
   };
   const projectStepNote = async (input: { archive?: unknown; snooze?: unknown; waitFor?: unknown }, needs: string, next: string[] | undefined, events: PersistedEvent[]): Promise<string | undefined> => {
     if (opts.coordinators?.()?.forThread(selfId)) return undefined;
     if (opts.projectStepNote === false || needs !== 'nothing' || !projects) return undefined;
-    if (input.archive === true || snoozeFromTool({ ...input, needs: 'nothing' }) || (Array.isArray(input.waitFor) && input.waitFor.length) || projectStepNudged(events)) return undefined;
+    if (input.archive === true || snoozeFromTool({ ...input, needs: 'nothing' }) || (Array.isArray(input.waitFor) && input.waitFor.length) || alreadyNoted('project', events, projectStepNudged(events))) return undefined;
     if (appRestarts?.isWatching(selfId)) return undefined;
     // Nor when it has done what the note asks, and something will run it
     // again: a background job or sub-agent of its own still going, or a
@@ -420,8 +425,6 @@ export function buildThreadbearTools(
     // could only send end_turn again.
     if (control.ownWorkRunning?.(selfId)) return undefined;
     if (await bookedToSelf()) return undefined;
-    const turn = events.findLast((e) => e.type === 'turn.started')?.seq;
-    if (turn !== undefined && turn === projectNotedTurn) return undefined;
     if (!codex && !(await replied()).landed) return undefined;
     const me = await inTime((async () => control.get(selfId))(), ID_LIST_TIMEOUT_MS, "couldn't read the thread").catch(() => undefined);
     if (!me || me.startedBy || !me.projects?.length) return undefined;
@@ -431,7 +434,7 @@ export function buildThreadbearTools(
       if (got && !got.project.archived) live.push({ title: got.project.title, state: got.project.state });
     }
     if (!live.length) return undefined;
-    projectNotedTurn = turn;
+    markNoted('project', events);
     return projectStepNudge(live, unansweredItems(await recentEvents(), next ?? []));
   };
 
@@ -1668,7 +1671,14 @@ export function buildThreadbearTools(
   // older form can't send findings.
   const checkFindings = (input: Record<string, unknown>, needs: string, events: PersistedEvent[]): void => {
     const problem = findingsProblem(control.reviewOwes?.(selfId), input, needs);
-    if (problem && refusalsThisTurn(events, FINDINGS_REFUSED) < FINDINGS_REFUSALS) throw new Error(problem);
+    if (!problem) return;
+    const seq = turnSeqOf(events);
+    const memCount = seq !== undefined && findingsNoted?.seq === seq ? findingsNoted.count : 0;
+    const seen = Math.max(refusalsThisTurn(events, FINDINGS_REFUSED), memCount);
+    if (seen < FINDINGS_REFUSALS) {
+      if (seq !== undefined) findingsNoted = { seq, count: seen + 1 };
+      throw new Error(problem);
+    }
   };
   const findingsArg = z
     .array(z.record(z.string(), z.unknown()))
@@ -1686,6 +1696,21 @@ export function buildThreadbearTools(
     .enum(['now', 'jobsEnd'])
     .optional()
     .describe('Asks while a job of yours runs: "jobsEnd" holds them until it ends, "now" asks at once.');
+
+  const nextArg = z
+    .array(z.string())
+    .max(3)
+    .optional()
+    .describe('With needs "nothing": up to 3 worthwhile follow-ups in the user\'s voice (8 to 15 words, self-contained). Omit if none, or pass [] to clear carried-over follow-ups.');
+  const nextPickArg = z
+    .enum(['any', 'one'])
+    .optional()
+    .describe('With next: "one" when items are mutually exclusive directions to choose between; omit ("any") when several can be ticked together.');
+  const nextSuggestedArg = z
+    .number()
+    .int()
+    .optional()
+    .describe('With nextPick "one": index into next of the direction you recommend.');
 
   // end_turn with one reply (docs/protocol/needs-you.md, "One reply"): the card and
   // a headline; the reply is the message the agent writes next. Nothing to
@@ -1728,11 +1753,9 @@ export function buildThreadbearTools(
           .max(10)
           .optional()
           .describe('Each thing the user has to do or decide, most blocking first. Usually one.'),
-        next: z
-          .array(z.string())
-          .max(3)
-          .optional()
-          .describe('With needs "nothing": follow-ups worth doing next, in the user\'s voice, which they read later with this thread forgotten: which app or thing, and what they\'d see change or get, in their words, 8 to 15 words. See the description. Only ones that really came up; usually none.'),
+        next: nextArg,
+        nextPick: nextPickArg,
+        nextSuggested: nextSuggestedArg,
         byline: z
           .string()
           .optional()
@@ -1764,12 +1787,24 @@ export function buildThreadbearTools(
         checkFindings(input, needs, events);
         const signIns = await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth);
         const missing = uncovered(signIns, needs === 'you' ? asks : []);
-        if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
+        if (missing.length && !alreadyNoted('signIn', events, nudgedThisTurn(events))) {
+          markNoted('signIn', events);
+          throw new Error(signInNudge(missing));
+        }
         // Sign-ins the turn needs and Restart to Update are the user's to do.
-        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks, signIns).filter((a) => !asksForAppRestart([a]))) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks, signIns).filter((a) => !asksForAppRestart([a]))) && !alreadyNoted('tryFirst', events, triedFirstNudged(events))) {
+          markNoted('tryFirst', events);
+          throw new Error(tryFirstNudge());
+        }
         if (needs === 'you') await checkThreadLinks(asks);
-        if (needs === 'you' && hasDeadEnd(asks) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks));
-        if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks) && !plainCardNudged(events)) throw new Error(plainCardNudge());
+        if (needs === 'you' && hasDeadEnd(asks) && !alreadyNoted('deadEnd', events, deadEndNudged(events))) {
+          markNoted('deadEnd', events);
+          throw new Error(deadEndNudge(asks));
+        }
+        if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks) && !alreadyNoted('plainCard', events, plainCardNudged(events))) {
+          markNoted('plainCard', events);
+          throw new Error(plainCardNudge());
+        }
         await checkJobs(input, needs, events);
         const projectNote = await projectStepNote(input, needs, parsed?.next, events);
         if (projectNote) throw new Error(projectNote);
@@ -1840,11 +1875,9 @@ export function buildThreadbearTools(
           .max(10)
           .optional()
           .describe('With needs "you": each thing they have to do, most blocking first. Usually one or two.'),
-        next: z
-          .array(z.string())
-          .max(3)
-          .optional()
-          .describe('With needs "nothing": follow-ups worth doing next, in the user\'s voice, which they read later with this thread forgotten: which app or thing, and what they\'d see change or get, in their words, 8 to 15 words. See the description. Only ones that really came up; usually none.'),
+        next: nextArg,
+        nextPick: nextPickArg,
+        nextSuggested: nextSuggestedArg,
         byline: z
           .string()
           .optional()
@@ -1901,11 +1934,23 @@ export function buildThreadbearTools(
         checkFindings(args, needs, events);
         const signIns = await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth);
         const missing = uncovered(signIns, needs === 'you' ? asks : []);
-        if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
-        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks ?? [], signIns).filter((a) => !asksForAppRestart([a]))) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        if (missing.length && !alreadyNoted('signIn', events, nudgedThisTurn(events))) {
+          markNoted('signIn', events);
+          throw new Error(signInNudge(missing));
+        }
+        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks ?? [], signIns).filter((a) => !asksForAppRestart([a]))) && !alreadyNoted('tryFirst', events, triedFirstNudged(events))) {
+          markNoted('tryFirst', events);
+          throw new Error(tryFirstNudge());
+        }
         if (needs === 'you') await checkThreadLinks(asks ?? []);
-        if (needs === 'you' && hasDeadEnd(asks ?? []) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks ?? []));
-        if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks ?? []) && !plainCardNudged(events)) throw new Error(plainCardNudge());
+        if (needs === 'you' && hasDeadEnd(asks ?? []) && !alreadyNoted('deadEnd', events, deadEndNudged(events))) {
+          markNoted('deadEnd', events);
+          throw new Error(deadEndNudge(asks ?? []));
+        }
+        if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks ?? []) && !alreadyNoted('plainCard', events, plainCardNudged(events))) {
+          markNoted('plainCard', events);
+          throw new Error(plainCardNudge());
+        }
         await checkJobs(args, needs, events);
         const projectNote = await projectStepNote(args, needs, parsed?.next, events);
         if (projectNote) throw new Error(projectNote);

@@ -67,6 +67,7 @@ const NESTED: [string, string, 'object' | 'string' | 'number'][] = [
   ['needs', 'asks', 'object'],
   ['needs', 'ticked', 'number'],
   ['needs', 'open', 'string'],
+  ['needs', 'next', 'string'],
   ['looseEnds', 'ends', 'object'],
   ['stoppedWork', 'what', 'string'],
   ['highlights', 'items', 'object'],
@@ -101,6 +102,18 @@ export function normaliseRecord(rec: Record<string, unknown>): boolean {
     const list = listOf(obj[k], kind);
     if (list) obj[k] = list;
     else delete obj[k];
+  }
+  if (isObject(rec.needs)) {
+    const next = Array.isArray(rec.needs.next) ? rec.needs.next : undefined;
+    if (!next || next.length < 2 || rec.needs.nextPick !== 'one') {
+      delete rec.needs.nextPick;
+      delete rec.needs.nextSuggested;
+    } else if (
+      rec.needs.nextSuggested !== undefined &&
+      (typeof rec.needs.nextSuggested !== 'number' || !Number.isInteger(rec.needs.nextSuggested) || rec.needs.nextSuggested < 0 || rec.needs.nextSuggested >= next.length)
+    ) {
+      delete rec.needs.nextSuggested;
+    }
   }
   // looseEnds is drawn from its ends; one without them is no check. The
   // Highlights need both their lists, so without either they start again.
@@ -336,7 +349,7 @@ export type ThreadRecord = {
   // its turn.completed and which of its asks he has ticked.
   // (A record from 11 to 13 Nov 2026 may also hold `open`, the agent's own
   // lines for the done card: nothing reads it now.)
-  needs?: { seq: number; needs: NeedsWho; asks?: Ask[]; ticked?: number[]; afterJobs?: string[] };
+  needs?: { seq: number; needs: NeedsWho; asks?: Ask[]; ticked?: number[]; afterJobs?: string[]; next?: string[]; nextPick?: 'one'; nextSuggested?: number };
   // Set when the folder or account changes, or the record had to be
   // rebuilt; the next turn starts a new native session with a note.
   // lost: the session to resume couldn't be found (never saved; only set

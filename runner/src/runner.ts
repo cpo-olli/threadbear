@@ -318,6 +318,8 @@ export type Turn = {
   // A message in it was Mike's own: he's at the thread, so a check it does
   // or leaves owed needs no mark to tell him (completeTurn).
   byMike?: true;
+  // Already reminded this non-Mike wake turn about pending carry-on items.
+  nextReminded?: true;
   // It did the check a wake gave the thread (runner/hibernation.ts,
   // wakeToCheck), so how it ends says whether Mike is needed (completeTurn).
   wakeCheck?: true;
@@ -2149,7 +2151,15 @@ export class Runner {
     // Answering it from his phone without opening it counts as having seen
     // it woke (place.ts, message). Mike doing it is written down first, while
     // the record still says who put it away (runner/inbox-guess.ts).
-    if (fromMike(text, opts)) this.noteRevive(st, text);
+    if (fromMike(text, opts)) {
+      this.noteRevive(st, text);
+      if (!this.commandPlan(st, text) && rec.needs?.next?.length) {
+        delete rec.needs.next;
+        delete rec.needs.nextPick;
+        delete rec.needs.nextSuggested;
+        this.markDirty(st);
+      }
+    }
     if (placeOf(rec).kind !== 'inbox') this.cli(st, { kind: 'stay' });
     this.park(st, { kind: 'message', fromSchedule: opts.origin === 'schedule', fromMike: fromMike(text, opts) });
     this.supersedeReviews(st, text, opts);
@@ -3304,11 +3314,23 @@ export class Runner {
     if (outcome === 'failed' && r.errorKind) body.errorKind = r.errorKind;
     // What it needs from Mike: its end_turn call, else its closing "What I
     // need from you". Only a turn it finished; a stopped one says nothing.
+    const prevNext =
+      rec.needs?.needs === 'nothing' && rec.needs.seq === rec.lastTurnCompletedSeq && rec.needs.next?.length
+        ? { next: rec.needs.next, ...(rec.needs.nextPick ? { nextPick: rec.needs.nextPick } : {}), ...(rec.needs.nextSuggested !== undefined ? { nextSuggested: rec.needs.nextSuggested } : {}) }
+        : undefined;
     const said = outcome === 'completed' ? turnNeeds(turn) : undefined;
+    const explicitNext = Boolean(turn.endTurn && typeof turn.endTurn === 'object' && 'next' in turn.endTurn && (turn.endTurn as Record<string, unknown>).next !== undefined);
+    if (outcome === 'completed' && !turn.local && !turn.byMike && said?.needs === 'nothing' && !said.next?.length && !explicitNext && prevNext) {
+      said.next = prevNext.next;
+      if (prevNext.nextPick) said.nextPick = prevNext.nextPick;
+      if (prevNext.nextSuggested !== undefined) said.nextSuggested = prevNext.nextSuggested;
+    }
     if (said) {
       body.needs = said.needs;
       if (said.asks) body.asks = said.asks;
       if (said.next) body.next = said.next;
+      if (said.nextPick) body.nextPick = said.nextPick;
+      if (said.nextSuggested !== undefined) body.nextSuggested = said.nextSuggested;
       body.needsFrom = said.from;
     }
     // Here rather than only in end_turn's handler: a refused end_turn
@@ -3341,7 +3363,17 @@ export class Runner {
     // Any completed turn replaces the last one's card; one that said
     // neither leaves no card, and counts as before.
     if (outcome === 'completed') {
-      if (said) rec.needs = { seq: ev.seq, needs: said.needs, ...(said.asks ? { asks: said.asks } : {}), ...this.afterJobs(st, said) };
+      if (said) {
+        rec.needs = {
+          seq: ev.seq,
+          needs: said.needs,
+          ...(said.asks ? { asks: said.asks } : {}),
+          ...(said.next?.length ? { next: said.next } : {}),
+          ...(said.nextPick ? { nextPick: said.nextPick } : {}),
+          ...(said.nextSuggested !== undefined ? { nextSuggested: said.nextSuggested } : {}),
+          ...this.afterJobs(st, said),
+        };
+      }
       // Said nothing at all (no end_turn): asks held for a job and never
       // seen stay as the card, rather than going with a "Landed".
       else if (rec.needs?.afterJobs) rec.needs = { ...rec.needs, seq: ev.seq };
@@ -5422,7 +5454,19 @@ export class Runner {
     const pressed = this.takePressNews(st);
     const wokeBefore = structuredClone(rec.wakeNews);
     const woke = this.takeWakeNews(st, message.id);
-    const lead = [standing, this.coordinators?.context(rec.id), woke, pressed].filter(Boolean).join('\n\n');
+    const prevNext =
+      !rt.turn?.byMike &&
+      !rt.turn?.nextReminded &&
+      rec.needs?.needs === 'nothing' &&
+      rec.needs.seq === rec.lastTurnCompletedSeq &&
+      rec.needs.next?.length
+        ? rec.needs
+        : undefined;
+    const nextNote = prevNext
+      ? `[Threadbear note: your previous turn left these carry-on items for the user (${prevNext.nextPick === 'one' ? 'pick one' : 'pick any'}): ${prevNext.next!.map((s, i) => `${i + 1}. "${s}"${prevNext.nextPick === 'one' && prevNext.nextSuggested === i ? ' (recommended)' : ''}`).join('; ')}. If you end with needs "nothing" and omit next, Threadbear will keep them; pass next: [...] to replace them or next: [] to clear them.]`
+      : '';
+    if (nextNote && rt.turn) rt.turn.nextReminded = true;
+    const lead = [standing, this.coordinators?.context(rec.id), woke, pressed, nextNote].filter(Boolean).join('\n\n');
     try {
       rt.session!.send(lead ? { ...message, text: `${lead}\n\n${message.text}` } : message);
     } catch (e) {
@@ -5430,6 +5474,7 @@ export class Runner {
       else rec.instructionsTold = before;
       rec.presses = presses;
       if (wokeBefore) rec.wakeNews = wokeBefore;
+      if (nextNote && rt.turn) delete rt.turn.nextReminded;
       throw e;
     }
     if (!standing) return;

@@ -117,6 +117,10 @@ export const threadFields = {
   asksSeq: v.optional(v.number()),
   // A finished turn's suggested follow-ups (end_turn's `next`), since API 14.
   next: v.optional(v.array(v.string())),
+  // "one" when `next` items are mutually exclusive directions (API 103); absent means multi-pick.
+  nextPick: v.optional(v.literal('one')),
+  // Index into `next` of the agent's recommendation when nextPick is "one" (API 103).
+  nextSuggested: v.optional(v.number()),
   // The done card's loose ends (docs/protocol/threads.md, "Loose ends"; experiment
   // looseEnds), since API 73: what the runner found still open on a thread
   // whose last turn needs nothing, for the phone's done card. kind is

@@ -274,6 +274,8 @@ export type RelayThreadRow = {
   asks?: { action: string; why?: string; reply?: string; options?: string[]; optionNotes?: string[]; suggested?: number; links?: { title: string; url: string }[]; ticked?: boolean }[];
   asksSeq?: number;
   next?: string[];
+  nextPick?: 'one';
+  nextSuggested?: number;
   // The done card's loose ends (backend API 73), while that card stands.
   looseEnds?: { kind: string; text: string; threadId?: string; at?: string }[];
   // Another lab's review of the last turn (backend API 76).
@@ -520,7 +522,15 @@ export function relayEvents(threadId: string, rows: RelayRow[], row: RelayThread
           durationMs: Math.max(0, Date.parse(r.at) - (Number.isFinite(started) ? started : Date.parse(r.at))),
           ...(last && row?.needs ? { needs: row.needs } : {}),
           ...(asks ? { asks } : {}),
-          ...(last && row?.needs === 'nothing' && row.next?.length ? { next: row.next } : {}),
+          ...(last && row?.needs === 'nothing' && row.next?.length
+            ? {
+                next: row.next,
+                ...(row.nextPick === 'one' && row.next.length > 1 ? { nextPick: 'one' as const } : {}),
+                ...(row.nextPick === 'one' && row.next.length > 1 && typeof row.nextSuggested === 'number' && Number.isInteger(row.nextSuggested) && row.nextSuggested >= 0 && row.nextSuggested < row.next.length
+                  ? { nextSuggested: row.nextSuggested }
+                  : {}),
+              }
+            : {}),
           // Only on the turn it's from: a newer turn's row can come before its rows.
           ...(last && row?.review && row.cardTurn === r.turn ? { review: row.review } : {}),
         }),

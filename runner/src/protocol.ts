@@ -953,6 +953,10 @@ export type EventBody =
       asks?: Ask[];
       // With needs "nothing": end_turn's suggested follow-ups.
       next?: string[];
+      // "one" when the follow-ups are mutually exclusive directions to choose between; absent means "any" (multi-pick).
+      nextPick?: 'one';
+      // Index into `next` of the agent's recommendation when nextPick is "one".
+      nextSuggested?: number;
       needsFrom?: 'tool' | 'text';
       // Review by another lab: what the reviewer found so far and what the
       // agent did about each, on the turn that answered them

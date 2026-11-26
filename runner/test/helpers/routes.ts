@@ -35,6 +35,8 @@ export type View = {
   needs?: string;
   asks: Ask[];
   next: string[];
+  nextPick?: string;
+  nextSuggested?: number;
   // The done card's loose ends, as their words.
   looseEnds: string[];
   // Review by another lab's ledger on the last turn's card.
@@ -151,7 +153,8 @@ export async function threeWays(play: (p: Play) => void | Promise<void>) {
   const here = (): View => {
     const t = h.runner.get(id);
     const events = h.runner.events(id, {}).events as Record<string, any>[];
-    return { coordinatorProjectId: t.coordinatorProjectId, unread: t.lastSeq > t.lastSeenSeq, needs: t.needs, asks: (t.asks ?? []) as Ask[], next: lastNext(events), looseEnds: (t.looseEnds?.ends ?? []).map((e) => e.text), review: events.filter((e) => e.type === 'turn.completed').at(-1)?.review, plans: plansOf(events), messages: messagesOf(events), notes: loginNotes(events), failed: lastFailed(events), waitState: t.waitState };
+    const end = events.filter((e) => e.type === 'turn.completed').at(-1);
+    return { coordinatorProjectId: t.coordinatorProjectId, unread: t.lastSeq > t.lastSeenSeq, needs: t.needs, asks: (t.asks ?? []) as Ask[], next: lastNext(events), nextPick: end?.nextPick, nextSuggested: end?.nextSuggested, looseEnds: (t.looseEnds?.ends ?? []).map((e) => e.text), review: end?.review, plans: plansOf(events), messages: messagesOf(events), notes: loginNotes(events), failed: lastFailed(events), waitState: t.waitState };
   };
   let relayEvents: Record<string, any>[] = [];
   const viaRelay = async (): Promise<View> => {
@@ -167,12 +170,12 @@ export async function threeWays(play: (p: Play) => void | Promise<void>) {
     const ends = listed?.looseEnds && end && listed.looseEnds.seq === end.seq ? listed.looseEnds.ends.map((e) => e.text) : [];
     // The state as another Mac's sidebar has it: the thread's index row.
     const indexed = ((await b.ctx.db.query('threadIndex').collect()) as unknown as { threadId: string; waitState?: string; coordinatorProjectId?: string; unread?: boolean }[]).find((r) => r.threadId === id);
-    return { coordinatorProjectId: indexed?.coordinatorProjectId, unread: indexed?.unread ?? false, needs: end?.needs, asks: (end?.asks ?? []) as Ask[], next: (end?.next ?? []) as string[], looseEnds: ends, review: end?.review, plans: plansOf(events), messages: messagesOf(events), notes: loginNotes(events), failed: lastFailed(events), waitState: indexed?.waitState };
+    return { coordinatorProjectId: indexed?.coordinatorProjectId, unread: indexed?.unread ?? false, needs: end?.needs, asks: (end?.asks ?? []) as Ask[], next: (end?.next ?? []) as string[], nextPick: end?.nextPick, nextSuggested: end?.nextSuggested, looseEnds: ends, review: end?.review, plans: plansOf(events), messages: messagesOf(events), notes: loginNotes(events), failed: lastFailed(events), waitState: indexed?.waitState };
   };
   const viaPhone = async (): Promise<View> => {
     const r = (await call(b.ctx, mods.phone.thread!, { token: TOKEN, threadId: id })) as { thread: Record<string, any>; messages: { role: 'user' | 'assistant'; text: string; origin?: string }[] };
     const page = await call(b.ctx, mods.phone.messages!, { token: TOKEN, threadId: id, notes: true }) as { messages: { role: string; text: string; plan?: boolean; planDecision?: string }[] };
-    return { coordinatorProjectId: r.thread.coordinatorProjectId, unread: r.thread.unread, needs: r.thread.needs, asks: (r.thread.asks ?? []) as Ask[], next: (r.thread.next ?? []) as string[], looseEnds: ((r.thread.looseEnds ?? []) as { text: string }[]).map((e) => e.text), review: r.thread.review, plans: page.messages.filter((m) => m.plan).map((m) => `${m.text.split('\n')[0]} (${m.planDecision ?? 'waiting'})`), messages: r.messages.map((m) => ({ role: m.role, text: m.text, pictures: 0, ...(m.origin ? { origin: m.origin } : {}) })), notes: page.messages.filter(m => m.role === 'note').map(m => m.text), failed: r.thread.status === 'error', waitState: r.thread.waitState };
+    return { coordinatorProjectId: r.thread.coordinatorProjectId, unread: r.thread.unread, needs: r.thread.needs, asks: (r.thread.asks ?? []) as Ask[], next: (r.thread.next ?? []) as string[], nextPick: r.thread.nextPick, nextSuggested: r.thread.nextSuggested, looseEnds: ((r.thread.looseEnds ?? []) as { text: string }[]).map((e) => e.text), review: r.thread.review, plans: page.messages.filter((m) => m.plan).map((m) => `${m.text.split('\n')[0]} (${m.planDecision ?? 'waiting'})`), messages: r.messages.map((m) => ({ role: m.role, text: m.text, pictures: 0, ...(m.origin ? { origin: m.origin } : {}) })), notes: page.messages.filter(m => m.role === 'note').map(m => m.text), failed: r.thread.status === 'error', waitState: r.thread.waitState };
   };
   const views = { here: here(), relay: await viaRelay(), phone: await viaPhone() };
   await sync.stop();

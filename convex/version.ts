@@ -495,4 +495,7 @@
 //    read owner-only by relay:remotePools, so Usage follows a remote thread's pool.
 // 102: thread and sidebar rows carry optional coordinatorProjectId. Clients
 //    show it in Coordinators before Starred; archived still wins.
-export const API_VERSION = 102;
+// 103: thread rows can carry nextPick ("one") and nextSuggested (index into
+//    next) for mutually exclusive done-card follow-ups. A runner sends them
+//    only to a backend of 103 or later; older apps ignore them.
+export const API_VERSION = 103;

@@ -862,3 +862,59 @@ fn a_review_row_folds_its_answered_findings_away() {
     );
     assert!(!panel(vec![]).folds());
 }
+
+#[test]
+fn testDoneCardPickOneFollowUpsAndRecommendation() {
+    let pick_one_event = event_turn(
+        2,
+        "turn.completed",
+        json!({
+            "turnId": "t1",
+            "outcome": "completed",
+            "durationMs": 1000,
+            "needs": "nothing",
+            "next": ["Try option A", "Try option B"],
+            "nextPick": "one",
+            "nextSuggested": 1
+        }),
+        Some("t1"),
+    );
+    let model = from_events(vec![
+        event_turn(1, "turn.started", json!({"turnId": "t1"}), Some("t1")),
+        pick_one_event,
+    ]);
+    let c = card(&model, "ak:2").expect("done card");
+    assert!(c.is_done());
+    assert!(c.next_pick_one());
+    assert_eq!(c.next_pick.as_deref(), Some("one"));
+    assert_eq!(c.next_suggested, Some(1));
+    assert_eq!(
+        RowDebug::text(model.row("ak:2").unwrap()),
+        "open, nothing needed, next (pick one): Try option A; Try option B *"
+    );
+
+    // A single item does not enter pick-one mode even if nextPick is "one".
+    let single = from_events(vec![
+        event_turn(1, "turn.started", json!({"turnId": "t1"}), Some("t1")),
+        event_turn(
+            2,
+            "turn.completed",
+            json!({
+                "turnId": "t1",
+                "outcome": "completed",
+                "durationMs": 1000,
+                "needs": "nothing",
+                "next": ["Only one"],
+                "nextPick": "one",
+                "nextSuggested": 0
+            }),
+            Some("t1"),
+        ),
+    ]);
+    let c_single = card(&single, "ak:2").expect("done card");
+    assert!(!c_single.next_pick_one());
+    assert_eq!(
+        RowDebug::text(single.row("ak:2").unwrap()),
+        "open, nothing needed, next: Only one"
+    );
+}

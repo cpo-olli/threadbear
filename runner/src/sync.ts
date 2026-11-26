@@ -173,9 +173,10 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 102;
+export const BACKEND_API_VERSION = 103;
 export const INDEX_POOL_API_VERSION = 101;
 export const COORDINATORS_API_VERSION = 102;
+export const NEXT_PICK_API_VERSION = 103;
 // From this one sync:removeThreads takes the runner's id and leaves a row
 // that's another runner's alone (a thread moved away), whatever the key.
 export const REMOVE_OWN_ROWS_API_VERSION = 92;
@@ -534,6 +535,8 @@ export type ThreadDoc = {
   asks?: PhoneAsk[];
   asksSeq?: number;
   next?: string[];
+  nextPick?: 'one';
+  nextSuggested?: number;
   looseEnds?: { kind: string; text: string; threadId?: string; at?: string }[];
   review?: LabReviewLedger;
   cardTurn?: string;
@@ -1038,7 +1041,7 @@ export function phoneNeedsYou(t: Pick<ThreadSummary, 'needsYou' | 'archivedAt' |
   return t.needsYou && !t.archivedAt && !(t.snoozedUntil && Date.parse(t.snoozedUntil) > now);
 }
 
-export function toThreadDoc(t: ThreadSummary, runnerId: string, now: number, pending?: PendingApproval, earliestSeq?: number, next?: string[], scrub?: (text: string) => string, review?: LabReviewLedger, cardTurn?: string): ThreadDoc {
+export function toThreadDoc(t: ThreadSummary, runnerId: string, now: number, pending?: PendingApproval, earliestSeq?: number, next?: string[], scrub?: (text: string) => string, review?: LabReviewLedger, cardTurn?: string, nextPick?: 'one', nextSuggested?: number): ThreadDoc {
   const doc: ThreadDoc = {
     threadId: t.id,
     runnerId,
@@ -1083,7 +1086,15 @@ export function toThreadDoc(t: ThreadSummary, runnerId: string, now: number, pen
     doc.asks = t.asks.map(toPhoneAsk);
     doc.asksSeq = t.asksSeq;
   }
-  if (next?.length) doc.next = next;
+  if (next?.length) {
+    doc.next = next;
+    if (nextPick === 'one' && next.length > 1) {
+      doc.nextPick = 'one';
+      if (typeof nextSuggested === 'number' && Number.isInteger(nextSuggested) && nextSuggested >= 0 && nextSuggested < next.length) {
+        doc.nextSuggested = nextSuggested;
+      }
+    }
+  }
   // The done card's loose ends (docs/protocol/threads.md, "Loose ends"), for the
   // phone's done card. The runner only has them for the card standing now
   // (runner/loose-ends.ts); the same test as lastEnd keeps an older
@@ -1188,7 +1199,7 @@ function phoneAnswers(raw: unknown): AskAnswer[] | undefined {
 export function forBackend(d: ThreadDoc, v: number, now: number): ThreadDoc {
   const asks = d.asks !== undefined || d.asksSeq !== undefined || d.next !== undefined;
   const sections = d.needs !== undefined || d.pendingReviews !== undefined || d.waitingForRoom !== undefined;
-  if ((v >= COORDINATORS_API_VERSION || !d.coordinatorProjectId) && (v >= SHARE_API_VERSION || !d.share) && (v >= WOKE_API_VERSION || !d.woke) && (v >= ASKS_API_VERSION || !asks) && (v >= OPTION_NOTES_API_VERSION || !d.asks?.some((a) => a.optionNotes)) && (v >= LOOSE_ENDS_API_VERSION || !d.looseEnds) && (v >= RELAY_CARDS_API_VERSION || (!d.review && !d.cardTurn)) && (v >= SECTIONS_API_VERSION || !sections) && (v >= STARTED_BY_API_VERSION || !d.startedBy) && (v >= STARS_API_VERSION || !d.starredAt) && (v >= LINKS_API_VERSION || !d.links) && (v >= ASKED_API_VERSION || !d.asked) && (v >= KEYWORDS_API_VERSION || !d.keywords) && (v >= WAKE_NOTE_API_VERSION || !d.wakeNote) && (v >= NETWORK_WAIT_API_VERSION || !d.waitingForNetwork) && (v >= WAIT_STATE_API_VERSION || !d.waitState) && (v >= SECRETS_API_VERSION || d.pendingApproval?.kind !== 'secret') && (v >= RELAY_API_VERSION || d.pendingApproval?.seq === undefined) && (v >= PLAN_API_VERSION || d.pendingApproval?.kind !== 'approval' || d.pendingApproval.planSeq === undefined)) return d;
+  if ((v >= NEXT_PICK_API_VERSION || (!d.nextPick && d.nextSuggested === undefined)) && (v >= COORDINATORS_API_VERSION || !d.coordinatorProjectId) && (v >= SHARE_API_VERSION || !d.share) && (v >= WOKE_API_VERSION || !d.woke) && (v >= ASKS_API_VERSION || !asks) && (v >= OPTION_NOTES_API_VERSION || !d.asks?.some((a) => a.optionNotes)) && (v >= LOOSE_ENDS_API_VERSION || !d.looseEnds) && (v >= RELAY_CARDS_API_VERSION || (!d.review && !d.cardTurn)) && (v >= SECTIONS_API_VERSION || !sections) && (v >= STARTED_BY_API_VERSION || !d.startedBy) && (v >= STARS_API_VERSION || !d.starredAt) && (v >= LINKS_API_VERSION || !d.links) && (v >= ASKED_API_VERSION || !d.asked) && (v >= KEYWORDS_API_VERSION || !d.keywords) && (v >= WAKE_NOTE_API_VERSION || !d.wakeNote) && (v >= NETWORK_WAIT_API_VERSION || !d.waitingForNetwork) && (v >= WAIT_STATE_API_VERSION || !d.waitState) && (v >= SECRETS_API_VERSION || d.pendingApproval?.kind !== 'secret') && (v >= RELAY_API_VERSION || d.pendingApproval?.seq === undefined) && (v >= PLAN_API_VERSION || d.pendingApproval?.kind !== 'approval' || d.pendingApproval.planSeq === undefined)) return d;
   const out = { ...d };
   if (v < SECTIONS_API_VERSION) {
     delete out.needs;
@@ -1220,6 +1231,10 @@ export function forBackend(d: ThreadDoc, v: number, now: number): ThreadDoc {
     delete out.coordinatorProjectId;
     out.view = threadView(out, now);
   }
+  if (v < NEXT_PICK_API_VERSION) {
+    delete out.nextPick;
+    delete out.nextSuggested;
+  }
   if (v < STARS_API_VERSION && out.starredAt) {
     // That backend's phones have no Starred section to show it in.
     delete out.starredAt;
@@ -1237,6 +1252,8 @@ export function forBackend(d: ThreadDoc, v: number, now: number): ThreadDoc {
     delete out.asks;
     delete out.asksSeq;
     delete out.next;
+    delete out.nextPick;
+    delete out.nextSuggested;
   }
   return out;
 }
@@ -1578,7 +1595,7 @@ export class ConvexSync {
   // start({ hold }) till release(): see release.
   private holding = false;
   private earliest = new Map<string, number | null>(); // threadId -> seq of its first text message (null: none yet)
-  private nexts = new Map<string, { lastSeq: number; next?: string[]; review?: LabReviewLedger; turn?: string }>(); // threadId -> its last turn's next steps, review and turn, as of lastSeq
+  private nexts = new Map<string, { lastSeq: number; next?: string[]; nextPick?: 'one'; nextSuggested?: number; review?: LabReviewLedger; turn?: string }>(); // threadId -> its last turn's next steps, review and turn, as of lastSeq
   private lists: { projects?: Project[]; schedules?: Schedule[]; accounts?: Account[] } = {};
   private dirtyLists = new Set<ListName>();
   // Each project as the backend has it, id -> digest of its doc without
@@ -2879,7 +2896,19 @@ export class ConvexSync {
     if (t.status === 'idle' || t.status === 'error' || t.status === 'stopped') this.forgetCards(t.id);
     this.noteShared(t);
     const end = this.lastEnd(t);
-    const doc = toThreadDoc(t, this.runnerId, this.deps.clock.now(), this.pending.get(t.id), this.earliestSeq(t), t.needs === 'nothing' ? end?.next : undefined, this.scrubber.safeText, end?.review, end?.turn);
+    const doc = toThreadDoc(
+      t,
+      this.runnerId,
+      this.deps.clock.now(),
+      this.pending.get(t.id),
+      this.earliestSeq(t),
+      t.needs === 'nothing' ? end?.next : undefined,
+      this.scrubber.safeText,
+      end?.review,
+      end?.turn,
+      t.needs === 'nothing' ? end?.nextPick : undefined,
+      t.needs === 'nothing' ? end?.nextSuggested : undefined,
+    );
     const now = this.deps.clock.now();
     // Against the row as this backend took it: `sent` holds that, without
     // the fields an older one doesn't know, which would otherwise make every
@@ -3289,11 +3318,13 @@ export class ConvexSync {
   // (end_turn's `next`, for the phone's done card, sent only on a turn that
   // needs nothing) and another lab's review ledger (for another Mac's relay).
   // Read from the end of its log once per lastSeq.
-  private lastEnd(t: ThreadSummary): { next?: string[]; review?: LabReviewLedger; turn?: string } | undefined {
+  private lastEnd(t: ThreadSummary): { next?: string[]; nextPick?: 'one'; nextSuggested?: number; review?: LabReviewLedger; turn?: string } | undefined {
     if (t.status !== 'idle' || t.archivedAt) return undefined;
     const known = this.nexts.get(t.id);
     if (known && known.lastSeq === t.lastSeq) return known;
     let next: string[] | undefined;
+    let nextPick: 'one' | undefined;
+    let nextSuggested: number | undefined;
     let review: LabReviewLedger | undefined;
     let turn: string | undefined;
     try {
@@ -3301,7 +3332,15 @@ export class ConvexSync {
       for (let i = events.length - 1; i >= 0; i--) {
         const e = events[i]!;
         if (e.type === 'turn.completed') {
-          if (e.next?.length) next = e.next;
+          if (e.next?.length) {
+            next = e.next;
+            if (e.nextPick === 'one' && e.next.length > 1) {
+              nextPick = 'one';
+              if (typeof e.nextSuggested === 'number' && Number.isInteger(e.nextSuggested) && e.nextSuggested >= 0 && e.nextSuggested < e.next.length) {
+                nextSuggested = e.nextSuggested;
+              }
+            }
+          }
           if (e.review) review = e.review;
           // As message rows name it (toMessageDoc).
           if (e.turnId) turn = e.turnId.slice(0, 8);
@@ -3313,7 +3352,7 @@ export class ConvexSync {
     } catch {
       return undefined;
     }
-    const end = { lastSeq: t.lastSeq, next, review, turn };
+    const end = { lastSeq: t.lastSeq, next, nextPick, nextSuggested, review, turn };
     this.nexts.set(t.id, end);
     return end;
   }

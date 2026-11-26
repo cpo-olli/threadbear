@@ -284,6 +284,17 @@ public struct PhoneThread: Codable, Sendable, Hashable, Identifiable {
     /// A finished turn's suggested follow-ups (end_turn's `next`), for the
     /// done card.
     public var next: [String]?
+    /// "one" when `next` items are mutually exclusive directions (backend API 103).
+    public var nextPick: String?
+    /// Index into `next` of the agent's recommendation when `nextPick` is "one" (a Convex number).
+    public var nextSuggested: Double?
+    /// Validated integer index for `nextSuggested` when `nextPick == "one"`.
+    public var nextSuggestedIndex: Int? {
+        guard nextPick == "one", let next, next.count > 1,
+              let idx = nextSuggested.flatMap({ $0.wholeCount() }),
+              next.indices.contains(idx) else { return nil }
+        return idx
+    }
     /// What the runner found still open on a thread whose last turn needs
     /// nothing (docs/protocol/threads.md, "Loose ends"; backend API 73), for the
     /// done card's "Still open" list. Nil when it hasn't checked, and from
@@ -323,6 +334,7 @@ public struct PhoneThread: Codable, Sendable, Hashable, Identifiable {
         costUsd: Double? = nil, projects: [ProjectRef]? = nil, working: String? = nil,
         pendingApproval: PendingApproval? = nil, earliestSeq: Double? = nil,
         asks: [PhoneAsk]? = nil, asksSeq: Double? = nil, next: [String]? = nil,
+        nextPick: String? = nil, nextSuggested: Double? = nil,
         needs: String? = nil, pendingReviews: Double? = nil, waitingForRoom: PhoneWaitingForRoom? = nil,
         links: [PhoneLink]? = nil, asked: String? = nil, looseEnds: [PhoneLooseEnd]? = nil, waitState: String? = nil, coordinatorProjectId: String? = nil
     ) {
@@ -355,6 +367,8 @@ public struct PhoneThread: Codable, Sendable, Hashable, Identifiable {
         self.asks = asks
         self.asksSeq = asksSeq
         self.next = next
+        self.nextPick = nextPick
+        self.nextSuggested = nextSuggested
         self.needs = needs
         self.pendingReviews = pendingReviews
         self.waitingForRoom = waitingForRoom

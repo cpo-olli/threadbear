@@ -417,7 +417,11 @@ impl Composer {
 
     fn toggle_follow_up(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let key = index as i64;
+        let pick_one = self.open_card(cx).is_some_and(|c| c.next_pick_one());
         if !self.card.next_picks.remove(&key) {
+            if pick_one {
+                self.card.next_picks.clear();
+            }
             self.card.next_picks.insert(key);
             if !cx.reduce_motion() {
                 self.card.ticked = Some(index);
@@ -906,101 +910,151 @@ impl Composer {
             }
         }
         if !card.next.is_empty() {
-            column = column.child(small_label("Or carry on", cx));
-            for (index, follow_up) in card.next.iter().enumerate() {
-                let (ticked, explained) = (
-                    self.card.next_picks.contains(&(index as i64)),
-                    self.card.explain.contains(&(index as i64)),
-                );
-                // Just ticked: its circle pops as the tick draws in.
-                let popping = self
-                    .card
-                    .ticked
-                    .filter(|i| ticked && *i == index)
-                    .map(|_| first_frame(&self.card.tick_started).elapsed())
-                    .filter(|e| *e < threadbear_core::juice::TICK_POP);
-                if popping.is_some() {
-                    window.request_animation_frame();
-                }
-                let this2 = this.clone();
-                let this3 = this.clone();
-                // A row is a body line, 8 over and 8 under; its hover fill
-                // reaches 5 past the line each way (drawHoveredRow), so the
-                // fills sit 6 apart.
-                column = column.child(
-                    h_flex()
-                        .id(("follow-up", index))
-                        .role(Role::Button)
-                        .w_full()
-                        .items_start()
-                        .mt(px(if index == 0 { 3. } else { 6. }))
-                        .pl(px(metrics::ROW_INSET))
-                        .py(px(5.))
-                        .rounded(px(6.))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(style::hover_fill(cx)))
-                        .tip("Send this with your next message")
-                        .on_click(move |_, window, cx| {
-                            if let Some(this) = this2.upgrade() {
-                                this.update(cx, |this, cx| {
-                                    this.toggle_follow_up(index, window, cx)
-                                });
-                            }
-                        })
-                        .child(
-                            div()
-                                .flex_none()
-                                .w(px(metrics::ROW_WORDS - metrics::ROW_INSET))
-                                .h(px(style::size::BODY_LINE))
-                                .flex()
-                                .items_center()
-                                .child(tick_circle(ticked, popping, cx)),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_size(px(style::size::BODY))
-                                .line_height(px(style::size::BODY_LINE))
-                                .text_color(style::label_text(cx))
-                                .child(follow_up.clone()),
-                        )
-                        .child(
-                            div()
-                                .id(("follow-up-explain", index))
-                                .role(Role::Button)
-                                .flex_none()
-                                .mx(px(8.))
-                                .size(px(22.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded_full()
-                                .cursor_pointer()
-                                .hover(|s| s.bg(style::hover_fill(cx)))
-                                .child(
-                                    Icon::from(IconName::CircleQuestionMark)
-                                        .with_size(px(14.))
-                                        .text_color(if explained {
-                                            style::accent(cx)
-                                        } else {
-                                            style::quiet_text(cx)
-                                        }),
-                                )
-                                .tip("Ask what this means")
-                                .on_click(move |_, window, cx| {
-                                    cx.stop_propagation();
-                                    if let Some(this) = this3.upgrade() {
-                                        this.update(cx, |this, cx| {
-                                            this.toggle_explain(index, window, cx)
-                                        });
-                                    }
-                                }),
-                        ),
-                );
-            }
+            column = self.render_done_follow_ups(column, card, &this, window, cx);
         }
         column.into_any_element()
+    }
+
+    fn render_done_follow_ups(
+        &mut self,
+        mut column: Div,
+        card: &AsksCard,
+        this: &gpui::WeakEntity<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let pick_one = card.next_pick_one();
+        column = column.child(small_label(
+            if pick_one {
+                "Or pick one"
+            } else {
+                "Or carry on"
+            },
+            cx,
+        ));
+        for (index, follow_up) in card.next.iter().enumerate() {
+            let (ticked, explained) = (
+                self.card.next_picks.contains(&(index as i64)),
+                self.card.explain.contains(&(index as i64)),
+            );
+            let suggested = pick_one && card.next_suggested == Some(index);
+            // Just ticked: its circle pops as the tick draws in.
+            let popping = self
+                .card
+                .ticked
+                .filter(|i| !pick_one && ticked && *i == index)
+                .map(|_| first_frame(&self.card.tick_started).elapsed())
+                .filter(|e| *e < threadbear_core::juice::TICK_POP);
+            if popping.is_some() {
+                window.request_animation_frame();
+            }
+            let this2 = this.clone();
+            let this3 = this.clone();
+            // A row is a body line, 8 over and 8 under; its hover fill
+            // reaches 5 past the line each way (drawHoveredRow), so the
+            // fills sit 6 apart.
+            column = column.child(
+                h_flex()
+                    .id(("follow-up", index))
+                    .role(Role::Button)
+                    .w_full()
+                    .items_start()
+                    .mt(px(if index == 0 { 3. } else { 6. }))
+                    .pl(px(metrics::ROW_INSET))
+                    .py(px(5.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(style::hover_fill(cx)))
+                    .tip(if pick_one {
+                        "Pick this direction to send"
+                    } else {
+                        "Send this with your next message"
+                    })
+                    .on_click(move |_, window, cx| {
+                        if let Some(this) = this2.upgrade() {
+                            this.update(cx, |this, cx| this.toggle_follow_up(index, window, cx));
+                        }
+                    })
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(metrics::ROW_WORDS - metrics::ROW_INSET))
+                            .h(px(style::size::BODY_LINE))
+                            .flex()
+                            .items_center()
+                            .child(if pick_one {
+                                radio_circle(ticked, cx).into_any_element()
+                            } else {
+                                tick_circle(ticked, popping, cx).into_any_element()
+                            }),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(px(style::size::BODY))
+                                    .line_height(px(style::size::BODY_LINE))
+                                    .text_color(style::label_text(cx))
+                                    .child(follow_up.clone()),
+                            )
+                            .when(suggested, |s| {
+                                s.child(
+                                    h_flex()
+                                        .mt(px(2.))
+                                        .items_baseline()
+                                        .gap(px(3.))
+                                        .child(
+                                            div()
+                                                .text_size(px(9.))
+                                                .text_color(style::recommended_star(cx))
+                                                .child("★"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(style::size::SMALL))
+                                                .text_color(style::secondary_label(cx))
+                                                .child("Recommended"),
+                                        ),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id(("follow-up-explain", index))
+                            .role(Role::Button)
+                            .flex_none()
+                            .mx(px(8.))
+                            .size(px(22.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(style::hover_fill(cx)))
+                            .child(
+                                Icon::from(IconName::CircleQuestionMark)
+                                    .with_size(px(14.))
+                                    .text_color(if explained {
+                                        style::accent(cx)
+                                    } else {
+                                        style::quiet_text(cx)
+                                    }),
+                            )
+                            .tip("Ask what this means")
+                            .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                if let Some(this) = this3.upgrade() {
+                                    this.update(cx, |this, cx| {
+                                        this.toggle_explain(index, window, cx)
+                                    });
+                                }
+                            }),
+                    ),
+            );
+        }
+        column
     }
 
     /// RowRenderer.asksText: the heading, then each ask with its answers. Over
@@ -2978,6 +3032,31 @@ fn tick_circle(ticked: bool, popping: Option<Duration>, cx: &App) -> impl IntoEl
     } else {
         div()
             .size(side)
+            .rounded_full()
+            .border_1()
+            .border_color(style::quiet_text(cx))
+            .into_any_element()
+    }
+}
+
+fn radio_circle(picked: bool, cx: &App) -> impl IntoElement {
+    let side = px(16.);
+    if picked {
+        div()
+            .size(side)
+            .flex_none()
+            .rounded_full()
+            .border_2()
+            .border_color(style::accent(cx))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(div().size(px(7.)).rounded_full().bg(style::accent(cx)))
+            .into_any_element()
+    } else {
+        div()
+            .size(side)
+            .flex_none()
             .rounded_full()
             .border_1()
             .border_color(style::quiet_text(cx))
