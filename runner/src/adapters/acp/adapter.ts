@@ -72,15 +72,43 @@ export const LIMITS_POLL_MS = 10 * 60_000;
 export const EDIT_RULE = 'acp:edit';
 
 type ConfigOption = { id?: string; category?: string; type?: string; currentValue?: unknown; options?: unknown[] };
-// Grok's `models` also says each model's effort levels and its default one.
+// Grok's `models` also says each model's effort levels and its default one;
+// Antigravity lists `<modelId>-<level>` entries there.
 type ModelState = { availableModels?: unknown[] } | null;
 type SessionResult = { sessionId?: string; configOptions?: ConfigOption[] | null; modes?: { currentModeId?: string; availableModes?: { id?: string }[] } | null; models?: ModelState };
 
-// The effort levels a model lists (Grok: _meta.reasoningEfforts), those that
-// are Threadbear's own, and the one it marks as its default.
-export function modelEfforts(models: ModelState | undefined): Map<string, { levels: EffortLevel[]; defaultEffort?: EffortLevel }> {
+function optionValues(options: unknown[] | undefined): string[] {
+  const out: string[] = [];
+  const add = (o: unknown) => {
+    if (!isPlainObject(o)) return;
+    if (Array.isArray(o.options)) return o.options.forEach(add);
+    if (typeof o.value === 'string' && o.value) out.push(o.value);
+  };
+  if (Array.isArray(options)) options.forEach(add);
+  return out;
+}
+
+function thoughtLevelInfo(options: ConfigOption[] | null | undefined): { levels: EffortLevel[]; defaultEffort?: EffortLevel; hasDefault: boolean } | undefined {
+  const opt = options?.find((o) => o.category === 'thought_level');
+  if (!opt) return undefined;
+  const values = optionValues(opt.options);
+  const levels = [...new Set(values.filter(isEffortLevel))].sort((a, b) => EFFORT_LEVELS.indexOf(a) - EFFORT_LEVELS.indexOf(b));
+  const hasDefault = values.includes('default');
+  const defaultEffort = isEffortLevel(opt.currentValue) && levels.includes(opt.currentValue) ? opt.currentValue : undefined;
+  return { levels, ...(defaultEffort ? { defaultEffort } : {}), hasDefault };
+}
+
+// The effort levels each model lists, those that are Threadbear's own, and
+// the one it marks as its default: Grok's `_meta.reasoningEfforts`, or
+// Antigravity's `<modelId>-<level>` entries in `models.availableModels`.
+export function modelEfforts(
+  models: ModelState | undefined,
+  options?: ConfigOption[] | null,
+  includeCurrentAsDefault = true,
+): Map<string, { levels: EffortLevel[]; defaultEffort?: EffortLevel }> {
   const out = new Map<string, { levels: EffortLevel[]; defaultEffort?: EffortLevel }>();
-  for (const m of Array.isArray(models?.availableModels) ? models.availableModels : []) {
+  const available = Array.isArray(models?.availableModels) ? models.availableModels : [];
+  for (const m of available) {
     if (!isPlainObject(m) || typeof m.modelId !== 'string' || !isPlainObject(m._meta) || !Array.isArray(m._meta.reasoningEfforts)) continue;
     const levels: EffortLevel[] = [];
     let defaultEffort: EffortLevel | undefined;
@@ -93,13 +121,35 @@ export function modelEfforts(models: ModelState | undefined): Map<string, { leve
     levels.sort((a, b) => EFFORT_LEVELS.indexOf(a) - EFFORT_LEVELS.indexOf(b));
     if (levels.length) out.set(m.modelId, { levels, ...(defaultEffort ? { defaultEffort } : {}) });
   }
+  const baseIds = new Set(optionValues(options?.find((o) => o.category === 'model')?.options));
+  if (baseIds.size) {
+    const byBase = new Map<string, Set<EffortLevel>>();
+    for (const m of available) {
+      if (!isPlainObject(m) || typeof m.modelId !== 'string') continue;
+      const dash = m.modelId.lastIndexOf('-');
+      if (dash <= 0) continue;
+      const base = m.modelId.slice(0, dash);
+      const level = m.modelId.slice(dash + 1);
+      if (!baseIds.has(base) || out.has(base) || !isEffortLevel(level)) continue;
+      const set = byBase.get(base) ?? new Set<EffortLevel>();
+      set.add(level);
+      byBase.set(base, set);
+    }
+    const currentThought = includeCurrentAsDefault ? options?.find((o) => o.category === 'thought_level')?.currentValue : undefined;
+    const currentDefault = isEffortLevel(currentThought) ? currentThought : undefined;
+    for (const [base, set] of byBase) {
+      const levels = [...set].sort((a, b) => EFFORT_LEVELS.indexOf(a) - EFFORT_LEVELS.indexOf(b));
+      const defaultEffort = currentDefault && levels.includes(currentDefault) ? currentDefault : undefined;
+      out.set(base, { levels, ...(defaultEffort ? { defaultEffort } : {}) });
+    }
+  }
   return out;
 }
 
 export function modelChoices(options: ConfigOption[] | null | undefined, models?: ModelState): ModelChoice[] {
   const model = options?.find((o) => o.category === 'model');
   if (!model || !Array.isArray(model.options)) return [];
-  const efforts = modelEfforts(models);
+  const efforts = modelEfforts(models, options);
   const out: ModelChoice[] = [];
   const add = (o: unknown) => {
     if (!isPlainObject(o)) return;
@@ -190,9 +240,44 @@ export class AcpAdapter implements AgentAdapter {
 
   // What session/new offers. It makes a session in the agent's own list; a
   // folder of temp means it's in nobody's way, and it's closed where the
-  // agent can.
+  // agent can. For an agent that only reports thought_level for the active
+  // model (OpenCode 2), switches through each model to read its effortLevels.
   async models(account: Account): Promise<ModelChoice[]> {
-    return this.shortLived(account, `models:${account.id}`, async (_p, r) => modelChoices(r?.configOptions, r?.models));
+    return this.shortLived(
+      account,
+      `models:${account.id}`,
+      async (p, r) => {
+        const choices = modelChoices(r?.configOptions, r?.models);
+        if (!r?.sessionId || !choices.length || choices.some((c) => c.effortLevels?.length)) return choices;
+        if (providerInfo(this.provider).effort === 'none') return choices;
+        const modelOpt = r.configOptions?.find((o) => o.category === 'model');
+        if (!modelOpt?.id) return choices;
+        const hasThought = Boolean(r.configOptions?.some((o) => o.category === 'thought_level'));
+        if (!hasThought && !this.deps.agent.probesModelEfforts) return choices;
+        const active = typeof modelOpt.currentValue === 'string' ? modelOpt.currentValue : undefined;
+        const probed = new Map<string, { levels: EffortLevel[]; defaultEffort?: EffortLevel }>();
+        const note = (id: string, opts: ConfigOption[] | null | undefined) => {
+          const tl = thoughtLevelInfo(opts);
+          if (tl?.levels.length) probed.set(id, { levels: tl.levels, ...(tl.defaultEffort ? { defaultEffort: tl.defaultEffort } : {}) });
+        };
+        if (active) note(active, r.configOptions);
+        for (const c of choices) {
+          if (c.id === active) continue;
+          try {
+            const next = await p.request<SessionResult>('session/set_config_option', { sessionId: r.sessionId, configId: modelOpt.id, value: c.id }, MODEL_PROBE_MS);
+            note(c.id, next?.configOptions);
+          } catch (e) {
+            if (e instanceof AcpExitedError || (e instanceof AcpRpcError && e.code === -32601)) break;
+          }
+        }
+        if (!probed.size) return choices;
+        return choices.map((c) => {
+          const e = probed.get(c.id);
+          return e ? { ...c, effortLevels: e.levels, ...(e.defaultEffort ? { defaultEffort: e.defaultEffort } : {}) } : c;
+        });
+      },
+      { deadlineMs: MODELS_DEADLINE_MS },
+    );
   }
 
   // A login's limits from the agent's own request (Grok's _x.ai/billing):
@@ -304,6 +389,9 @@ const USAGE_PROMPT_MS = 30_000;
 // recheck moves on. Antigravity 1.4.5's /usage takes 4 to 18 s, Grok's
 // _x.ai/billing under a second.
 const LIMITS_DEADLINE_MS = 50_000;
+// A short-lived models() read (OpenCode 2 probes ~100 models in ~400 ms).
+const MODELS_DEADLINE_MS = 20_000;
+const MODEL_PROBE_MS = 5_000;
 // A short-lived session's session/close: it's closed anyway after.
 const CLOSE_SESSION_MS = 5_000;
 // More than any answer is: what a runaway one adds past it is dropped.
@@ -480,14 +568,14 @@ export class AcpSession implements AgentSession {
     this.sessionId = this.sessionId ?? res.sessionId;
     if (typeof this.sessionId !== 'string' || !this.sessionId) throw new Error(`${name} started a session without an id`);
     this.noteOptions(res);
-    this.ownEfforts = modelEfforts(res.models);
+    this.ownEfforts = modelEfforts(res.models, res.configOptions, !opts.resume);
     if (!opts.resume) {
       const isHelper = opts.coordinator?.role === 'helper';
       this.preamble = [!isHelper && defs.length ? toolGuidance(defs) : '', !isHelper && defs.length ? (deps.extraGuidance?.() ?? '') : '', deps.agent.folderNote?.(opts.cwd) ?? '', opts.instructions ?? ''].filter(Boolean).join('\n\n') || undefined;
     }
     await this.applyMode();
     if (this.model) await this.applyModel(this.model);
-    if (this.effort) await this.applyEffort(this.effort);
+    if (this.effort !== undefined || opts.resume) await this.applyEffort(this.effort);
     const model = this.modelNow();
     this.sink.output({ kind: 'session', nativeSessionId: this.sessionId, ...(model ? { model } : {}) });
     this.state = 'ready';
@@ -599,14 +687,16 @@ export class AcpSession implements AgentSession {
     }
   }
 
-  // An agent that has a thought_level option (Grok's reasoning_effort) takes
-  // the thread's effort there; undefined is the model's own level. Others have
-  // none, and providers.ts says so, so the runner never sends them one.
+  // An agent that has a thought_level option (Grok's reasoning_effort,
+  // Antigravity's thinking_level, OpenCode 2's effort) takes the thread's
+  // effort there; undefined resets to an explicit "default" option when the
+  // agent offers one, else the model's own default level.
   private async applyEffort(effort: EffortLevel | undefined): Promise<void> {
     const option = this.configOptions.find((o) => o.category === 'thought_level');
     if (!option?.id) return;
     const model = this.modelNow();
-    const value = effort ?? (model ? this.ownEfforts.get(model)?.defaultEffort : undefined);
+    const modelDefault = model ? (this.ownEfforts.get(model)?.defaultEffort ?? this.opts.account.models?.find((m) => m.id === model)?.defaultEffort) : undefined;
+    const value: string | undefined = effort ?? (optionValues(option.options).includes('default') ? 'default' : modelDefault);
     if (!value || value === option.currentValue) return;
     try {
       const r = await this.proc.request<SessionResult>('session/set_config_option', { sessionId: this.sessionId, configId: option.id, value });

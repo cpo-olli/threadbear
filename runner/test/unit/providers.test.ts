@@ -104,3 +104,43 @@ test('a Grok thread takes an effort its model lists, and not one it does not', (
   assert.equal(r.notes.length, 1);
   assert.equal(h.runner.modelFits(grok, 'claude-opus-5-5'), false);
 });
+
+test('Gemini and OpenCode threads take efforts their models list, and drop efforts for models without any', () => {
+  assert.equal(PROVIDER_INFO.antigravity.effort, 'claude');
+  assert.equal(PROVIDER_INFO.opencode.effort, 'claude');
+  assert.equal(PROVIDER_INFO.cursor.effort, 'none');
+
+  const agy: Account = {
+    id: 'antigravity-main',
+    provider: 'antigravity',
+    title: 'Gemini',
+    configDir: '/a',
+    models: [
+      { id: 'gemini-4-neon', model: 'gemini-4-neon', title: 'Gemini 4 Neon', effortLevels: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+      { id: 'gemini-3.8-flash', model: 'gemini-3.8-flash', title: 'Gemini 3.8 Flash', effortLevels: ['low', 'medium', 'high'], defaultEffort: 'high' },
+    ],
+  };
+  const oc: Account = {
+    id: 'opencode-main',
+    provider: 'opencode',
+    title: 'OpenCode',
+    configDir: '/o',
+    models: [
+      { id: 'opencode/gpt-6-astra', model: 'opencode/gpt-6-astra', title: 'GPT-6 Astra', effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      { id: 'opencode/big-pickle', model: 'opencode/big-pickle', title: 'Big Pickle' },
+    ],
+  };
+  const h = makeHarness(undefined, {}, { accounts: new FakeAccounts([...withCodex(), agy, oc]) });
+  assert.deepEqual(h.runner.checkSettings(agy, 'gemini-4-neon', 'xhigh'), { model: 'gemini-4-neon', effort: 'xhigh', notes: [] });
+  const flashXhigh = h.runner.checkSettings(agy, 'gemini-3.8-flash', 'xhigh');
+  assert.equal(flashXhigh.effort, undefined);
+  assert.equal(flashXhigh.notes.length, 1);
+  const agyUltra = h.runner.checkSettings(agy, 'gemini-4-neon', 'ultra');
+  assert.equal(agyUltra.effort, undefined);
+  assert.match(agyUltra.notes[0], /Codex only/);
+
+  assert.deepEqual(h.runner.checkSettings(oc, 'opencode/gpt-6-astra', 'max'), { model: 'opencode/gpt-6-astra', effort: 'max', notes: [] });
+  const pickleHigh = h.runner.checkSettings(oc, 'opencode/big-pickle', 'high');
+  assert.equal(pickleHigh.effort, undefined);
+  assert.match(pickleHigh.notes[0], /Big Pickle doesn't offer High effort/);
+});

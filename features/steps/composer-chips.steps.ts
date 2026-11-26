@@ -108,6 +108,43 @@ Given('the runner also has logins outside any pool', async function (this: Threa
   assert.fail(`No pool tab didn't appear:\n${lines.join('\n')}`);
 });
 
+Given('the runner also has a Gemini login and an OpenCode login', async function (this: ThreadbearWorld) {
+  const out = await this.app.do({ cmd: 'mock', method: 'accounts', params: {} });
+  type MockAccount = { id: string; provider: string };
+  const { accounts } = JSON.parse(out.slice(out.indexOf('{'))) as { accounts: MockAccount[] };
+  const extra = [
+    {
+      id: 'antigravity-main',
+      provider: 'antigravity',
+      title: 'Gemini',
+      configDir: '~/.gemini',
+      defaultModel: 'gemini-4-neon',
+      models: [
+        { id: 'gemini-4-neon', model: 'gemini-4-neon', title: 'Gemini 4 Neon', effortLevels: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+        { id: 'gemini-3.8-flash', model: 'gemini-3.8-flash', title: 'Gemini 3.8 Flash', effortLevels: ['low', 'medium', 'high'], defaultEffort: 'high' },
+      ],
+    },
+    {
+      id: 'opencode-main',
+      provider: 'opencode',
+      title: 'OpenCode',
+      configDir: '~/.config/opencode',
+      models: [
+        { id: 'opencode/gpt-6-astra', model: 'opencode/gpt-6-astra', title: 'GPT-6 Astra', effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+        { id: 'opencode/big-pickle', model: 'opencode/big-pickle', title: 'Big Pickle' },
+      ],
+    },
+  ];
+  await this.app.do({ cmd: 'mock', method: 'accounts', params: { accounts: [...accounts, ...extra] } });
+  let lines: string[] = [];
+  for (let tries = 0; tries < 40; tries += 1) {
+    lines = await menuLines(this, 'model');
+    if (lines.some((l) => l.startsWith('# [ ] No pool'))) return;
+    await sleep(150);
+  }
+  assert.fail(`No pool tab didn't appear:\n${lines.join('\n')}`);
+});
+
 Then('the composer\'s permission mode is {string}', async function (this: ThreadbearWorld, mode: string) {
   await this.until(`permission mode ${mode}`, (d) => (d.composer as { mode?: string }).mode === mode);
 });

@@ -19,7 +19,8 @@ type ProviderInfo = {
   loginCommand: string  // run in a Terminal to sign a login in ("claude auth login")
   effort: "claude" | "codex" | "none" // which effort levels it offers: Claude's,
                         // those plus Codex's ultra, or none of Threadbear's own
-                        // (Grok: "codex", each model's effortLevels narrowing it)
+                        // (Grok: "codex"; Antigravity and OpenCode: "claude",
+                        // each model's effortLevels narrowing it)
   autoMode: "classifier" | "asks"     // Auto: a classifier judges each action, or
                         // it behaves like Ask (Codex)
   rewind: boolean       // can go back to an earlier message

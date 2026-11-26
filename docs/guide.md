@@ -1699,8 +1699,9 @@ do anything. A folder you've trusted in Grok runs its own Grok hooks, which
 could act before anything asks you, so there (and in your home folder, which
 Grok always trusts) Grok threads need Full access;
 take the folder out of Grok's trusted folders (`/hooks-untrust`) to use Ask
-or Auto. Denying a card ends Grok's turn, as it does in Grok's own app. Grok's models each list their effort levels (low to extra
-high), and the effort you pick is the one it runs at. Small jobs (titles,
+or Auto. Denying a card ends Grok's turn, as it does in Grok's own app. Grok,
+Gemini and OpenCode models that support effort levels each list theirs in the
+model picker, and the effort you pick is the one the thread runs at. Small jobs (titles,
 summaries, the librarian and fuzzy Wake when…) run on the pool you pick in
 Settings > Models, trying Claude first, then Codex, then Grok or OpenCode
 logins in that same pool when a provider is out of room, or in any custom

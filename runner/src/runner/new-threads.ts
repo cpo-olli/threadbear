@@ -350,7 +350,8 @@ export const newThreadsPart = {
     if (effort) {
       const row = modelRow(account, model ?? account.defaultModel);
       const noUltra = providerInfo(provider).effort === 'claude';
-      const offered = (e: EffortLevel) => !(noUltra && e === 'ultra') && (!row?.effortLevels || row.effortLevels.includes(e));
+      const hasEffortList = Boolean(account.models?.some((m) => m.effortLevels?.length));
+      const offered = (e: EffortLevel) => !(noUltra && e === 'ultra') && (row?.effortLevels ? row.effortLevels.includes(e) : !(row && hasEffortList));
       if (!offered(effort)) {
         const fallback = this.defaultEffortFor(provider);
         const next = fallback && fallback !== effort && offered(fallback) ? fallback : undefined;

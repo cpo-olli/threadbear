@@ -86,6 +86,35 @@ Feature: The chips under the message box
     And I click "GPT-6.1-Sol" in the model picker
     Then the model chip says "Personal · GPT-6.1-Sol · Low"
 
+  # Per-model effort levels on Gemini and OpenCode, and no effort bar on a
+  # model that omits them when sibling models list them (26 Nov): Swift is frozen.
+  @composer.modelpicker @swift-pending
+  Scenario: The model picker shows each Gemini and OpenCode model's effort levels, and hides them when a model has none
+    Given the runner also has a Gemini login and an OpenCode login
+    When I open the model picker
+    And I click "Pool: No pool" in the model picker
+    And I click "Provider: Antigravity" in the model picker
+    And I click "Gemini 4 Neon" in the model picker
+    Then the model chip says "Gemini · Gemini 4 Neon · High"
+    And the "model" menu has a row "[x] High"
+    And the "model" menu has a row "[ ] Extra high"
+    When I pick "Low" from the "model" menu
+    Then the model chip says "Gemini · Gemini 4 Neon · Low"
+    When I open the model picker
+    And I click "Gemini 3.8 Flash" in the model picker
+    Then the "model" menu has a row "[x] Low"
+    And the "model" menu has a row "[ ] High"
+    And the "model" menu has no row "[ ] Extra high"
+    And the "model" menu has no row "[x] Extra high"
+    When I open the model picker
+    And I click "Provider: OpenCode" in the model picker
+    And I click "GPT-6 Astra" in the model picker
+    Then the "model" menu has a row "[ ] High"
+    When I open the model picker
+    And I click "Big Pickle" in the model picker
+    Then the "model" menu has no row "[ ] High"
+    And the "model" menu has no row "[x] High"
+
   # The Login line under the effort levels (Mike's pick, 12 Nov): the Swift
   # app is frozen with its "Pinned to … · Unpin" line, so these are GPUI's.
   @composer.modelpicker @swift-pending

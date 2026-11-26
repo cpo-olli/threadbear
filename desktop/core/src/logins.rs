@@ -282,11 +282,16 @@ impl RunnerLogins {
         if self.provider(provider).and_then(|p| p.effort.as_deref()) == Some("none") {
             return Vec::new();
         }
-        if let Some(choice) = model
-            .and_then(|m| choice_for(m, choices))
-            .filter(|c| !c.effort_levels.is_empty())
-        {
-            return choice.effort_levels.clone();
+        if let Some(choice) = model.and_then(|m| choice_for(m, choices)) {
+            if !choice.effort_levels.is_empty() {
+                return choice.effort_levels.clone();
+            }
+            // When the login's model list reports effortLevels, a model that
+            // omits them (Haiku 4.5, an OpenCode model with no thinking option)
+            // takes no effort level.
+            if choices.iter().any(|c| !c.effort_levels.is_empty()) {
+                return Vec::new();
+            }
         }
         match self.provider(provider).and_then(|p| p.effort.as_deref()) {
             Some("none") => Vec::new(),
@@ -618,6 +623,7 @@ pub fn effort_levels(model: Option<&str>, choices: &[ModelChoice], provider: &st
     };
     match model.and_then(|m| choice_for(m, choices)) {
         Some(choice) if !choice.effort_levels.is_empty() => choice.effort_levels.clone(),
+        Some(_) if choices.iter().any(|c| !c.effort_levels.is_empty()) => Vec::new(),
         _ => provider_levels(),
     }
 }
@@ -1753,6 +1759,82 @@ mod tests {
         assert_eq!(
             all_pooled.resolve_picker_pool(Some(UNPOOLED_COLUMN), "@pinned"),
             "claude"
+        );
+    }
+
+    #[test]
+    fn effort_levels_follow_model_and_hide_for_models_without_any() {
+        let l = RunnerLogins::from_hello(&json!({
+            "providers": [
+                { "id": "antigravity", "name": "Gemini", "effort": "claude" },
+                { "id": "opencode", "name": "OpenCode", "effort": "claude" },
+                { "id": "claude", "name": "Claude", "effort": "claude" }
+            ],
+            "accounts": [
+                {
+                    "id": "antigravity-main",
+                    "provider": "antigravity",
+                    "title": "Gemini",
+                    "defaultModel": "gemini-3.8-flash",
+                    "models": [
+                        { "id": "gemini-4-neon", "title": "Gemini 4 Neon", "effortLevels": ["low", "medium", "high", "xhigh"], "defaultEffort": "high" },
+                        { "id": "gemini-3.8-flash", "title": "Gemini 3.8 Flash", "effortLevels": ["low", "medium", "high"], "defaultEffort": "high" }
+                    ]
+                },
+                {
+                    "id": "opencode-main",
+                    "provider": "opencode",
+                    "title": "OpenCode",
+                    "models": [
+                        { "id": "opencode/gpt-6-astra", "title": "GPT-6 Astra", "effortLevels": ["low", "medium", "high", "xhigh", "max"] },
+                        { "id": "opencode/big-pickle", "title": "Big Pickle" }
+                    ]
+                },
+                {
+                    "id": "claude-main",
+                    "provider": "claude",
+                    "title": "Claude",
+                    "models": [
+                        { "id": "opus", "title": "Opus 5.5", "effortLevels": ["low", "medium", "high", "xhigh", "max"] },
+                        { "id": "claude-haiku-4-5-20251001", "title": "Haiku 4.5" }
+                    ]
+                }
+            ]
+        }));
+        let agy = &l.account("antigravity-main").unwrap().models;
+        assert_eq!(
+            l.effort_levels(Some("gemini-4-neon"), agy, "antigravity"),
+            vec!["low", "medium", "high", "xhigh"]
+        );
+        assert_eq!(
+            l.effort_levels(Some("gemini-3.8-flash"), agy, "antigravity"),
+            vec!["low", "medium", "high"]
+        );
+
+        let oc = &l.account("opencode-main").unwrap().models;
+        assert_eq!(
+            l.effort_levels(Some("opencode/gpt-6-astra"), oc, "opencode"),
+            vec!["low", "medium", "high", "xhigh", "max"]
+        );
+        assert!(
+            l.effort_levels(Some("opencode/big-pickle"), oc, "opencode")
+                .is_empty(),
+            "a model omitting effortLevels when sibling models list them offers none"
+        );
+
+        let claude = &l.account("claude-main").unwrap().models;
+        assert!(l
+            .effort_levels(Some("claude-haiku-4-5-20251001"), claude, "claude")
+            .is_empty());
+
+        // When no model on the login reports effortLevels (older CLI), fall back to the provider's levels.
+        let legacy = vec![ModelChoice {
+            id: "opus".into(),
+            ..Default::default()
+        }];
+        assert_eq!(
+            l.effort_levels(Some("opus"), &legacy, "claude"),
+            vec!["low", "medium", "high", "xhigh", "max"]
         );
     }
 }

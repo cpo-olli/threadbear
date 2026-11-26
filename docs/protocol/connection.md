@@ -475,14 +475,17 @@ still `-32602`.)
   `system.note` ("sonnet isn't a Codex model, so this thread uses
   GPT-6.1-Sol").
 - An effort the model doesn't list in `effortLevels` (when known) is dropped
-  with a note. `ultra` on a Claude thread always is.
+  with a note; when other models on the same account list `effortLevels`, a
+  model that omits them takes no effort level. `ultra` on a provider with
+  `effort: "claude"` is always dropped.
 - An ACP agent's model counts only if that account's `models` lists it, never
-  by its name, and a Claude or Codex id goes to them first. OpenCode and
-  Cursor have no effort levels (`ProviderInfo.effort` is `"none"`): an
-  `effort` is dropped. Grok's models list theirs (`effortLevels`, from
-  `_meta.reasoningEfforts` in its `session/new`), and a thread's effort is set
-  as the session's `thought_level` config option, the model's own default for
-  none.
+  by its name, and a Claude or Codex id goes to them first. Cursor has no
+  effort levels (`ProviderInfo.effort` is `"none"`): an `effort` is dropped.
+  Grok, Antigravity (Gemini) and OpenCode models list theirs (`effortLevels`),
+  from `_meta.reasoningEfforts` (Grok), `<model>-<level>` entries in
+  `models.availableModels` (Antigravity), or per-model `thought_level` options
+  (OpenCode). A thread's effort is set as the session's `thought_level` config
+  option, `"default"` (when offered) or the model's own default for none.
 
 ## Notifications (runner to app)
 

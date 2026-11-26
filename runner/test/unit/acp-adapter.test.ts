@@ -1795,3 +1795,45 @@ test("Antigravity: a coordinator's Agent Archive read goes ahead; a mismatched o
   assert.deepEqual(fresh[0], { outcome: { outcome: 'selected', optionId: 'reject' } });
   assert.equal(r.cards.length, 0, 'a coordinator never puts up a card for these');
 });
+
+test('Antigravity: models list per-model effort levels and defaultEffort, and turns apply thinking_level', async () => {
+  const r = agy({ mode: 'full', opts: { model: 'gemini-4-neon', effort: 'xhigh' } });
+  const models = await r.adapter.models(r.account);
+  assert.deepEqual(models, [
+    { id: 'gemini-4-neon', model: 'gemini-4-neon', title: 'Gemini 4 Neon', effortLevels: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+    { id: 'gemini-3.8-flash', model: 'gemini-3.8-flash', title: 'Gemini 3.8 Flash', effortLevels: ['low', 'medium', 'high'], defaultEffort: 'high' },
+  ]);
+  const s = r.start();
+  await turn(r, s, 'hello');
+  const sets = () => r.log().flatMap((l) => (l.set ? [l.set] : []));
+  assert.deepEqual(sets(), [{ model: 'gemini-4-neon' }, { thinking_level: 'xhigh' }]);
+  assert.ok(r.outputs.some((o) => o.kind === 'effort' && o.level === 'xhigh'));
+  // Clearing back to Default resets thinking_level to the model's default (high).
+  await s.setEffort(undefined);
+  await turn(r, s, 'hello');
+  assert.deepEqual(sets().at(-1), { thinking_level: 'high' });
+  await s.setModel('gemini-3.8-flash');
+  await s.setEffort('low');
+  await turn(r, s, 'hello');
+  assert.deepEqual(sets().slice(-2), [{ model: 'gemini-3.8-flash' }, { thinking_level: 'low' }]);
+});
+
+test('OpenCode: models probe per-model thought_level options and turns apply and reset effort to default', async () => {
+  const r = rig({ mode: 'full', env: { FAKE_ACP_OPENCODE_EFFORTS: '1' }, opts: { model: 'fake/one', effort: 'max' } });
+  const models = await r.adapter.models(r.account);
+  assert.deepEqual(models, [
+    { id: 'fake/one', model: 'fake/one', title: 'Fake One', effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+    { id: 'fake/two', model: 'fake/two', title: 'Fake Two' },
+  ]);
+  const before = r.log().length;
+  const s = r.start();
+  await turn(r, s, 'hello');
+  const sets = () => r.log().slice(before).flatMap((l) => (l.set ? [l.set] : []));
+  assert.deepEqual(sets(), [{ model: 'fake/one' }, { effort: 'max' }]);
+  assert.ok(r.outputs.some((o) => o.kind === 'effort' && o.level === 'max'));
+  // Clearing back to Default sends OpenCode's explicit "default" option.
+  await s.setEffort(undefined);
+  await turn(r, s, 'hello');
+  assert.deepEqual(sets().at(-1), { effort: 'default' });
+});
+

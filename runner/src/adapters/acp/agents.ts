@@ -107,6 +107,10 @@ export type AcpAgent = {
   // reads it in a short-lived process every few minutes and soon after each
   // of its turns (AcpAdapter.limitsPollMs, limit-recheck.ts).
   limits?: { method: string; read(result: unknown): AcpLimits | undefined } | { command: string; read(text: string, session: unknown): AcpLimits | undefined };
+  // Reports thought_level only for the session's active model (OpenCode 2),
+  // so models() switches through each model to discover its effortLevels even
+  // when the initial model has none.
+  probesModelEfforts?: boolean;
 };
 
 function isExecutableFile(file: string): boolean {
@@ -477,6 +481,7 @@ export const ACP_AGENTS: Record<AcpProvider, AcpAgent> = {
     env: opencodeEnv,
     identifies: (init) => /opencode/i.test(init.agentInfo?.name ?? '') || Boolean(init.authMethods?.some((m) => m.id === 'opencode-login')),
     modeFor: (mode) => (mode === 'plan' ? 'plan' : 'build'),
+    probesModelEfforts: true,
   },
   cursor: {
     provider: 'cursor',
