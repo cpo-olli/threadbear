@@ -3770,6 +3770,16 @@ export class Runner {
     if (!interrupted) body.error = message;
     const ev = this.emit(st, body, turn.turnId);
     this.endTurn(st, ev.seq, interrupted ? 'idle' : 'error');
+    // A coordinator's helper whose CLI died, wouldn't start or was stopped:
+    // its coordinator hears, as it does when a helper's turn ends
+    // (completeTurn). Before, the run stayed "running" for good: the
+    // coordinator never woke, read as waiting on it, and refused to start
+    // another helper (Codex's review, 26 Nov 2026). Not while the runner
+    // stops: the next runner reconciles interrupted helpers itself.
+    if (rec.coordinatorHelperFor && !this.stopping) {
+      if (rt.turn) this.coordinators?.noteHelperTurn(rec.id, rt.turn.turnId);
+      else if (!rec.queue.length && !rec.waitingForNetwork) this.coordinators?.onHelperTurn(rec.id, interrupted ? 'interrupted' : 'failed', turn.lastText || message, turn.turnId);
+    }
     // A review whose CLI died or wouldn't start: the thread it reviews
     // hears, rather than sleeping a day. Not one Mike stopped.
     if (!interrupted) this.releaseFailedReview(st, message, turn.lastText);

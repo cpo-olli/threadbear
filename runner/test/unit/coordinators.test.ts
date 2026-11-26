@@ -165,21 +165,24 @@ test('a coordinator with a helper still working reads as busy, not hibernating f
   const { coordinator } = c.create({ projectId: project.id, accountId: 'antigravity-main', model: 'gemini-4-neon' });
   await tick();
   const endsDone = (s: (typeof antigravity.sessions)[number]) => {
-    s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e1', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
+    s.out({ kind: 'event', event: { type: 'tool.call', itemId: `e${Math.random()}`, name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
     s.result('completed');
   };
-  endsDone(antigravity.sessions.at(-1)!);
-  await tick();
-  // A check-in is booked for later today.
+  const sent: string[] = [];
+  h.runner.onNotification((n) => {
+    if (n.method === 'thread.updated' && n.params.thread.id === coordinator.threadId && n.params.thread.waitState) sent.push(n.params.thread.waitState);
+  });
+  // As on the day: a check-in is booked, and the coordinator starts its
+  // helper during its turn, then ends the turn with nothing for Mike.
   h.runner.schedulesFor = () => [{ id: 's1', title: 'First-day check', text: 'look', whenText: 'today', threadId: coordinator.threadId, nextRunAt: '2099-01-01T00:00:00Z' } as Schedule];
-  assert.equal(h.runner.get(coordinator.threadId).waitState, 'scheduled');
-
   const started = c.startHelper(project.id, { title: 'Build triage', doneWhen: 'Deployed', brief: 'Build it' });
+  endsDone(antigravity.sessions.find((s) => s.opts.threadId === coordinator.threadId)!);
+  await tick();
   await tick();
   assert.equal(h.runner.get(coordinator.threadId).waitState, 'job', 'its helper is still at work');
-  assert.equal(h.runner.list(['inbox', 'snoozed', 'archived']).find((t) => t.id === coordinator.threadId)?.waitState, 'job');
+  assert.equal(sent.at(-1), 'job', 'the apps were told');
+  assert.ok(!sent.includes('scheduled'));
   const said = () => h.runner.events(coordinator.threadId, { limit: 10_000 }).events.filter((e) => e.type === 'system.note' && e.text.startsWith('Moved to Hibernating')).length;
-  await tick();
   assert.equal(said(), 0, 'no "nothing needs you" line while the helper works');
 
   // The helper finishes: the coordinator is woken, reads it and ends its turn.
@@ -192,6 +195,31 @@ test('a coordinator with a helper still working reads as busy, not hibernating f
   await tick();
   assert.equal(h.runner.get(coordinator.threadId).waitState, 'scheduled');
   assert.equal(c.helpersWorking(started.helperId), 0, 'only a coordinator thread counts helpers');
+  c.stop();
+});
+
+test('a helper whose CLI dies reaches its coordinator, which stops waiting on it', async () => {
+  const { h, c, project, antigravity } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'antigravity-main', model: 'gemini-4-neon' });
+  await tick();
+  antigravity.sessions.at(-1)!.result('completed');
+  await tick();
+  const started = c.startHelper(project.id, { title: 'Build triage', doneWhen: 'Deployed', brief: 'Build it' });
+  await tick();
+  assert.equal(c.helpersWorking(coordinator.threadId), 1);
+  const helperSession = antigravity.sessions.find((s) => s.opts.threadId === started.helperId)!;
+  helperSession.text('m1', 'Halfway through the migration.');
+  helperSession.sink.exited(new Error('Gemini exited with code 1'));
+  await tick();
+  const task = c.get(project.id).tasks[0];
+  assert.equal(task.run?.status, 'failed');
+  assert.equal(task.state, 'blocked');
+  assert.equal(c.helpersWorking(coordinator.threadId), 0);
+  assert.equal(h.runner.get(coordinator.threadId).subagents?.[0].status, 'failed');
+  const coordSession = antigravity.sessions.filter((s) => s.opts.threadId === coordinator.threadId).at(-1)!;
+  assert.ok(coordSession.sent.some((m) => m.text.includes('A helper turn finished') && m.text.includes('"status":"failed"')), 'the coordinator is woken with the failure');
+  // And it can start the next one.
+  assert.doesNotThrow(() => c.resumeHelper(project.id, { helperId: started.helperId, brief: 'Carry on from the checkpoint' }));
   c.stop();
 });
 
