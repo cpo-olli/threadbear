@@ -971,10 +971,11 @@ impl Threadbear {
         self.save_settings_soon(cx);
     }
 
-    /// Folds and the Inbox's sort, saved as they change.
+    /// Folds, section order and the Inbox's sort, saved as they change.
     pub(crate) fn sidebar_settings_changed(&mut self, cx: &mut Context<Self>) {
         self.settings.saved.collapsed_sections =
             Some(self.folded.iter().map(|k| k.to_string()).collect());
+        self.settings.set_section_order(&self.sidebar.section_order);
         self.settings.set_inbox_order(self.sidebar.order);
         self.save_settings_soon(cx);
     }
@@ -2132,6 +2133,7 @@ impl Threadbear {
             // the list) can't take the start of a swipe from them.
             .child(self.page_swipe_watch(cx))
             .child(self.row_press_watch(cx))
+            .child(self.section_drag_watch(cx))
             .child(self.render_activity_bar(window, cx))
             .child(
                 div()
@@ -2156,6 +2158,7 @@ impl Threadbear {
                     .child(arc_layer),
             )
             .child(self.flight.overlay(cx))
+            .children(self.render_section_drag_overlay(cx))
             // Confetti for the rare wins (confetti.rs).
             .child(self.confetti.overlay(cx))
             .children(

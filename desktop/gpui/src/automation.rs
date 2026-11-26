@@ -292,6 +292,9 @@ async fn run(
     if cmd["cmd"] == "row-drag" {
         return crate::row_swipe::row_drag_command(&weak, window, cmd, cx).await;
     }
+    if cmd["cmd"] == "section-drag" {
+        return crate::section_drag::section_drag_command(&weak, window, cmd, cx).await;
+    }
     if cmd["cmd"] == "page-swipe" {
         return crate::swipe_nav::page_swipe_command(&weak, window, cmd, cx).await;
     }

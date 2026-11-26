@@ -105,7 +105,7 @@ export function Lists({ token, selected, isNew }: { token: string; selected?: st
   };
   const rows: Record<SectionKey, Row[]> = { coordinators, starred, inbox: inInbox, running, hibernating: asleep, archived: archive.rows };
   const isOpen = (s: SectionKey) => narrowing || !folded.has(s);
-  const drawn = (['coordinators', 'starred', 'inbox', 'running', 'hibernating', 'archived'] as SectionKey[]).filter(isOpen).flatMap((s) => rows[s].map((r) => r.threadId));
+  const drawn = (['starred', 'coordinators', 'inbox', 'running', 'hibernating', 'archived'] as SectionKey[]).filter(isOpen).flatMap((s) => rows[s].map((r) => r.threadId));
   const settling = narrowing && (!snoozed || !den || (!!q && (q !== sought || !older)));
   const nothing = narrowing && !settling && drawn.length === 0;
 
@@ -153,8 +153,8 @@ export function Lists({ token, selected, isNew }: { token: string; selected?: st
       ) : (
         <nav className="lists" ref={nav} tabIndex={-1}>
           {nothing ? <div className="list note">No threads match.</div> : null}
-          {count.coordinators > 0 ? section('coordinators', 'Coordinators', <Icon.Folder />) : null}
           {count.starred > 0 ? section('starred', 'Starred', <Icon.Star />) : null}
+          {count.coordinators > 0 ? section('coordinators', 'Coordinators', <Icon.Folder />) : null}
           {count.inbox > 0 || !narrowing ? section('inbox', 'Inbox', <Icon.Inbox />, <OrderMenu order={order} pick={pickOrder} />, count.inbox === 0 ? <div className="list note">Nothing waiting.</div> : null) : null}
           {count.running > 0 ? section('running', 'Running', <Icon.Bolt />) : null}
           {count.hibernating > 0 ? section('hibernating', 'Hibernating', <Icon.Moon />, undefined, !snoozed ? <div className="list note">Loading…</div> : null) : null}

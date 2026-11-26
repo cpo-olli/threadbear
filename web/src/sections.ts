@@ -4,8 +4,8 @@
 // shared/cases/wait-states.json. No React here, so the tests can run it bare.
 import { folderName } from './format.ts';
 
-export type SectionKey = 'coordinators' | 'starred' | 'inbox' | 'running' | 'hibernating' | 'archived';
-export const SECTIONS: SectionKey[] = ['coordinators', 'starred', 'inbox', 'running', 'hibernating', 'archived'];
+export type SectionKey = 'starred' | 'coordinators' | 'inbox' | 'running' | 'hibernating' | 'archived';
+export const SECTIONS: SectionKey[] = ['starred', 'coordinators', 'inbox', 'running', 'hibernating', 'archived'];
 
 export type InboxOrder = 'needsYou' | 'newest' | 'oldest';
 

@@ -946,6 +946,7 @@ impl Threadbear {
             || crate::reply_links::left_held()
             || self.swipe_nav.under_way()
             || self.sidebar.gestures.under_way()
+            || self.sidebar.section_drag.under_way()
             || self.sidebar.menu.is_some()
             || crate::tips::any_menu_up()
             || gpui_kit::base::GlobalState::is_in_deferred_context(cx)
@@ -1011,6 +1012,7 @@ impl Threadbear {
             || crate::reply_links::left_held()
             || self.swipe_nav.under_way()
             || self.sidebar.gestures.under_way()
+            || self.sidebar.section_drag.under_way()
         {
             return s("the drag or swipe ends");
         }

@@ -74,6 +74,7 @@ pub mod row_swipe;
 pub mod runner_settings;
 pub mod runners;
 pub mod schedules;
+pub mod section_drag;
 pub mod selection_copy;
 pub mod send_later;
 pub mod shortcuts;

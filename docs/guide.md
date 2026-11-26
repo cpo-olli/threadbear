@@ -80,9 +80,12 @@ it to another login; it carries on by itself when the limit resets.
 
 To keep a thread at the very top, star it: hover its row and press the star,
 or use its right-click or ... menu. Starred threads sit in a Starred section
-above the Inbox, whatever they're doing, hibernating ones too, in the order you
-starred them, so they don't jump around. Archiving one moves it to Archived;
-bring it back and it's starred again.
+at the top by default (above Coordinators and Inbox), whatever they're doing,
+hibernating ones too, in the order you starred them, so they don't jump around.
+Archiving one moves it to Archived; bring it back and it's starred again.
+You can drag any section heading up or down to rearrange the sidebar's
+sections; open sections fold while you drag and reopen in the new order when
+you drop, and Threadbear remembers your order.
 
 The search box at the top, beside the New thread button, looks through
 every thread, the put-away ones too. Type part of a title, or of a thread's
@@ -1243,7 +1246,7 @@ project's page says so and nothing is read.
 With the **Project coordinators** experiment enabled, a project's page offers
 **Add a coordinator** with the ordinary pool and model picker, and you can switch
 its model or provider at any time from the composer. It runs on this Mac; its
-conversation stays in a Coordinators section above Starred, while routine helpers
+conversation stays in a Coordinators section below Starred by default, while routine helpers
 run as hidden sessions out of the inbox and appear on the Activity tab.
 The project home has Conversation, Activity, To-dos and Threads tabs, with
 Highlights keeping the project's shared goals, state and notes beside them. You

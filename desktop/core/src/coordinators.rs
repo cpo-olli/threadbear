@@ -143,7 +143,7 @@ impl Coordinator {
     }
 }
 
-/// Coordinators keep their place above Starred. Their ordinary thread is
+/// Coordinators sit below Starred by default. Their ordinary thread is
 /// removed from every other section exactly once, except after archiving.
 pub fn sections(
     mut sections: Vec<Section<Arc<ThreadSummary>>>,
@@ -190,8 +190,9 @@ pub fn sections(
     rows.extend(remote);
     sections.retain(|s| !s.rows.is_empty() || s.key == "inbox");
     if !rows.is_empty() {
+        let at = usize::from(sections.first().is_some_and(|s| s.key == "starred"));
         sections.insert(
-            0,
+            at,
             Section {
                 key: "coordinators",
                 title: "Coordinators",
@@ -275,27 +276,39 @@ mod tests {
     }
 
     #[test]
-    fn coordinator_moves_once_above_starred_and_archived_stays_put() {
+    fn coordinator_moves_once_below_starred_and_archived_stays_put() {
         let c =
             Coordinator::decode(&json!({"projectId":"p","threadId":"t","state":"paused"})).unwrap();
+        let starred = Arc::new(ThreadSummary {
+            id: "s".to_owned(),
+            starred_at: Some("2026-11-06T09:00:00Z".to_owned()),
+            ..Default::default()
+        });
         let thread = Arc::new(ThreadSummary {
             id: "t".to_owned(),
             ..Default::default()
         });
         let result = sections(
-            vec![Section {
-                key: "inbox",
-                title: "Inbox",
-                rows: vec![thread.clone()],
-            }],
+            vec![
+                Section {
+                    key: "starred",
+                    title: "Starred",
+                    rows: vec![starred],
+                },
+                Section {
+                    key: "inbox",
+                    title: "Inbox",
+                    rows: vec![thread.clone()],
+                },
+            ],
             std::slice::from_ref(&c),
         );
         assert_eq!(
             result.iter().map(|s| s.key).collect::<Vec<_>>(),
-            ["coordinators", "inbox"]
+            ["starred", "coordinators", "inbox"]
         );
-        assert_eq!(result[0].rows.len(), 1);
-        assert!(result[1].rows.is_empty());
+        assert_eq!(result[1].rows.len(), 1);
+        assert!(result[2].rows.is_empty());
         let result = sections(
             vec![Section {
                 key: "archived",

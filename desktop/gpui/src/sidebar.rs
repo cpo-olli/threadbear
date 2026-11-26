@@ -450,6 +450,8 @@ pub(crate) enum MenuAction {
 /// The sidebar's own state; the app holds one of these (`Threadbear::sidebar`).
 pub(crate) struct SidebarState {
     pub(crate) order: InboxOrder,
+    /// Section headings' order in the Threads sidebar, persisted in settings.
+    pub(crate) section_order: Vec<&'static str>,
     /// The row under the pointer.
     pub(crate) hovered: Option<String>,
     /// As `hover` in the Swift app's automation: a row shown as if the
@@ -497,6 +499,8 @@ pub(crate) struct SidebarState {
     pub(crate) far: std::rc::Rc<crate::far_rows::FarRows>,
     /// A row swiped or dragged with the mouse (row_swipe.rs).
     pub(crate) gestures: crate::row_swipe::RowGestures,
+    /// A section heading dragged to reorder sections (section_drag.rs).
+    pub(crate) section_drag: crate::section_drag::SectionDragState,
     /// Where the Inbox's sort button was last drawn, for its menu to hang
     /// from the button, as a macOS pull-down does, wherever the click was.
     sort_button: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
@@ -548,6 +552,7 @@ impl SidebarState {
         });
         SidebarState {
             order: InboxOrder::default(),
+            section_order: threadbear_core::section_drag::DEFAULT_SECTION_ORDER.to_vec(),
             hovered: None,
             hover_override: None,
             archive_limit: rows::ARCHIVE_FIRST,
@@ -569,6 +574,7 @@ impl SidebarState {
             motion: Default::default(),
             far: Default::default(),
             gestures: Default::default(),
+            section_drag: Default::default(),
             sort_button: Default::default(),
             _tick: tick,
         }
@@ -2020,6 +2026,15 @@ impl Threadbear {
         let query = self.search.read(cx).value().trim().to_lowercase();
         let searching = !query.is_empty();
         let mut sections = self.shown_sections(cx, now);
+        let drag_active = self.sidebar.section_drag.is_active();
+        let dragged_key = self.sidebar.section_drag.dragged_key();
+        if let Some(preview) = self.sidebar.section_drag.preview_order() {
+            let ordered = threadbear_core::section_drag::reorder_sections(
+                std::mem::take(Rc::make_mut(&mut sections)),
+                &preview,
+            );
+            *Rc::make_mut(&mut sections) = ordered;
+        }
         let nesting = self.shown_nesting(cx, now);
         // A thread whose page is on its way to Archived or Hibernating isn't
         // listed or counted there until it lands (archive_flight.rs). Only
@@ -2070,13 +2085,18 @@ impl Threadbear {
                     .child("No threads match."),
             );
         } else {
+            let visible_count = sections
+                .iter()
+                .filter(|s| !(s.rows.is_empty() && (s.key != "inbox" || searching)))
+                .count();
+            let draggable = !searching && visible_count > 1;
             for section in sections.iter() {
                 // Empty sections other than Inbox are left out, and Inbox too
                 // while searching (`ThreadSection`).
                 if section.rows.is_empty() && (section.key != "inbox" || searching) {
                     continue;
                 }
-                let folded = !searching && self.folded.contains(section.key);
+                let folded = !searching && (self.folded.contains(section.key) || drag_active);
                 let total = section.rows.len();
                 // The Archived section shows the most recent few (`ArchiveRows`).
                 let shown = if section.key == "archived" {
@@ -2089,9 +2109,22 @@ impl Threadbear {
                     (total, 0)
                 };
                 let heading_key = format!("heading:{}", section.key);
-                let heading = self
-                    .render_heading(section.key, section.title, total, folded, searching, &p, cx)
-                    .into_any_element();
+                let heading = if dragged_key == Some(section.key) {
+                    self.render_section_drag_slot(&p)
+                } else {
+                    self.render_heading(
+                        section.key,
+                        section.title,
+                        total,
+                        folded,
+                        searching,
+                        draggable,
+                        drag_active,
+                        &p,
+                        cx,
+                    )
+                    .into_any_element()
+                };
                 list = list.child(motion.row(&heading_key, heading));
                 drawn.push(heading_key);
                 // A fold under way draws the rows while they ease shut, and
@@ -2312,6 +2345,7 @@ impl Threadbear {
                     .child(crate::archive_flight::mark(
                         crate::archive_flight::Mark::List,
                     ))
+                    .child(self.sidebar.section_drag.viewport_marker())
                     .child(
                         div()
                             .id("sidebar-list")
@@ -2454,8 +2488,8 @@ impl Threadbear {
         cx.notify();
     }
 
-    /// An inbox heading: its symbol, folding the section, and the Inbox's
-    /// sort button at its end.
+    /// An inbox heading: its symbol, folding the section, dragging to reorder,
+    /// and the Inbox's sort button at its end.
     #[expect(
         clippy::too_many_arguments,
         reason = "baselined when the lint was turned on (20 Nov 2026); take it off when this is next split up"
@@ -2467,6 +2501,8 @@ impl Threadbear {
         count: usize,
         folded: bool,
         searching: bool,
+        draggable: bool,
+        drag_active: bool,
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -2478,8 +2514,10 @@ impl Threadbear {
             "hibernating" => "moon.zzz",
             _ => "archivebox",
         };
-        let trailing = (key == "inbox").then(|| self.render_sort_button(p, cx).into_any_element());
-        self.section_heading(
+        let trailing = (key == "inbox" && !drag_active)
+            .then(|| self.render_sort_button(p, cx).into_any_element());
+        let drag = draggable.then_some((key, title, symbol, count));
+        self.section_heading_inner(
             key,
             title,
             symbol,
@@ -2487,6 +2525,7 @@ impl Threadbear {
             folded,
             !searching,
             trailing,
+            drag,
             p,
             move |this, cx| {
                 let opening = this.folded.remove(key);
@@ -2502,7 +2541,7 @@ impl Threadbear {
 
     /// Starts a heading's fold, and ends it once it's run, so a closed
     /// section stops drawing its rows (a click mid-fold starts another).
-    fn start_fold(&mut self, key: &'static str, opening: bool, cx: &mut Context<Self>) {
+    pub(crate) fn start_fold(&mut self, key: &'static str, opening: bool, cx: &mut Context<Self>) {
         self.sidebar.fold_serial += 1;
         let serial = self.sidebar.fold_serial;
         self.sidebar.folding.insert(key, Fold { opening, serial });
@@ -2543,6 +2582,29 @@ impl Threadbear {
         folded: bool,
         foldable: bool,
         trailing: Option<AnyElement>,
+        p: &Palette,
+        on_toggle: impl Fn(&mut Threadbear, &mut Context<Threadbear>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.section_heading_inner(
+            key, title, symbol, count, folded, foldable, trailing, None, p, on_toggle, cx,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "matches section_heading plus optional drag info for the Threads sidebar"
+    )]
+    fn section_heading_inner(
+        &mut self,
+        key: &str,
+        title: &str,
+        symbol: &'static str,
+        count: usize,
+        folded: bool,
+        foldable: bool,
+        trailing: Option<AnyElement>,
+        drag: Option<(&'static str, &'static str, &'static str, usize)>,
         p: &Palette,
         on_toggle: impl Fn(&mut Threadbear, &mut Context<Threadbear>) + 'static,
         cx: &mut Context<Self>,
@@ -2639,9 +2701,17 @@ impl Threadbear {
                         )),
                 )
             });
+        let drag_marker = drag.map(|(drag_key, _, _, _)| {
+            self.sidebar
+                .section_drag
+                .heading_marker(drag_key)
+                .into_any_element()
+        });
         h_flex()
+            .relative()
             .pr(px(TRAILING))
             .items_center()
+            .children(drag_marker)
             .child(if !foldable {
                 label.into_any_element()
             } else {
@@ -2657,7 +2727,28 @@ impl Threadbear {
                     SharedString::from(format!("fold-{key}")),
                     tip
                 )
+                .when_some(
+                    drag,
+                    |btn, (drag_key, drag_title, drag_symbol, drag_count)| {
+                        btn.cursor_grab().on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                                this.section_heading_pressed(
+                                    drag_key,
+                                    drag_title,
+                                    drag_symbol,
+                                    drag_count,
+                                    e.position,
+                                    cx,
+                                );
+                            }),
+                        )
+                    },
+                )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    if this.sidebar.section_drag.take_suppressed_click() {
+                        return;
+                    }
                     on_toggle(this, cx);
                     cx.notify();
                 }))
@@ -3563,7 +3654,15 @@ impl Threadbear {
                 "inView": self.sidebar.motion.in_view(&t.id, &self.sidebar.scroll),
             })
         };
-        let shown = self.shown_sections(cx, now);
+        let mut shown = self.shown_sections(cx, now);
+        let drag_active = self.sidebar.section_drag.is_active();
+        if let Some(preview) = self.sidebar.section_drag.preview_order() {
+            let ordered = threadbear_core::section_drag::reorder_sections(
+                std::mem::take(Rc::make_mut(&mut shown)),
+                &preview,
+            );
+            *Rc::make_mut(&mut shown) = ordered;
+        }
         let searching = !self.search.read(cx).value().trim().is_empty();
         // A group of nested threads: what its head's count says, whether
         // it's open, its threads as drawn (each with its second line), and
@@ -3601,7 +3700,7 @@ impl Threadbear {
         let sections: Vec<Value> = shown
             .iter()
             .map(|s| {
-                let folded = self.folded.contains(s.key);
+                let folded = self.folded.contains(s.key) || (!searching && drag_active);
                 let count = (!searching && folded && !s.rows.is_empty()).then_some(s.rows.len());
                 let drawn = (s.key == "archived").then(|| {
                     let selected = self.selected.as_ref().and_then(|id| s.rows.iter().position(|t| &t.id == id));
@@ -3633,7 +3732,7 @@ impl Threadbear {
             .iter()
             .find(|s| s.key == "archived")
             .map_or(0, |s| s.rows.len());
-        json!({ "mode": "inbox", "sections": sections, "snoozed": snoozed, "archived": archived, "sort": self.sidebar.order.name(), "loading": !self.sidebar.loaded, "nested": nesting.is_some() })
+        json!({ "mode": "inbox", "sections": sections, "snoozed": snoozed, "archived": archived, "sort": self.sidebar.order.name(), "loading": !self.sidebar.loaded, "nested": nesting.is_some(), "dragging": self.sidebar.section_drag.dragged_key() })
     }
 
     /// `row` as `dump` shows the open thread (`selection`).

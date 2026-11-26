@@ -519,6 +519,7 @@ impl Threadbear {
 
         let mut sidebar = crate::sidebar::SidebarState::new(cx);
         sidebar.order = settings.inbox_order();
+        sidebar.section_order = settings.section_order();
         let scheduled = crate::scheduled::ScheduledState::new(
             settings.saved.collapsed_schedule_sections.as_deref(),
         );
@@ -527,8 +528,8 @@ impl Threadbear {
             settings.saved.usage_show_model_weeks,
         );
         let folded: HashSet<&'static str> = match &settings.saved.collapsed_sections {
-            // The section keys are the Swift enum's raw values.
-            Some(saved) => ["starred", "inbox", "running", "hibernating", "archived"]
+            // The section keys are the Swift enum's raw values (plus coordinators).
+            Some(saved) => threadbear_core::section_drag::DEFAULT_SECTION_ORDER
                 .into_iter()
                 .filter(|k| saved.iter().any(|s| s == k))
                 .collect(),
@@ -819,9 +820,10 @@ impl Threadbear {
         // ⌘-Tab away lets ⌘ go in the other app, so this one never hears it.
         if !active {
             self.hints_reset(cx);
-            // A swipe's lift goes to the app in front now (swipe_nav.rs, row_swipe.rs).
+            // A swipe's lift goes to the app in front now (swipe_nav.rs, row_swipe.rs, section_drag.rs).
             self.cancel_page_swipe(cx);
             self.cancel_row_swipe(cx);
+            self.cancel_section_drag(cx);
         }
         crate::activity::window_active(window, active, cx);
         if let (true, Some(pane)) = (crate::thread::is_looking(), self.pane.clone()) {
@@ -2379,6 +2381,7 @@ impl Threadbear {
                 && c.outbox == outbox
                 && c.query == query
                 && c.order == self.sidebar.order
+                && c.section_order == self.sidebar.section_order
                 && c.wakes == wakes
                 && c.nested == nested
                 && c.coordinators == coordinators_on
@@ -2417,9 +2420,10 @@ impl Threadbear {
         } else {
             &[]
         };
-        let sections = Rc::new(threadbear_core::coordinators::sections(
+        let sections = threadbear_core::coordinators::sections(sections, coordinators);
+        let sections = Rc::new(threadbear_core::section_drag::reorder_sections(
             sections,
-            coordinators,
+            &self.sidebar.section_order,
         ));
         // Until the next snooze runs out, when a thread moves out of
         // Hibernating; nothing else in the sorting goes by the clock.
@@ -2436,6 +2440,7 @@ impl Threadbear {
             outbox,
             query,
             order: self.sidebar.order,
+            section_order: self.sidebar.section_order.clone(),
             wakes,
             nested,
             coordinators: coordinators_on,
@@ -2656,6 +2661,7 @@ struct SectionsCache {
     outbox: u64,
     query: String,
     order: inbox::InboxOrder,
+    section_order: Vec<&'static str>,
     wakes: HashMap<String, inbox::Wake>,
     /// The clock it was worked out at, and when it next needs to be again.
     from: i64,

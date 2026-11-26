@@ -132,6 +132,7 @@ mod runners_panel;
 mod schedule_editor;
 mod scheduled;
 mod scripted;
+mod section_drag;
 mod selection_bar;
 mod settings;
 mod settings_window;

@@ -1135,8 +1135,8 @@ fn sort_sections<T: Borrow<ThreadSummary>>(
     hibernating.sort_by_cached_key(|t| (wakes_at(summary(t)), newest_first(summary(t))));
     archived.sort_by_cached_key(|t| (Reverse(summary(t).archived_ms()), summary(t).id.clone()));
     [
-        ("coordinators", "Coordinators", coordinators),
         ("starred", "Starred", starred),
+        ("coordinators", "Coordinators", coordinators),
         ("inbox", "Inbox", inbox),
         ("running", "Running", running),
         ("hibernating", "Hibernating", hibernating),
@@ -1445,8 +1445,14 @@ mod tests {
             3,
             json!({"coordinatorProjectId":"p_c", "archivedAt":"2026-11-06T09:00:00Z"}),
         );
-        let rows = [sleeping, gone, row];
+        let starred = thread(4, json!({"starredAt":"2026-11-06T09:30:00Z"}));
+        let rows = [sleeping, gone, row, starred];
         let sections = sections(rows.iter(), now());
+        assert_eq!(
+            sections.iter().map(|s| s.key).collect::<Vec<_>>(),
+            ["starred", "coordinators", "inbox", "archived"]
+        );
+        assert_eq!(ids(&sections, "starred"), ["t4"]);
         assert_eq!(ids(&sections, "coordinators"), ["t1", "t2"]);
         assert_eq!(ids(&sections, "archived"), ["t3"]);
     }
