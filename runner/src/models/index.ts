@@ -61,8 +61,10 @@ export type SummarizeParams = Common & { text: string; maxWords?: number };
 // strong: Opus (ROUTES.decide) rather than Haiku.
 export type GenerateParams = Common & { prompt: string; system?: string; maxTokens?: number; strong?: boolean };
 
-// pool: the pool whose Claude logins answer; null for none (no small jobs).
-export type ModelSettings = { privateFolders: string[]; pool?: string | null };
+// pool: the pool whose logins answer; null for none (no small jobs).
+// providers: custom provider order inside that pool; unset/null is Claude,
+// then Codex, then the pool's remaining small-job providers in pool order.
+export type ModelSettings = { privateFolders: string[]; pool?: string | null; providers?: Provider[] | null };
 
 // What the Models layer needs of the runner.
 export type PoolHost = {
@@ -138,9 +140,9 @@ export class Models {
   }
 
   // Why no call could go out at all, or undefined when one might: there's
-  // a pool with a Claude login. Room isn't checked; a call finds that out.
+  // a pool with a small-job login. Room isn't checked; a call finds that out.
   unavailable(): string | undefined {
-    return this.poolLogins() ? undefined : 'Needs a Claude pool to run on';
+    return this.poolLogins() ? undefined : 'Needs a pool to run on';
   }
 
   private poolLogins(): { pool: Pool; accounts: Account[] } | undefined {
@@ -149,7 +151,9 @@ export class Models {
     const found = this.opts.poolHost.pool(id);
     if (!found) return undefined;
     const can = new Set<string>(['claude', ...Object.keys(this.opts.askers ?? {}).filter((p) => providerInfo(p).smallJobs)]);
-    const accounts = found.accounts.filter((a) => can.has(a.provider) && found.pool.accountIds.includes(a.id));
+    const configured = this.opts.settings().providers;
+    const allowed = configured ? new Set<string>(configured) : undefined;
+    const accounts = found.accounts.filter((a) => can.has(a.provider) && (!allowed || allowed.has(a.provider)) && found.pool.accountIds.includes(a.id));
     return accounts.length ? { pool: found.pool, accounts } : undefined;
   }
 
@@ -228,13 +232,14 @@ export class Models {
   }
 
   // One route: skipped with no pool or no login with room; else run on a
-  // login (Claude first, then other small-job providers in the pool in pool
-  // order), moving on when one is out of room or a provider fails.
+  // login in the configured provider order (default: Claude, then Codex, then
+  // other small-job providers in the pool in pool order), moving on when one
+  // is out of room or a provider fails.
   private async viaPool<T>(job: ModelJob, p: Common, model: string, a: Attempt<T>): Promise<ModelResult<T> | { ok: false; skipped: Failure }> {
     const initial = this.poolLogins();
     if (!initial) {
       const id = this.poolId();
-      return skip('no-pool', id === null ? 'Small jobs are on no pool.' : `No pool called ${id} has a Claude login.`);
+      return skip('no-pool', id === null ? 'Small jobs are on no pool.' : `No pool called ${id} has a login that can run small jobs.`);
     }
     // Before taking a slot: a pool nothing can answer on says so at once.
     if (!this.providersToAsk(initial).some((provider) => this.askFor(provider))) return skip('off', 'Pool calls are off in this runner.');
@@ -247,7 +252,7 @@ export class Models {
       for (;;) {
         // Read again each time round: the last call may have used up a login.
         const found = this.poolLogins();
-        if (!found) return skip('no-pool', 'The pool has no Claude login.');
+        if (!found) return skip('no-pool', 'The pool has no login that can run small jobs.');
         title = found.pool.title;
         const picked = this.pickAccount(found, tried, failedProviders);
         if (!picked) break;
@@ -303,15 +308,18 @@ export class Models {
     }
   }
 
-  // The pool's small-job providers in the order we try them: Claude first
-  // (small jobs are written for Haiku and Opus, and quietInboxMine acts only
-  // on Opus), then any other small-job providers in the pool in pool order
-  // (e.g. Grok, OpenCode) when every Claude login is out of room or fails.
-  // Never leaves the chosen pool, so separate pools (e.g. work) stay isolated.
+  // The pool's small-job providers in the order we try them: Mike's custom
+  // `models.providers` order when set, else Claude first (small jobs are
+  // written for Haiku and Opus, and quietInboxMine acts only on Opus), then
+  // Codex, then any other small-job providers in the pool in pool order
+  // (e.g. Grok, OpenCode). Never leaves the chosen pool, so separate pools
+  // (e.g. work) stay isolated.
   private providersToAsk(found: { pool: Pool; accounts: Account[] }): Provider[] {
     const order = poolProviders(found.pool, found.accounts);
-    const claude = order.includes('claude') ? (['claude'] as Provider[]) : [];
-    return [...claude, ...order.filter((p) => p !== 'claude')];
+    const configured = this.opts.settings().providers;
+    if (configured) return configured.filter((p) => order.includes(p));
+    const preferred = (['claude', 'codex'] as const).filter((p) => order.includes(p));
+    return [...preferred, ...order.filter((p) => !preferred.includes(p as (typeof preferred)[number]))];
   }
 
   private pickAccount(

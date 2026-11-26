@@ -164,6 +164,47 @@ pub fn reviewer_dropped(list: &[LabReviewer], from: usize, to: usize) -> Option<
     Some(out)
 }
 
+/// The change `settings.update` takes for `models.providers`: `Some(list)`
+/// saves a custom provider order inside the chosen pool; `None` resets to
+/// automatic order (Claude, then Codex, then the pool's remaining small-job
+/// providers).
+pub fn small_job_providers_change(list: Option<&[String]>) -> Value {
+    match list {
+        Some(items) => serde_json::json!({ "models": { "providers": items } }),
+        None => serde_json::json!({ "models": { "providers": Value::Null } }),
+    }
+}
+
+/// The list with the provider at `from` dropped on the row at `to`. None when
+/// nothing moves.
+pub fn provider_dropped(list: &[String], from: usize, to: usize) -> Option<Vec<String>> {
+    if from == to || from >= list.len() || to >= list.len() {
+        return None;
+    }
+    let mut out = list.to_vec();
+    let moved = out.remove(from);
+    out.insert(to, moved);
+    Some(out)
+}
+
+/// The default small-job provider order inside a pool (`models.providers`
+/// unset/null): Claude first, then Codex, then any other small-job providers
+/// in pool order (matching `runner/src/models/index.ts`, `providersToAsk`).
+pub fn default_small_job_providers(pool_providers: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(pool_providers.len());
+    for preferred in ["claude", "codex"] {
+        if pool_providers.iter().any(|p| p == preferred) && !out.iter().any(|p| p == preferred) {
+            out.push(preferred.to_owned());
+        }
+    }
+    for p in pool_providers {
+        if !out.iter().any(|x| x == p) {
+            out.push(p.clone());
+        }
+    }
+    out
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunnerSettings {
     pub default_cwd: String,
@@ -193,11 +234,16 @@ pub struct RunnerSettings {
     pub spare_week: Option<bool>,
     pub bring_in: BringIn,
     pub bring_in_supported: bool,
-    /// The pool whose Claude logins answer small jobs (titles, the
-    /// librarian); None means none, so those are off.
+    /// The pool whose logins answer small jobs (titles, the librarian);
+    /// None means none, so those are off.
     pub pool: Option<String>,
     /// Whether the runner sends `models.pool` at all.
     pub pool_supported: bool,
+    /// Custom provider order for small jobs inside `pool`; None means default
+    /// order (Claude, then Codex, then the pool's remaining small-job providers).
+    pub providers: Option<Vec<String>>,
+    /// Whether the runner sends `models.providers` at all.
+    pub providers_supported: bool,
     /// Folders whose thread text is never sent, as written ("~/" kept).
     pub private_folders: Vec<String>,
     /// Every experiment there is, oldest first.
@@ -245,6 +291,12 @@ impl RunnerSettings {
                 .filter(|p| !p.is_empty())
                 .map(str::to_owned),
             pool_supported: models.get("pool").is_some(),
+            providers: models["providers"].as_array().map(|list| {
+                list.iter()
+                    .filter_map(|p| p.as_str().filter(|s| !s.is_empty()).map(str::to_owned))
+                    .collect()
+            }),
+            providers_supported: models.get("providers").is_some(),
             private_folders: models["privateFolders"]
                 .as_array()
                 .into_iter()
@@ -803,6 +855,65 @@ mod tests {
             reviewer_dropped(&three, 3, 0).is_none(),
             "a row that's gone moves nothing"
         );
+    }
+
+    #[test]
+    fn small_job_providers_read_reorder_and_reset() {
+        let old = RunnerSettings::decode(&json!({ "models": { "pool": "claude" } }));
+        assert!(!old.providers_supported && old.providers.is_none());
+
+        let auto =
+            RunnerSettings::decode(&json!({ "models": { "pool": "main", "providers": null } }));
+        assert!(auto.providers_supported && auto.providers.is_none());
+
+        let custom = RunnerSettings::decode(
+            &json!({ "models": { "pool": "main", "providers": ["codex", "", "claude"] } }),
+        );
+        assert!(custom.providers_supported);
+        assert_eq!(
+            custom.providers,
+            Some(vec!["codex".into(), "claude".into()])
+        );
+
+        let three: Vec<String> = vec!["claude".into(), "codex".into(), "grok".into()];
+        assert_eq!(
+            provider_dropped(&three, 2, 0).unwrap(),
+            vec!["grok", "claude", "codex"]
+        );
+        assert_eq!(
+            provider_dropped(&three, 0, 2).unwrap(),
+            vec!["codex", "grok", "claude"]
+        );
+        assert!(provider_dropped(&three, 1, 1).is_none());
+
+        assert_eq!(
+            default_small_job_providers(&[
+                "grok".into(),
+                "codex".into(),
+                "claude".into(),
+                "opencode".into()
+            ]),
+            vec!["claude", "codex", "grok", "opencode"]
+        );
+        assert_eq!(
+            small_job_providers_change(Some(&three)),
+            json!({ "models": { "providers": ["claude", "codex", "grok"] } })
+        );
+        assert_eq!(
+            small_job_providers_change(None),
+            json!({ "models": { "providers": null } })
+        );
+
+        // Optimistic overlay via merge_json handles both setting and resetting.
+        let mut snap =
+            json!({ "models": { "pool": "main", "privateFolders": [], "providers": null } });
+        merge_json(&mut snap, &small_job_providers_change(Some(&three)));
+        assert_eq!(
+            snap["models"]["providers"],
+            json!(["claude", "codex", "grok"])
+        );
+        merge_json(&mut snap, &small_job_providers_change(None));
+        assert_eq!(snap["models"]["providers"], Value::Null);
     }
 
     #[test]

@@ -178,26 +178,38 @@ older runner's `openRouterKey`, `dailyBudgetUsd`, `spentTodayUsd` and
 
 - **Consent.** A call sends thread text to Anthropic on Mike's own login,
   as the thread itself does.
-- **The pool.** `models.pool` in `runner.json` is a pool id, `"claude"`
-  when it isn't set, or `null` for none, which turns titles and the
-  librarian off. Claude logins in that pool are tried first (on the one
-  it ran on last while that's OK to run on, see Pools, else the one whose
-  weekly window resets soonest / has the most room). When every Claude
-  login in the pool is out of room or fails, small jobs spill over in
-  pool order to any other `smallJobs`-capable logins in that same pool
-  (such as Grok or OpenCode, where every tool is denied), and return to
-  Claude as soon as a Claude login has room again. Spillover never leaves
-  the chosen pool, so separate pools (such as a work pool) stay isolated,
-  and providers without `smallJobs` (Codex, Cursor, Gemini) are never
-  used. On Claude, the CLI runs as `claude -p` at low effort in an empty
-  folder (`models/cli` in the data dir), with no tools, MCP servers,
-  settings, hooks, CLAUDE.md, skills or saved session (`--tools ""
-  --strict-mcp-config --setting-sources "" --disable-slash-commands
-  --no-session-persistence`), the job's own system prompt, and
-  `--json-schema` for classify and extract. A login that answers that
-  it's out of room counts as run dry, as it does for a turn, and the next
-  one is tried. At most 2 calls run at once, and each times out after 60
-  seconds.
+- **The pool and provider order.** `models.pool` in `runner.json` is a
+  pool id, `"claude"` when it isn't set, or `null` for none, which turns
+  titles and the librarian off. `models.providers` is an optional ordered
+  list of `smallJobs`-capable providers (`claude`, `codex`, `grok`,
+  `opencode`), or `null` / absent for the default order: Claude first (on
+  the login it ran on last while that's OK to run on, see Pools, else the
+  one whose weekly window resets soonest / has the most room), then Codex,
+  then any other `smallJobs`-capable logins in that same pool in pool
+  order. When `models.providers` is set, only the listed providers are
+  tried, in that exact order, and the next provider takes over whenever
+  every login of the current one is out of room or fails. Spillover never
+  leaves the chosen pool, so separate pools (such as a work pool) stay
+  isolated, and providers without `smallJobs` (Cursor, Gemini) are never
+  used.
+  - On Claude, the CLI runs as `claude -p` at low effort in an empty
+    folder (`models/cli` in the data dir), with no tools, MCP servers,
+    settings, hooks, CLAUDE.md, skills or saved session (`--tools ""
+    --strict-mcp-config --setting-sources "" --disable-slash-commands
+    --no-session-persistence`), the job's own system prompt, and
+    `--json-schema` for classify and extract.
+  - On Codex (`runner/src/models/codex-oneshot.ts`), `codex exec` runs in
+    the same empty folder with `--ephemeral --ignore-user-config
+    --ignore-rules --skip-git-repo-check --sandbox read-only`, low
+    reasoning effort, `approval_policy="never"`, `web_search="disabled"`,
+    `mcp_servers={}`, tool features disabled, `--output-schema` (in a
+    temporary file outside the empty folder, removed afterwards) for
+    structured output, and the prompt over stdin (`-`); stdout JSONL is
+    also watched so any tool-execution item kills the process and fails
+    closed.
+  - A login that answers that it's out of room counts as run dry, as it
+    does for a turn, and the next one is tried. At most 2 calls run at
+    once, and each times out after 60 seconds.
 - **Private folders.** `models.privateFolders` in `runner.json` lists
   folders whose threads are never sent anywhere, for client work and the
   like. A call for a thread in one of them, or anywhere under one,
@@ -214,10 +226,10 @@ older runner's `openRouterKey`, `dailyBudgetUsd`, `spentTodayUsd` and
   names them too. Later, the librarian renames a thread whose title no
   longer says what it's about (see Projects).
 - **Failures.** A call never throws: it says why it didn't answer
-  (`no-pool`: no pool, or none of its logins is a Claude one; `no-room`:
-  every login is out of room; `off`: this runner makes no model calls;
-  private folder, timed out, error), and the feature falls back to what
-  it did before there was a model to ask.
+  (`no-pool`: no pool, or none of its logins can run small jobs under
+  `models.providers`; `no-room`: every login is out of room; `off`: this
+  runner makes no model calls; private folder, timed out, error), and the
+  feature falls back to what it did before there was a model to ask.
 
 ## Standing instructions
 

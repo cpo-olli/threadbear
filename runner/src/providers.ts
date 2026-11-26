@@ -27,7 +27,10 @@ export const PROVIDER_INFO: Record<Provider, ProviderInfo> = {
     effort: 'codex',
     autoMode: 'asks',
     rewind: true,
-    smallJobs: false,
+    // Isolated `codex exec --ephemeral --ignore-user-config` in an empty
+    // folder with tools disabled and a runtime tool-item guard
+    // (models/codex-oneshot.ts).
+    smallJobs: true,
     usageReadings: true,
   },
   // Over ACP (adapters/acp/): Auto behaves like Ask, and rewind doesn't

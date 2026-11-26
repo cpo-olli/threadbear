@@ -763,13 +763,13 @@ impl Threadbear {
             .collect();
         let current = match &set {
             Some(id) => pools.iter().find(|p| &p.0 == id).map_or_else(
-                || format!("{id}, which has no Claude login"),
+                || format!("{id}, which has no small-job login"),
                 |p| p.1.clone(),
             ),
             None => "No pool".to_owned(),
         };
         let app = cx.entity().downgrade();
-        let tip = "Which pool's Claude logins it uses, the one with the most room. It waits when they're all out of room. Titles use the same pool (Settings › Models)";
+        let tip = "Which pool's logins it uses, in the provider order from Settings › Models. It waits when they're all out of room. Titles use the same pool (Settings › Models)";
         let choices = pools;
         let set_for_menu = set;
         Some(

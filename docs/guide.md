@@ -1673,9 +1673,10 @@ Grok always trusts) Grok threads need Full access;
 take the folder out of Grok's trusted folders (`/hooks-untrust`) to use Ask
 or Auto. Denying a card ends Grok's turn, as it does in Grok's own app. Grok's models each list their effort levels (low to extra
 high), and the effort you pick is the one it runs at. Small jobs (titles,
-summaries, the librarian and fuzzy Wake when…) prefer Claude logins in
-the pool you pick in Settings, and spill over to Grok or OpenCode logins
-in that same pool when Claude is out of room. Grok logins show their plan's room in
+summaries, the librarian and fuzzy Wake when…) run on the pool you pick in
+Settings > Models, trying Claude first, then Codex, then Grok or OpenCode
+logins in that same pool when a provider is out of room, or in any custom
+provider order you drag them into in Settings > Models. Grok logins show their plan's room in
 Usage, read from Grok itself (its weekly share and when it resets, a minute
 after the runner starts and after Grok turns). When a Grok login runs out
 of balance, the thread says so in plain words ("grok-main is out of Grok
@@ -1687,9 +1688,10 @@ usage readings. None of these have a sandbox or
 going back to an earlier message yet, and Threadbear only updates
 their CLIs when you press Update in the Updates panel.
 
-Titles, the librarian and Wake when… run on a Claude login, so with only
-Codex they don't happen: threads keep the first line of their first message
-as their title.
+Titles, the librarian and Wake when… run on any small-job provider in the
+pool you pick in Settings > Models (Claude, Codex, Grok or OpenCode); with
+none picked or no supported login in the pool, threads keep the first line
+of their first message as their title.
 
 Logins are grouped into pools, one for Claude and one for Codex to begin
 with (Settings > Pools). A new thread in a pool starts on the login with room whose
