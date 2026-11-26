@@ -718,6 +718,8 @@ export function NewThread({ token }: { token: string }) {
   }, [made]);
   // Ticks so a runner that stops heartbeating leaves the list without a click.
   const clock = useClock();
+  // Start's re-render when the choices it would send have moved under it.
+  const [refreshed, refresh] = useState(0);
   // What a send would carry at `at`: the picks the runners and logins can
   // still take, each back to its default when they can't.
   const choicesAt = (at: number) => {
@@ -735,19 +737,18 @@ export function NewThread({ token }: { token: string }) {
     const sentEffort = models.length && keeps(effort, model) ? effort : '';
     return { online, sentRunner, modelsFor, models, model, sentModel, sentEffort };
   };
-  const { online, sentRunner, modelsFor, models, model, sentModel, sentEffort } = choicesAt(Math.max(clock, Date.now()));
-  // A model or effort the picked runner's logins no longer offer is
-  // dropped, not kept hidden to come back by itself. Only against the
-  // runner picked, never whether runners look online: a tab left in the
-  // background holds stale heartbeats, and that mustn't wipe a pick. What
-  // liveness hides stays hidden (the selects show what a send carries) and
-  // submit works it out again. Set while rendering, once both lists are in;
-  // each set makes the values equal, so it settles in one more render.
-  if (runners !== undefined && accounts !== undefined) {
-    const kept = modelsFor(runnerId);
-    const keptModel = kept.find((m) => m.id === modelId);
-    if (modelId && !keptModel) setModelId('');
-    if (effort && !(kept.length && keeps(effort, keptModel))) setEffort('');
+  const { online, sentRunner, modelsFor, models, model, sentModel, sentEffort } = choicesAt(Math.max(clock, refreshed, Date.now()));
+  // A model or effort no login on any runner offers any more is dropped,
+  // not kept to come back by itself. Never by which runner it would land
+  // on: that turns on heartbeats, and a tab left in the background holds
+  // stale ones, which mustn't wipe a pick. What the runner it lands on
+  // can't take stays hidden instead: the selects show what a send carries.
+  // Set while rendering, once the logins are in; each set only clears, so
+  // it settles in one more render.
+  if (accounts !== undefined) {
+    const all = modelsOn(accounts);
+    if (modelId && !all.some((m) => m.id === modelId)) setModelId('');
+    if (effort && !all.some((m) => efforts(m).includes(effort))) setEffort('');
   }
   // A pick that the new runner or model can't take is dropped, not kept
   // hidden to come back when Mike switches back.
@@ -758,15 +759,24 @@ export function NewThread({ token }: { token: string }) {
     if (!m) setModelId('');
     if (!next.length || !keeps(effort, m)) setEffort('');
   };
+  // Picking a model or effort keeps the runner shown, so a picked runner
+  // that went to sleep doesn't come back under it.
   const pickModel = (id: string) => {
+    setRunnerId(sentRunner);
     setModelId(id);
     if (!keeps(effort, models.find((x) => x.id === id))) setEffort('');
   };
   const submit = async () => {
     const body = text.trim();
     if (!body) return;
-    // Worked out again now: the page may have sat untouched while a runner went quiet.
+    // Worked out again now: the page may have sat untouched while a runner
+    // went quiet. If that changed what the selects show, show it and send
+    // nothing, so a thread never starts on choices Mike didn't see.
     const sent = choicesAt(Date.now());
+    if (sent.sentRunner !== sentRunner || sent.sentModel !== sentModel || sent.sentEffort !== sentEffort) {
+      refresh(Date.now());
+      return;
+    }
     await cmd.run(() => create({ token, text: body, ...(sent.sentRunner ? { runnerId: sent.sentRunner } : {}), ...(sent.sentModel ? { model: sent.sentModel } : {}), ...(sent.sentEffort ? { effort: sent.sentEffort } : {}) }), undefined);
   };
   return (
@@ -826,7 +836,11 @@ export function NewThread({ token }: { token: string }) {
                     ))}
                   </select>
                   {efforts(model).length ? (
-                    <select value={sentEffort} disabled={cmd.busy} onChange={(e) => setEffort(e.target.value)} aria-label="Effort" title="How hard it thinks">
+                    <select value={sentEffort} disabled={cmd.busy} onChange={(e) => {
+                        setRunnerId(sentRunner);
+                        setModelId(sentModel);
+                        setEffort(e.target.value);
+                      }} aria-label="Effort" title="How hard it thinks">
                       <option value="">Default effort</option>
                       {efforts(model).map((l) => (
                         <option key={l} value={l}>
