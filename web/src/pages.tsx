@@ -786,14 +786,16 @@ export function NewThread({ token }: { token: string }) {
                       </option>
                     ))}
                   </select>
-                  <select value={sentEffort} disabled={cmd.busy} onChange={(e) => setEffort(e.target.value)} aria-label="Effort" title="How hard it thinks">
-                    <option value="">Default effort</option>
-                    {efforts(model).map((l) => (
-                      <option key={l} value={l}>
-                        {effortTitle(l)}
-                      </option>
-                    ))}
-                  </select>
+                  {efforts(model).length ? (
+                    <select value={sentEffort} disabled={cmd.busy} onChange={(e) => setEffort(e.target.value)} aria-label="Effort" title="How hard it thinks">
+                      <option value="">Default effort</option>
+                      {efforts(model).map((l) => (
+                        <option key={l} value={l}>
+                          {effortTitle(l)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
                 </>
               ) : null}
               <span className="grow" />

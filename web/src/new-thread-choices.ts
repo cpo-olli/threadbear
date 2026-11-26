@@ -3,7 +3,7 @@
 // Naming a model is enough for the runner to pick a login of its provider
 // with room (runner.ts, pickForNew), so there's no login picker.
 
-export type ModelChoice = { id: string; title: string; effortLevels?: string[]; defaultEffort?: string };
+export type ModelChoice = { id: string; title: string; effortLevels?: string[]; defaultEffort?: string; provider?: string };
 export type AccountModels = { runnerId?: string; provider?: string; models?: ModelChoice[] };
 export type RunnerPick = { runnerId: string; placed?: boolean; main?: boolean; draining?: boolean };
 
@@ -13,9 +13,12 @@ const CLAUDE_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const TITLES: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultra: 'Ultra' };
 
 // The runner a new thread with none named lands on, as phone:create picks
-// it: the first online in Mike's order, else the main one.
+// it (mainRunner): the first online in Mike's order, else the main one if
+// it's online. undefined when the backend would pick some other way, so the
+// page lists every runner's models rather than a sleeping Mac's.
 export function defaultRunner<R extends RunnerPick>(runners: R[], online: (r: R) => boolean): R | undefined {
-  return runners.find((r) => r.placed && online(r) && !r.draining) ?? runners.find((r) => r.main);
+  const up = (r: R) => online(r) && !r.draining;
+  return runners.find((r) => r.placed && up(r)) ?? runners.find((r) => r.main && up(r));
 }
 
 // The models on offer on one runner: its own logins' (a row with no runner
@@ -33,17 +36,22 @@ export function models(accounts: AccountModels[], runnerId?: string): ModelChoic
     for (const m of Array.isArray(a.models) ? a.models : []) {
       if (!m || typeof m.id !== 'string' || seen.has(m.id)) continue;
       seen.add(m.id);
-      out.push(m);
+      out.push({ ...m, provider: a.provider ?? 'claude' });
     }
   }
   return out;
 }
 
-// The efforts a model offers, or with none picked Claude's levels (the
-// runner drops one the model it lands on doesn't offer).
+// The efforts a model offers. With none picked, Claude's levels (the
+// runner drops one the model it lands on doesn't offer); a Claude model
+// that doesn't list its levels takes any of them (new-threads.ts,
+// checkSettings). Other models that list none (OpenCode, Gemini, Grok)
+// have no effort, so none.
 export function efforts(model?: ModelChoice): string[] {
-  const levels = model?.effortLevels ?? [];
-  return levels.length ? levels.filter((l) => ALL.includes(l)) : CLAUDE_LEVELS;
+  if (!model) return CLAUDE_LEVELS;
+  const levels = (model.effortLevels ?? []).filter((l) => ALL.includes(l));
+  if (levels.length) return levels;
+  return (model.provider ?? 'claude') === 'claude' ? CLAUDE_LEVELS : [];
 }
 
 export function effortTitle(level: string): string {

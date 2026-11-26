@@ -30,6 +30,16 @@ test('efforts follow the model, Claude’s levels with none picked', () => {
   assert.equal(effortTitle('xhigh'), 'Extra high');
 });
 
+test('efforts: a model with no levels has none, unless it is Claude’s', () => {
+  const list = models([
+    { runnerId: 'a', provider: 'claude', models: [{ id: 'haiku', title: 'Haiku' }] },
+    { runnerId: 'a', provider: 'opencode', models: [{ id: 'gemini', title: 'Gemini' }] },
+  ]);
+  assert.deepEqual(efforts(list.find((m) => m.id === 'haiku')), ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.deepEqual(efforts(list.find((m) => m.id === 'gemini')), []);
+  assert.equal(keeps('high', list.find((m) => m.id === 'gemini')), false);
+});
+
 test('defaultRunner: first placed online, else the main one', () => {
   const rs = [
     { runnerId: 'x', placed: true },
@@ -37,5 +47,8 @@ test('defaultRunner: first placed online, else the main one', () => {
     { runnerId: 'm', main: true },
   ];
   assert.equal(defaultRunner(rs, (r) => r.runnerId === 'y')?.runnerId, 'y');
-  assert.equal(defaultRunner(rs, () => false)?.runnerId, 'm');
+  assert.equal(defaultRunner(rs, (r) => r.runnerId === 'm')?.runnerId, 'm');
+  // A sleeping main Mac isn't where it lands: no guess, so every runner's models.
+  assert.equal(defaultRunner(rs, () => false), undefined);
+  assert.equal(defaultRunner([{ runnerId: 'm', main: true, draining: true }], () => true), undefined);
 });
