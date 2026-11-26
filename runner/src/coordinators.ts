@@ -698,7 +698,10 @@ export class Coordinators {
     const helper = task.run ? `helper ${task.run.helperThreadId ?? task.run.agentId ?? 'unknown'}` : '';
     if (task.run && ['queued', 'running'].includes(task.run.status)) throw bad(`A helper is already working on that task (${helper}). You are woken when its turn ends; nothing to select.`);
     if (task.state === 'done') throw bad('That task is done: archive it with archiveTask, or addTask for new work.');
-    if (task.run) throw bad(`That task already has a helper run (${task.run.status}, ${helper}). Carry it on with resumeHelper and this taskId; selectTask is only for an unstarted to-do.`);
+    if (task.run) {
+      this.oneAtATime(row);
+      throw bad(`That task already has a helper run (${task.run.status}, ${helper}). Carry it on with resumeHelper and this taskId; selectTask is only for an unstarted to-do.`);
+    }
     if (task.state !== 'todo') throw bad(`That task is ${task.state}. selectTask is only for an unstarted to-do.`);
     row.selectedTaskId = id; this.changed(row); return this.get(projectId);
   }
