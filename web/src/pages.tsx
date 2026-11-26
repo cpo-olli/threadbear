@@ -736,16 +736,18 @@ export function NewThread({ token }: { token: string }) {
     return { online, sentRunner, modelsFor, models, model, sentModel, sentEffort };
   };
   const { online, sentRunner, modelsFor, models, model, sentModel, sentEffort } = choicesAt(Math.max(clock, Date.now()));
-  // A pick the runners or logins can no longer take (a runner asleep or
-  // draining, its logins changed) is dropped, not kept hidden to come back
-  // by itself later. Only once both lists are in, so loading drops nothing.
-  const loaded = runners !== undefined && accounts !== undefined;
-  // Set while rendering (React's "adjusting state when a prop changes"):
+  // A model or effort the picked runner's logins no longer offer is
+  // dropped, not kept hidden to come back by itself. Only against the
+  // runner picked, never whether runners look online: a tab left in the
+  // background holds stale heartbeats, and that mustn't wipe a pick. What
+  // liveness hides stays hidden (the selects show what a send carries) and
+  // submit works it out again. Set while rendering, once both lists are in;
   // each set makes the values equal, so it settles in one more render.
-  if (loaded && !cmd.busy) {
-    if (runnerId !== sentRunner) setRunnerId(sentRunner);
-    if (modelId !== sentModel) setModelId(sentModel);
-    if (effort !== sentEffort) setEffort(sentEffort);
+  if (runners !== undefined && accounts !== undefined) {
+    const kept = modelsFor(runnerId);
+    const keptModel = kept.find((m) => m.id === modelId);
+    if (modelId && !keptModel) setModelId('');
+    if (effort && !(kept.length && keeps(effort, keptModel))) setEffort('');
   }
   // A pick that the new runner or model can't take is dropped, not kept
   // hidden to come back when Mike switches back.
