@@ -1641,3 +1641,73 @@ test('a handoff the coordinator could not be told of leaves its desk as it was; 
   assert.equal(c.get(project.id).charter, 'The user’s own');
   c.stop();
 });
+
+// Refusals coordinators hit on 26 Nov (coordinators/watch/tool-errors.py),
+// each now saying what to do instead.
+test('coordinator refusals say what to use instead, and the ids it is given work', async () => {
+  const { h, c, project, projects, home } = setup();
+  const repoDir = tmpDir();
+  projects.update(project.id, { folders: [repoDir] });
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  const coordTool = buildThreadbearTools(h.runner, coordinator.threadId, () => h.clock.now(), undefined, projectControl(projects), undefined, { coordinators: () => c })
+    .find((t) => t.name === 'coordinator') as unknown as { handler: (p: Record<string, unknown>) => Promise<{ content: { text: string }[]; isError?: boolean }> };
+
+  // Bash: points at Read/Grep/Glob, send_message and helpers.
+  const bash = coordinatorTool('Bash', { command: 'cat plan.md | head' }, false).reason!;
+  assert.match(bash, /Read, Grep and Glob/);
+  assert.match(bash, /send_message/);
+  assert.match(bash, /startHelper/);
+  assert.match(acpCoordinatorTool({ role: 'coordinator', kind: 'execute', name: 'run_command' }).reason!, /read and search tools/);
+  assert.match(coordinatorTool('mcp__threadbear__update_schedule', {}, false).reason!, /send_message/);
+  const boundary = c.session(coordinator.threadId)!;
+  assert.match(boundary.checkTool({ name: 'mcp__threadbear__update_schedule', input: {} })!, /it has .*update_project/);
+
+  // update_project with no project: told which to pass.
+  assert.match(boundary.checkTool({ name: 'mcp__threadbear__update_project', input: {} })!, new RegExp(`project: "${project.id}"`));
+
+  // closeLoop: a loop id in the wrong field still closes it; none, or a
+  // wrong one, lists the open loops.
+  const a = c.openLoop(project.id, { kind: 'user_question', title: 'Which hotel?' }).loopId;
+  const b = c.openLoop(project.id, { kind: 'waiting_on_user', title: 'Book the flight?' }).loopId;
+  await coordTool.handler({ action: 'closeLoop', questionId: a, answer: 'Duplicate' });
+  assert.equal(c.get(project.id).loops.find((l) => l.id === a)!.state, 'closed');
+  await coordTool.handler({ action: 'closeLoop', taskId: b });
+  assert.equal(c.get(project.id).loops.find((l) => l.id === b)!.state, 'closed');
+  const still = c.openLoop(project.id, { kind: 'user_question', title: 'Rental car?' }).loopId;
+  const none = await coordTool.handler({ action: 'closeLoop', answer: 'Not needed' });
+  assert.equal(none.isError, true);
+  assert.match(none.content[0]!.text, /closeLoop needs loopId/);
+  assert.match(none.content[0]!.text, new RegExp(`${still} "Rental car\\?"`));
+  assert.doesNotMatch(none.content[0]!.text, /Which hotel/, 'closed loops are not listed');
+  assert.match((await coordTool.handler({ action: 'closeLoop', loopId: 'nope' })).content[0]!.text, /No loop in this project has loopId "nope"/);
+
+  // A to-do no longer needed is dropped into history, not marked done.
+  const todo = c.addTask(project.id, 'Dedupe contacts', 'Duplicates merged').tasks.at(-1)!;
+  assert.match((await coordTool.handler({ action: 'archiveTask', taskId: todo.id })).content[0]!.text, /dropTask/);
+  await coordTool.handler({ action: 'dropTask', taskId: todo.id, summary: 'Mike is doing it in his own thread' });
+  assert.equal(c.get(project.id).tasks.some((t) => t.id === todo.id), false);
+  const dropped = fs.readFileSync(path.join(home, 'coordinator-history.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((r) => r.task?.id === todo.id);
+  assert.equal(dropped.reason, 'Mike is doing it in his own thread');
+  assert.equal(dropped.task.state, 'todo');
+  assert.ok(dropped.droppedAt);
+
+  // A cwd outside the folders says how to add it.
+  const outside = tmpDir();
+  assert.throws(() => c.startHelper(project.id, { brief: 'Review', cwd: outside }), /update_project addFolders/);
+
+  // A busy helper is named, with the advice not to retry.
+  const started = c.startHelper(project.id, { title: 'Check pantry', brief: 'Check pantry' });
+  await tick();
+  assert.throws(() => c.startHelper(project.id, { brief: 'Another job' }), new RegExp(`"Check pantry" \\(task ${started.taskId}, helper ${started.helperId}\\).*don't retry`));
+  // ...and dropping it waits for its result.
+  assert.throws(() => c.dropTask(project.id, started.taskId), /helper is working/);
+
+  // read_thread finds the helper by the short id the desk shows.
+  const read = buildThreadbearTools(h.runner, coordinator.threadId, () => h.clock.now(), undefined, projectControl(projects), undefined, { coordinators: () => c })
+    .find((t) => t.name === 'read_thread') as unknown as { handler: (p: Record<string, unknown>) => Promise<{ content: { text: string }[]; isError?: boolean }> };
+  const r = await read.handler({ threadId: started.helperId.slice(0, 8), messages: 2 });
+  assert.notEqual(r.isError, true, r.content[0]!.text);
+  assert.match(r.content[0]!.text, new RegExp(started.helperId));
+  c.stop();
+});

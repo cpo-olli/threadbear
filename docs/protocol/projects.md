@@ -736,7 +736,10 @@ generation; late results from earlier executions cannot finish resumed work.
 Helper completion puts the task in review and wakes the coordinator. The
 coordinator checks its result against `doneWhen` before `completeTask` marks it
 done; `archiveTask` retains the full finished record in `coordinator-history.jsonl`
-and frees its active-list space. These actions use the scoped coordinator tool,
+and frees its active-list space. A to-do no longer needed (the user took it to a
+thread of their own, or it's moot) goes with `dropTask` and a `summary` of why:
+into the same history with `droppedAt` and `reason`, never marked done, and
+refused while a helper is working on it. These actions use the scoped coordinator tool,
 with `taskId`, rather than a manual running-task checkbox. Restart marks
 unfinished execution interrupted and does not auto-resume hidden helpers; the next
 coordinator turn reconciles them rather than blindly replaying work. A known

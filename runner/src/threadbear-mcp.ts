@@ -493,6 +493,14 @@ export function buildThreadbearTools(
       if (!whole) {
         try {
           hits = (await listForIds()).filter((t) => t.id === id || t.id.startsWith(id));
+          // A coordinator's own hidden helpers, which lists leave out: on 26
+          // Nov read_thread "53b65ddd", a helper's id cut short from the
+          // desk, found nothing.
+          for (const h of new Set(opts.coordinators?.()?.forThread(selfId)?.tasks.flatMap((t) => t.run?.helperThreadId ?? []))) {
+            if (!h.startsWith(id) || hits.some((t) => t.id === h)) continue;
+            const t = await (async () => control.get(h))().catch(() => undefined);
+            if (t) hits.push(t);
+          }
         } catch (e) {
           if (last) throw new Error(`Couldn't look ${id} up just now (${e instanceof Error ? e.message : String(e)}). Try again in a moment, or use the whole id.`);
           await sleep(ID_LIST_RETRY_MS);
@@ -2161,9 +2169,9 @@ export function buildThreadbearTools(
     endTurn(),
     ...(isCoordinator ? [tool(
       'coordinator',
-      'Read your durable project desk, add/select/complete/archive bounded jobs, start or resume a hidden implementation helper (startHelper / resumeHelper), manage durable open loops (openLoop / updateLoop / closeLoop for user questions and decisions waiting on the user), update your charter/interests or wake time, or record an answer to a helper question. Keep shared project goals/state concise as the user brief and put technical details in project notes (Agent memory) with update_project.',
+      'Read your durable project desk, add/select/complete/archive bounded jobs (dropTask, with a summary of why, for a to-do no longer needed), start or resume a hidden implementation helper (startHelper / resumeHelper), manage durable open loops (openLoop / updateLoop / closeLoop for user questions and decisions waiting on the user), update your charter/interests or wake time, or record an answer to a helper question. Keep shared project goals/state concise as the user brief and put technical details in project notes (Agent memory) with update_project.',
       {
-        action: z.enum(['get', 'addTask', 'selectTask', 'completeTask', 'archiveTask', 'startHelper', 'resumeHelper', 'openLoop', 'updateLoop', 'closeLoop', 'update', 'answer']),
+        action: z.enum(['get', 'addTask', 'selectTask', 'completeTask', 'archiveTask', 'dropTask', 'startHelper', 'resumeHelper', 'openLoop', 'updateLoop', 'closeLoop', 'update', 'answer']),
         taskId: z.string().optional(),
         helperId: z.string().optional(),
         brief: z.string().max(16_000).optional(),
@@ -2179,7 +2187,7 @@ export function buildThreadbearTools(
         wakeAt: z.string().nullable().optional(),
         questionId: z.string().optional(),
         answer: z.string().max(4000).optional(),
-        loopId: z.string().optional(),
+        loopId: z.string().optional().describe('The loop id for updateLoop / closeLoop, from your desk.'),
         loopKind: z.enum(['user_question', 'waiting_on_user']).optional(),
         loopState: z.enum(['open', 'answered']).optional(),
         summary: z.string().max(1000).optional(),
@@ -2196,6 +2204,7 @@ export function buildThreadbearTools(
         else if (p.action === 'completeTask') service.completeTask(own.projectId, p.taskId ?? '');
         else if (p.action === 'selectTask') service.selectTask(own.projectId, p.taskId ?? '');
         else if (p.action === 'archiveTask') service.archiveTask(own.projectId, p.taskId ?? '');
+        else if (p.action === 'dropTask') service.dropTask(own.projectId, p.taskId ?? '', p.summary ?? p.answer);
         else if (p.action === 'openLoop') {
           const opened = service.openLoop(own.projectId, {
             kind: p.loopKind ?? 'user_question',
@@ -2207,7 +2216,7 @@ export function buildThreadbearTools(
           });
           return JSON.stringify(opened);
         } else if (p.action === 'updateLoop') {
-          service.updateLoop(own.projectId, p.loopId ?? '', {
+          service.updateLoop(own.projectId, p.loopId ?? service.loopIdFrom(own.projectId, p.questionId, p.taskId) ?? '', {
             ...(p.title !== undefined ? { title: p.title } : {}),
             ...(p.summary !== undefined ? { summary: p.summary } : {}),
             ...(p.loopState !== undefined ? { state: p.loopState } : {}),
@@ -2215,7 +2224,7 @@ export function buildThreadbearTools(
             ...(p.sourceSeq !== undefined ? { sourceSeq: p.sourceSeq } : {}),
           });
         } else if (p.action === 'closeLoop') {
-          service.closeLoop(own.projectId, p.loopId ?? '');
+          service.closeLoop(own.projectId, p.loopId ?? service.loopIdFrom(own.projectId, p.questionId, p.taskId) ?? '');
         } else if (p.action === 'startHelper') {
           const started = service.startHelper(own.projectId, {
             ...(p.taskId ? { taskId: p.taskId } : {}),
