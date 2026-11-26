@@ -249,10 +249,11 @@ struct ThreadView: View {
                     } else if isDone(thread, messages: messages) {
                         // Ticked follow-ups go from the card's Send on their
                         // own; anything typed stays in the box for later.
-                        DoneCard(next: thread.next ?? [], nextPick: thread.nextPick, nextSuggested: thread.nextSuggestedIndex, looseEnds: thread.looseEnds ?? [], openThread: { pushThread($0) }, picked: $nextPicks, busy: sendingCard) {
+                        // Already archived, its button takes it back to the inbox (26 Nov).
+                        DoneCard(next: thread.next ?? [], nextPick: thread.nextPick, nextSuggested: thread.nextSuggestedIndex, looseEnds: thread.looseEnds ?? [], openThread: { pushThread($0) }, picked: $nextPicks, busy: sendingCard, archived: thread.archivedAt != nil) {
                             sendCard(thread, lastSeq: messages.last?.seq)
                         } archive: {
-                            archive()
+                            if thread.archivedAt != nil { change(.unarchive) } else { archive() }
                         }
                         .onChange(of: messages.last?.seq, initial: true) {
                             // A new reply's card starts with nothing ticked.

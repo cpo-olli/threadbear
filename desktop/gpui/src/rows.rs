@@ -1074,6 +1074,8 @@ impl ThreadPane {
             // This transcript's thread, which in a panel of its own isn't
             // the main panel's.
             let (app, id) = (self.app.clone(), self.summary.id.clone());
+            let archive_words =
+                crate::composer_card::done_archive_words(self.summary.is_archived());
             body = body.child(
                 h_flex()
                     .w_full()
@@ -1093,9 +1095,9 @@ impl ThreadPane {
                     .child(
                         card_button(
                             ("past-done-archive", ix),
-                            "Archive",
+                            archive_words.0,
                             ButtonLook::Plain,
-                            "Archive this thread",
+                            archive_words.1,
                             cx,
                         )
                         .on_click(move |ev, window, cx| {

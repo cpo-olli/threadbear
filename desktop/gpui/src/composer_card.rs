@@ -774,25 +774,20 @@ impl Composer {
     }
 
     fn render_done_archive(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self
-            .pane
-            .upgrade()
-            .is_some_and(|pane| pane.read(cx).summary.is_coordinator())
-        {
+        let pane = self.pane.upgrade()?;
+        let summary = &pane.read(cx).summary;
+        if summary.is_coordinator() {
             return None;
         }
+        // Already archived, it offers the way back instead (26 Nov: an
+        // archived thread's card still said Archive).
+        let (label, tip) = done_archive_words(summary.is_archived());
         let this = cx.entity().downgrade();
         Some(
-            card_button(
-                ("done-archive", 0usize),
-                "Archive",
-                ButtonLook::Plain,
-                "Archive this thread",
-                cx,
-            )
+            card_button(("done-archive", 0usize), label, ButtonLook::Plain, tip, cx)
             .test_support()
             .role(Role::Button)
-            .aria_label("Archive this thread")
+            .aria_label(tip)
             .on_click(move |event, window, cx| {
                 if let Some(this) = this.upgrade() {
                     this.update(cx, |this, cx| {
@@ -3074,6 +3069,16 @@ fn small_label(text: &'static str, cx: &App) -> impl IntoElement {
         .line_height(px(metrics::WHERE_LINE))
         .text_color(style::secondary_label(cx))
         .child(text)
+}
+
+/// The done card's button: Archive, or Back to Inbox on a thread that's
+/// already archived (its click toggles either way, `toggle_archive_of`).
+pub(crate) fn done_archive_words(archived: bool) -> (&'static str, &'static str) {
+    if archived {
+        ("Back to Inbox", "Unarchive this thread")
+    } else {
+        ("Archive", "Archive this thread")
+    }
 }
 
 #[cfg(test)]

@@ -209,6 +209,8 @@ struct DoneCard: View {
     @Binding var picked: Set<Int>
     /// The ticked ones are on their way: Send spins, and nothing more to press.
     var busy: Bool
+    /// An archived thread's card offers the way back instead of Archive.
+    var archived = false
     var send: () -> Void
     var archive: () -> Void
     @State private var tickTaps = 0
@@ -224,12 +226,12 @@ struct DoneCard: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button(action: archive) {
-                    Image(systemName: "archivebox")
+                    Image(systemName: archived ? "tray.and.arrow.up" : "archivebox")
                 }
                 .buttonStyle(.bordered)
                 .tint(.secondary)
                 .controlSize(.small)
-                .accessibilityLabel("Archive")
+                .accessibilityLabel(archived ? "Back to the inbox" : "Archive")
             }
             if !looseEnds.isEmpty { looseEndsList }
             if !next.isEmpty {
