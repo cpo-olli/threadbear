@@ -448,8 +448,10 @@ test('a handover that interrupts a helper still wakes the idle coordinator on th
   const fresh = recoverFresh(h, home);
   await tick();
   assert.equal(told([fresh.adapter], coordinator.threadId, 'interrupted helper work'), 1);
+  fresh.adapter.sessions.filter((x) => x.opts.threadId === coordinator.threadId).at(-1)!.result('completed');
+  await tick();
   fresh.c.stop();
-  // And not again on the restart after.
+  // Read, so not again on the restart after.
   const again = recoverFresh(h, home);
   await tick();
   assert.equal(told([again.adapter], coordinator.threadId, 'interrupted helper work'), 0);
@@ -520,12 +522,17 @@ test('the restart wake survives a crash before its thread is saved, and goes onc
   dying.start();
   await tick();
   assert.ok(crashed, 'the crash happened');
-  assert.ok(dying.forThread(coordinator.threadId)!.wakeInterrupted, 'the flag stays until the wake is saved');
+  assert.ok(dying.forThread(coordinator.threadId)!.reports?.some((r) => r.id.startsWith('restart:')), 'kept until a turn that has it finishes');
   dying.stop();
   const fresh = recoverFresh(h, home);
   await tick();
-  assert.equal(told([adapter, fresh.adapter], coordinator.threadId, 'interrupted helper work'), 1, 'once across both runners');
-  assert.equal(fresh.c.forThread(coordinator.threadId)!.wakeInterrupted, undefined);
+  // The dying runner's turn for it never finished, so the next one sends it
+  // (again, saying so if the first had started it).
+  assert.equal(told([fresh.adapter], coordinator.threadId, 'interrupted helper work'), 1, 'the next runner wakes it');
+  if (told([adapter], coordinator.threadId, 'interrupted helper work')) assert.equal(told([fresh.adapter], coordinator.threadId, 'Sent again'), 1);
+  fresh.adapter.sessions.filter((x) => x.opts.threadId === coordinator.threadId).at(-1)!.result('completed');
+  await tick();
+  assert.equal(fresh.c.forThread(coordinator.threadId)!.reports, undefined);
   fresh.c.stop();
 });
 
@@ -592,6 +599,21 @@ test('pausing a coordinator keeps a queued report queued, and resuming delivers 
   await tick();
   assert.equal(told([t.claude], coordinator.threadId, 'A helper turn finished'), 1, 'delivered once after resume');
   t.c.stop();
+});
+
+test('a registry saved with the old restart-wake flag still loads, as a restart report', async () => {
+  const { c, project, home, h } = setup();
+  c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  c.stop();
+  const file = path.join(home, 'coordinators.json');
+  const rows = JSON.parse(fs.readFileSync(file, 'utf8'));
+  rows[0].wakeInterrupted = true;
+  fs.writeFileSync(file, JSON.stringify(rows));
+  const again = new Coordinators({ home, host: h.runner, projects: new Projects({ home, clock: new FakeClock(), log: nullLogger }), clock: new FakeClock(), enabled: () => true, log: nullLogger });
+  const row = again.forThread(rows[0].threadId)!;
+  assert.equal(row.wakeInterrupted, undefined);
+  assert.ok(row.reports?.some((r) => r.id.startsWith('restart:')));
 });
 
 test('a coordinator keeps at most 50 undelivered helper reports', async () => {

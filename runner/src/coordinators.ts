@@ -84,9 +84,9 @@ const recordSchema = z.object({
   // Set with helper runs a restart or handover interrupted, cleared once the
   // coordinator is woken for them (start()): saved, so a crash or a handover
   // before that wake doesn't lose it.
-  // The wake's delivery id: queued under it, so a crash before the
-  // coordinator thread's save neither loses nor repeats it.
-  wakeInterrupted: z.string().optional(),
+  // Retired: the restart wake is a report now (restartReport). Read only to
+  // turn into one, whatever shape an earlier build saved it in.
+  wakeInterrupted: z.union([z.string(), z.boolean()]).optional(),
 });
 export type Coordinator = z.infer<typeof recordSchema>;
 export type CoordinatorView = Omit<Coordinator, 'events' | 'seen' | 'tasks' | 'delivery' | 'reports'> & { tasks: (Omit<Coordinator['tasks'][number], 'run'> & { run?: Omit<NonNullable<Coordinator['tasks'][number]['run']>, 'brief'> })[] };
@@ -172,6 +172,7 @@ const BATCH_MS = 10 * 60_000;
 // of one whose turn failed before a restart or resume tries again.
 const MAX_REPORTS = 50;
 const MAX_REPORT_RETRIES = 3;
+const RESTART_WAKE = 'The runner restarted with interrupted helper work. Inspect the saved records and existing effects before resuming any helper.';
 const RESENT_NOTE = 'Sent again: a restart, pause or failure cut off the turn this came in. You may have seen it already; check before acting on it twice.';
 const COMPACT_MS = 50 * 60_000;
 
@@ -210,12 +211,15 @@ export class Coordinators {
       const saved = z.array(recordSchema).parse(JSON.parse(fs.readFileSync(this.file, 'utf8')));
       for (const row of saved) {
         if (this.rows.has(row.projectId) || [...this.rows.values()].some((r) => r.threadId === row.threadId)) throw Error('Duplicate coordinator identity');
+        let interrupted = Boolean(row.wakeInterrupted);
+        delete row.wakeInterrupted;
         for (const task of row.tasks) if (task.run && ['queued', 'running'].includes(task.run.status)) {
           task.run.status = runMove(task.run.status, 'interrupted');
           taskMove(task, 'blocked');
           task.run.summary = 'The runner restarted. Reconcile the existing work before resuming; do not replay side effects.';
-          row.wakeInterrupted ??= crypto.randomUUID();
+          interrupted = true;
         }
+        if (interrupted) this.restartReport(row);
         this.rows.set(row.projectId, row);
       }
       this.save();
@@ -229,12 +233,12 @@ export class Coordinators {
     this.unlisten = this.deps.host.onNotification((n) => this.observe(n));
     for (const row of this.rows.values()) this.activate(row);
   }
-  private wakeForInterrupted(row: Coordinator): void {
-    if (!row.wakeInterrupted || row.state !== 'active' || !this.deps.enabled() || this.stopped) return;
-    // wake() saves the thread's record with it before the flag goes.
-    this.wake(row, 'The runner restarted with interrupted helper work. Inspect the saved records and existing effects before resuming any helper.', `interrupted:${row.wakeInterrupted}`);
-    delete row.wakeInterrupted;
-    this.save();
+  // The "runner restarted" wake rides as a report, so it has every report's
+  // care: kept until a coordinator turn that has it finishes, sent again if
+  // a crash orphans its turn (Codex's review, 26 Nov 2026). One at a time.
+  private restartReport(row: Coordinator): void {
+    if (row.reports?.some((r) => r.id.startsWith('restart:'))) return;
+    (row.reports ??= []).push({ id: `restart:${crypto.randomUUID()}`, at: this.now(), text: RESTART_WAKE });
   }
   // Everything a coordinator that may run does on a new runner, or when
   // coordinators are turned back on: its timers, its reports, its held
@@ -246,7 +250,6 @@ export class Coordinators {
       if (row.wakeAt) this.schedule(row, Math.max(0, Date.parse(row.wakeAt) - this.deps.clock.now()));
       this.reconcileReports(row);
       this.deliverReports(row, true);
-      this.wakeForInterrupted(row);
       const st = this.deps.host.threads.get(row.threadId);
       if (st && this.deps.host.bucket(st.rec) === 'inbox') this.deps.host.kickQueue(st);
     } catch (e) {
@@ -269,7 +272,7 @@ export class Coordinators {
       for (const task of row.tasks) if (task.run && ['queued', 'running'].includes(task.run.status)) {
         task.run.status = runMove(task.run.status, 'interrupted'); taskMove(task, 'blocked');
         task.run.summary = 'The runner updated. Reconcile the saved work before resuming.';
-        row.wakeInterrupted ??= crypto.randomUUID();
+        this.restartReport(row);
         if (coordSt && task.run.helperThreadId) this.deps.host.updateSubagent(coordSt, { id: task.run.helperThreadId, status: 'stopped', summary: task.run.summary });
       }
       this.changed(row);
@@ -458,9 +461,13 @@ export class Coordinators {
     } else {
       // Reports a pause cut off go again; queued ones (held while paused:
       // Runner.kickQueue) start behind the wake's own send, in order.
+      // The resume wake says it all: a restart one not yet sent is dropped.
+      if (row.reports?.some((r) => r.id.startsWith('restart:') && !r.sentAs)) {
+        row.reports = row.reports.filter((r) => !(r.id.startsWith('restart:') && !r.sentAs));
+        if (!row.reports.length) delete row.reports;
+      }
       this.reconcileReports(row);
       this.deliverReports(row, true);
-      delete row.wakeInterrupted;
       this.wake(row, 'Resumed by the user. Reconcile any interrupted helper before deciding what to do next.');
       if (row.events.length || row.delivery || row.wakeAt) this.schedule(row, row.events.length || row.delivery ? BATCH_MS : Math.max(0, Date.parse(row.wakeAt!) - this.deps.clock.now()));
     }
