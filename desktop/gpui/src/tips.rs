@@ -24,13 +24,21 @@ pub(crate) trait Tip: ParentElement + StatefulInteractiveElement + Sized {
             }
             // The pointer stopped on it to find out what it is.
             crate::activity::hover(&shown, window, cx);
-            Tooltip::new(shown.clone()).build(window, cx)
+            // Wrapped at the Swift tip's 320 (Tips.swift's `maxWidth`), less
+            // the kit's 8 px padding each side. The kit sets no width, so a
+            // long tip was one line, cut off at the window's edge (24 Nov).
+            let text = shown.clone();
+            Tooltip::element(move |_, _| div().max_w(px(TIP_TEXT_WIDTH)).child(text.clone()))
+                .build(window, cx)
         })
         .child(anchor(text))
     }
 }
 
 impl<E: ParentElement + StatefulInteractiveElement + Sized> Tip for E {}
+
+/// The widest a tooltip's text goes before it wraps.
+const TIP_TEXT_WIDTH: f32 = 304.;
 
 thread_local! {
     /// Which of the app's own menus are up, one bit each (`menu_up`).
