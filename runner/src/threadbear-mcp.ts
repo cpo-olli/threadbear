@@ -23,6 +23,7 @@ import { MAX_CHECK_TIMEOUT_SECS } from './schedule-check.ts';
 import { checkCardProblem, checkDigest, type CheckCard } from './patch-trust.ts';
 import { applyNoteEdits, type Projects } from './projects.ts';
 import type { Coordinators } from './coordinators.ts';
+import { COORDINATOR_THREADBEAR_TOOLS, COORDINATOR_WORKER_PROMPT, HELPER_THREADBEAR_TOOLS } from './coordinator-policy.ts';
 import { parseWhen, relativeFuture, relativeTime } from './when.ts';
 import { SAID_MAX } from './wake-when.ts';
 
@@ -2007,12 +2008,32 @@ export function buildThreadbearTools(
     });
   };
 
-  return [
+  const coordinatorService = opts.coordinators?.();
+  const isCoordinator = Boolean(coordinatorService?.forThread(selfId));
+  const isHelper = !isCoordinator && Boolean(coordinatorService?.helperOwner(selfId));
+  const allTools = [
     endTurn(),
-    ...(opts.coordinators?.()?.forThread(selfId) ? [tool(
+    ...(isCoordinator ? [tool(
       'coordinator',
-      'Read your durable project desk, add a bounded job, update your charter/interests or wake time, or record an answer to a helper question. Keep shared project goals/state/notes with update_project. Helpers report to you; ask the user only for decisions your instructions do not settle.',
-      { action: z.enum(['get', 'addTask', 'selectTask', 'completeTask', 'archiveTask', 'update', 'answer']), taskId: z.string().optional(), title: z.string().max(200).optional(), doneWhen: z.string().max(1000).optional(), charter: z.string().max(8000).optional(), interests: z.array(z.string().max(200)).max(40).optional(), wakeAt: z.string().nullable().optional(), questionId: z.string().optional(), answer: z.string().max(4000).optional() },
+      'Read your durable project desk, add/select/complete/archive bounded jobs, start or resume a hidden implementation helper (startHelper / resumeHelper), update your charter/interests or wake time, or record an answer to a helper question. Keep shared project goals/state/notes with update_project. Helpers run in hidden sessions and wake you when they finish; ask the user only for decisions your instructions do not settle.',
+      {
+        action: z.enum(['get', 'addTask', 'selectTask', 'completeTask', 'archiveTask', 'startHelper', 'resumeHelper', 'update', 'answer']),
+        taskId: z.string().optional(),
+        helperId: z.string().optional(),
+        brief: z.string().max(16_000).optional(),
+        title: z.string().max(200).optional(),
+        doneWhen: z.string().max(1000).optional(),
+        cwd: z.string().max(1000).optional(),
+        model: z.string().max(200).optional(),
+        effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional(),
+        poolId: z.string().max(200).optional(),
+        accountId: z.string().max(200).optional(),
+        charter: z.string().max(8000).optional(),
+        interests: z.array(z.string().max(200)).max(40).optional(),
+        wakeAt: z.string().nullable().optional(),
+        questionId: z.string().optional(),
+        answer: z.string().max(4000).optional(),
+      },
       handle(async (p) => {
         const service = opts.coordinators?.();
         const own = service?.forThread(selfId);
@@ -2023,6 +2044,31 @@ export function buildThreadbearTools(
         else if (p.action === 'completeTask') service.completeTask(own.projectId, p.taskId ?? '');
         else if (p.action === 'selectTask') service.selectTask(own.projectId, p.taskId ?? '');
         else if (p.action === 'archiveTask') service.archiveTask(own.projectId, p.taskId ?? '');
+        else if (p.action === 'startHelper') {
+          const started = service.startHelper(own.projectId, {
+            ...(p.taskId ? { taskId: p.taskId } : {}),
+            brief: p.brief ?? '',
+            ...(p.title ? { title: p.title } : {}),
+            ...(p.doneWhen ? { doneWhen: p.doneWhen } : {}),
+            ...(p.cwd ? { cwd: p.cwd } : {}),
+            ...(p.model ? { model: p.model } : {}),
+            ...(p.effort ? { effort: p.effort } : {}),
+            ...(p.poolId ? { poolId: p.poolId } : {}),
+            ...(p.accountId ? { accountId: p.accountId } : {}),
+          });
+          return JSON.stringify(started);
+        } else if (p.action === 'resumeHelper') {
+          const resumed = service.resumeHelper(own.projectId, {
+            ...(p.taskId ? { taskId: p.taskId } : {}),
+            ...(p.helperId ? { helperId: p.helperId } : {}),
+            brief: p.brief ?? '',
+            ...(p.model ? { model: p.model } : {}),
+            ...(p.effort ? { effort: p.effort } : {}),
+            ...(p.poolId ? { poolId: p.poolId } : {}),
+            ...(p.accountId ? { accountId: p.accountId } : {}),
+          });
+          return JSON.stringify(resumed);
+        }
         return JSON.stringify(service.get(own.projectId));
       }),
     )] : []),
@@ -2456,6 +2502,9 @@ export function buildThreadbearTools(
       { annotations: { destructiveHint: true } },
     ),
   ];
+  if (isCoordinator) return allTools.filter((t) => COORDINATOR_THREADBEAR_TOOLS.has(t.name));
+  if (isHelper) return allTools.filter((t) => HELPER_THREADBEAR_TOOLS.has(t.name));
+  return allTools;
 }
 
 function snoozeEnd(t: ThreadSummary): string {
@@ -2605,10 +2654,11 @@ export function serverInstructions(selfId: string, o: { one: boolean; bulletRepl
 
 export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, remote?: () => RemoteControl | undefined, reviewCanvas?: () => boolean, livePages?: () => boolean, coordinators?: () => Coordinators | undefined): McpSdkServerConfigWithInstance {
   const one = oneReply();
+  const isHelper = Boolean(coordinators?.()?.helperOwner(selfId));
   const server = createSdkMcpServer({
     name: SERVER_NAME,
     version: RUNNER_VERSION,
-    instructions: serverInstructions(selfId, { one, bulletReplies: bulletReplies(), pocket: Boolean(pocket?.()), projects: Boolean(projects), livePages: livePages?.() ?? false }),
+    instructions: isHelper ? COORDINATOR_WORKER_PROMPT : serverInstructions(selfId, { one, bulletReplies: bulletReplies(), pocket: Boolean(pocket?.()), projects: Boolean(projects), livePages: livePages?.() ?? false }),
     tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, remote, reviewCanvas, coordinators }),
   });
   server.tools = [...ALWAYS_ASK_TOOLS].map((name) => ({ name: name.split('__').at(-1)!, permission_policy: 'always_ask' as const }));

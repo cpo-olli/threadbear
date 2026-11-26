@@ -1236,9 +1236,10 @@ a Connectors gateway (see [Connectors](#connectors)); without one, the
 project's page says so and nothing is read.
 
 With the **Project coordinators** experiment enabled, a project's page offers
-**Add a coordinator** with the ordinary pool and model picker. The first version
-supports Claude models and runs on this Mac. Its conversation stays in a
-Coordinators section above Starred, while routine helpers stay out of the inbox.
+**Add a coordinator** with the ordinary pool and model picker, and you can switch
+its model or provider at any time from the composer. It runs on this Mac; its
+conversation stays in a Coordinators section above Starred, while routine helpers
+run as hidden sessions out of the inbox and appear on the Activity tab.
 The project home has Conversation, Activity, To-dos and Threads tabs, with
 Highlights keeping the project's shared goals, state and notes beside them. You
 can edit that document directly; if another thread changed a field while you

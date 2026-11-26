@@ -7,13 +7,15 @@ something that isn't on this list, treat that as a problem and say so.
 File references are where to look.
 
 With the optional `coordinators` experiment on (`runner/src/coordinators.ts`),
-each project coordinator uses an ordinary official Claude CLI session and its
-native helper processes on the selected pool. It keeps a durable registry in
+each project coordinator uses an ordinary CLI session on any supported provider
+and pool, and delegates work to hidden runner-managed helper sessions (kept out
+of the inbox and readable from Activity). It keeps a durable registry in
 `coordinators.json`, completed work archived in `coordinator-history.jsonl`, and
 its working folder under `coordinators/<project id>/` in the runner data folder.
-Shared project prose remains in `projects.json`. Helper transcripts remain in
-the CLI's normal session storage; work records retain the brief, native identity
-and latest result without copying every helper transcript into each wake.
+Shared project prose remains in `projects.json`. Helper transcripts stay in
+normal thread storage hidden from lists and sync; work records retain the brief,
+helper identity and latest result without copying every helper transcript into
+each wake.
 
 Project-thread completions and literal keyword matches are batched for ten
 minutes. A coordinator may also set a one-shot wake time. Failed delivery waits

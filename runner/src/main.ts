@@ -462,7 +462,7 @@ async function main(): Promise<void> {
   // What Codex and ACP agents get beside the tools: the rich blocks, and
   // live pages with that experiment on.
   const richGuidance = () => (experimentOn(cfg.home, 'livePages') ? `${RICH_BLOCKS_LINE} ${LIVE_PAGES_LINE}` : RICH_BLOCKS_LINE);
-  const codexStyleTools = (threadId: string) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, remote: remoteControl, reviewCanvas: () => experimentOn(cfg.home, 'reviewCanvas') });
+  const codexStyleTools = (threadId: string) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, remote: remoteControl, reviewCanvas: () => experimentOn(cfg.home, 'reviewCanvas'), coordinators: () => runner.coordinators });
   // One app-server per live Codex thread, each starting what E says is
   // current, with the same threadbear tools as dynamic tools.
   const codex = new CodexAdapter({
@@ -1967,7 +1967,7 @@ async function main(): Promise<void> {
     mailFirst = false;
     if (draining || stopping) return;
     // A thread that look started or woke is busy now: it's kept like the rest.
-    const keeps = [...new Set([...busy, ...restarter.busyThreads()])].filter((id) => !coordinators.forThread(id));
+    const keeps = [...new Set([...busy, ...restarter.busyThreads()])].filter((id) => !coordinators.forThread(id) && !coordinators.helperOwner(id));
     draining = true;
     log.info('starting the handover', { keeps });
     try {

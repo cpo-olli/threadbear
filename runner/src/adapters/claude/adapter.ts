@@ -25,7 +25,7 @@ import { RUNNER_VERSION } from '../../config.ts';
 import { stripModelSuffix } from '../../accounts.ts';
 import { END_TURN_FULL_NAME, END_TURN_NUDGE, endTurnMessageStands, endTurnWantsReply, needsFromTool, ONE_REPLY_END_TURN_NUDGE, ONE_REPLY_WRITE_NUDGE, missingLinksNudge, owedReplyAfterCompact, replyAsks, replyAsksNudge, WakeRead } from '../../needs.ts';
 import { missingFileLinks } from '../../highlights.ts';
-import { coordinatorTool, COORDINATOR_WORKER, COORDINATOR_WORKER_PROMPT, HELPER_REPORT } from './coordinator.ts';
+import { HELPER_REPORT, coordinatorTool, isHelperQuestionTool } from './coordinator.ts';
 
 // Variables a parent Claude Code session sets for its own children. If the
 // runner was started from inside one (tests, a terminal in T3), they would
@@ -457,8 +457,7 @@ class ClaudeSession implements AgentSession {
   // second is only for one the CLI kept back, and there is never a third.
   private notStarted = new Map<string, number>();
   private lifecycle = false;
-  private coordinatorDispatches = new Set<string>();
-  private coordinatorTasks = new Map<string, { toolUseId: string; runId?: string }>();
+
 
   constructor(opts: StartSessionOptions, sink: SessionSink, deps: ClaudeAdapterDeps) {
     this.opts = opts;
@@ -503,10 +502,7 @@ class ClaudeSession implements AgentSession {
       hooks: {
         Stop: [{ hooks: [(input) => this.onStop(input)] }],
         PostToolUse: [{ matcher: END_TURN_FULL_NAME, hooks: [async (input) => this.onEndTurn(input)] }],
-        ...(opts.coordinator ? { PostToolUseFailure: [{ matcher: 'Agent|Task', hooks: [async (input: HookInput) => {
-          if (input.hook_event_name === 'PostToolUseFailure' && !input.agent_id) this.coordinatorFailure(input.tool_use_id, input.error);
-          return {};
-        }] }] } : {}),
+
         // Every Edit and Write, in every mode, a sub-agent's too: where the
         // mode it ran on is recorded, and where one that writes code is
         // made to ask outside Full access (onEditCall).
@@ -527,21 +523,14 @@ class ClaudeSession implements AgentSession {
           ...(opts.heldGrants ? [{ hooks: [async () => (this.askEvery ? { hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision: 'ask' as const, permissionDecisionReason: "The folder's permission rules aren't trusted for this thread." } } : {})] }] : []),
         ],
         SessionStart: [{ hooks: [async (input) => this.onCompact(input)] }],
-        ...(opts.coordinator ? { SubagentStart: [{ hooks: [async (input: HookInput) => {
-          if (input.hook_event_name === 'SubagentStart' && input.agent_type === COORDINATOR_WORKER) {
-            const dispatch = this.coordinatorTasks.get(input.agent_id);
-            if (dispatch) opts.coordinator?.workerStarted?.(input.agent_id, input.agent_type, dispatch);
-          }
-          return {};
-        }] }] } : {}),
+
       },
       abortController: this.abort,
       spawnClaudeCodeProcess: groupSpawner(deps.registry, deps.log, (line) => this.stderr(line), opts.threadId),
     };
-    if (opts.coordinator) options.agents = { [COORDINATOR_WORKER]: { description: 'Carry out one bounded project job and report to the coordinator.', prompt: COORDINATOR_WORKER_PROMPT, model: 'inherit' } };
     const servers = deps.mcpServersFor?.(opts.threadId);
     if (servers && Object.keys(servers).length) options.mcpServers = servers;
-    this.hasEndTurn = Object.keys(servers ?? {}).some((k) => END_TURN_FULL_NAME.startsWith(`mcp__${k}__`));
+    this.hasEndTurn = opts.coordinator?.role === 'helper' ? false : Object.keys(servers ?? {}).some((k) => END_TURN_FULL_NAME.startsWith(`mcp__${k}__`));
     if (opts.model) options.model = opts.model;
     const effort = claudeEffort(opts.effort);
     if (effort) options.effort = effort;
@@ -571,40 +560,20 @@ class ClaudeSession implements AgentSession {
   private coordinatorCheck(name: string, input: Record<string, unknown>, agentId?: string, toolUseId?: string): { reason?: string; updatedInput?: Record<string, unknown> } {
     const host = this.opts.coordinator;
     if (!host) return {};
-    const gate = coordinatorTool(name, input, Boolean(agentId));
-    // The host sees only sanitized dispatch input and trusted identity.
-    // Check questions too, before recording one for an unknown helper.
+    const isHelper = host.role === 'helper' || Boolean(agentId);
+    const gate = coordinatorTool(name, input, isHelper);
+    const helperId = host.role === 'helper' ? this.opts.threadId : agentId;
     try {
-      const reason = host.checkTool({ name, input: gate.updatedInput ?? input, agentId, toolUseId });
+      const reason = host.checkTool({ name, input: gate.updatedInput ?? input, agentId: helperId, toolUseId });
       if (reason) return { reason };
-      if (!agentId && gate.updatedInput && toolUseId) {
-        this.coordinatorDispatches.add(toolUseId);
-        while (this.coordinatorDispatches.size > 200) this.coordinatorDispatches.delete(this.coordinatorDispatches.values().next().value!);
+      if (isHelper && helperId && isHelperQuestionTool(name)) {
+        const qs = normaliseQuestions(input.questions);
+        if (qs.length) host.helperQuestion?.(helperId, qs);
       }
-      if (agentId && name === 'AskUserQuestion') host.helperQuestion?.(agentId, normaliseQuestions(input.questions));
       return gate;
     } catch {
       return { reason: 'The runner could not verify this coordinator operation. Stop and report the problem; the operation was not allowed.' };
     }
-  }
-
-  // Native task_started is emitted before SubagentStart. Register identity
-  // before forwarding its running event, while the host still has the
-  // dispatch reservation. Only an Agent call our gate allowed can register.
-  private coordinatorStarted(msg: Record<string, unknown>): void {
-    if (!this.opts.coordinator || msg.type !== 'system' || msg.subtype !== 'task_started' || msg.subagent_type !== COORDINATOR_WORKER || typeof msg.task_id !== 'string' || typeof msg.tool_use_id !== 'string' || !this.coordinatorDispatches.has(msg.tool_use_id)) return;
-    const runId = typeof msg.run_id === 'string' ? msg.run_id : undefined;
-    const before = this.coordinatorTasks.get(msg.task_id);
-    if (before?.runId && (!runId || runId < before.runId)) return;
-    const dispatch = { toolUseId: msg.tool_use_id, ...(runId ? { runId } : {}) };
-    this.coordinatorTasks.set(msg.task_id, dispatch);
-    while (this.coordinatorTasks.size > 200) this.coordinatorTasks.delete(this.coordinatorTasks.keys().next().value!);
-    this.opts.coordinator.workerStarted?.(msg.task_id, COORDINATOR_WORKER, dispatch);
-  }
-
-  private coordinatorFailure(toolUseId: string, reason: string): void {
-    if (!this.coordinatorDispatches.delete(toolUseId)) return;
-    this.opts.coordinator?.workerFailed?.(toolUseId, reason);
   }
 
   private async onStop(input: HookInput): Promise<{ decision?: 'block'; reason?: string }> {
@@ -852,14 +821,12 @@ class ClaudeSession implements AgentSession {
         }
         this.noteLifecycle(msg as Record<string, unknown>);
         this.noteCalls(msg as Record<string, unknown>);
-        this.coordinatorStarted(msg as Record<string, unknown>);
         for (let out of this.normalizer.handle(msg as Record<string, unknown>)) {
           // The mode the call went through on, recorded at the call.
           if (out.kind === 'wrote') {
             const mode = this.writeModes.get(out.itemId);
             out = { ...out, ...(mode ? { mode } : {}) };
           } else if (out.kind === 'event' && out.event.type === 'tool.result') {
-            if (!out.event.ok) this.coordinatorFailure(out.event.itemId, out.event.text);
             this.writeModes.delete(out.event.itemId);
             this.codeWrites.delete(out.event.itemId);
             this.openCalls.delete(out.event.itemId);
@@ -1021,7 +988,7 @@ class ClaudeSession implements AgentSession {
     }
     if (this.deps.neverAsk?.has(name) && !this.deps.alwaysAsk?.has(name)) return { behavior: 'allow', updatedInput: input, toolUseID: o.toolUseID };
     if (this.mode === 'full' && !this.deps.alwaysAsk?.has(name)) return { behavior: 'allow', updatedInput: input, toolUseID: o.toolUseID };
-    if (this.opts.coordinator && sub) return { behavior: 'deny', message: HELPER_REPORT, toolUseID: o.toolUseID };
+    if (this.opts.coordinator && (sub || this.opts.coordinator.role === 'helper')) return { behavior: 'deny', message: HELPER_REPORT, toolUseID: o.toolUseID };
     // "Plan first": the plan goes to Mike as a plan card, and this call
     // waits on it like any approval. Approving it answers with the mode to
     // leave plan mode for (setMode below), as the CLI's own prompt does.

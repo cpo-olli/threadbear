@@ -1028,7 +1028,7 @@ export class Runner {
     void this.settleLostCleanups();
     // A guess the last runner was still making when it stopped or let a
     // thread go (runner/inbox-guess.ts); it catches its own errors.
-    for (const st of this.threads.values()) this.catchUpInboxGuess(st, GUESS_CATCH_UP_MS);
+    for (const st of this.threads.values()) if (!st.rec.coordinatorHelperFor) this.catchUpInboxGuess(st, GUESS_CATCH_UP_MS);
     for (const st of this.threads.values()) {
       try {
         const coordinatorReady = this.coordinators?.forThread(st.rec.id) && !this.coordinators.dispatchRefusal(st.rec.id);
@@ -1371,6 +1371,22 @@ export class Runner {
     const { rec } = st;
     // A sub-agent can't outlive the runner that started its CLI.
     this.stopSubagents(st);
+    // Hidden coordinator helpers are owned and reconciled by Coordinators.
+    if (rec.coordinatorHelperFor) {
+      const mid = rec.status === 'starting' || rec.status === 'running' || rec.status === 'waiting';
+      if (mid && rec.turnId) {
+        const ev = this.emit(st, { type: 'turn.completed', turnId: rec.turnId, outcome: 'interrupted', durationMs: 0, error: 'The runner stopped during this turn.' }, rec.turnId);
+        rec.lastTurnCompletedSeq = ev.seq;
+      }
+      if (mid) {
+        rec.turnId = undefined;
+        rec.status = 'stopped';
+      }
+      rec.pendingApprovals = [];
+      rec.queue = [];
+      this.markDirty(st);
+      return false;
+    }
     // Waiting with no turn is only a subagent's card, and that subagent is
     // gone: there's no turn to pick up again.
     const onlyCards = rec.status === 'waiting' && !rec.turnId;
@@ -1756,6 +1772,7 @@ export class Runner {
     const out: ThreadSummary[] = [];
     const states = ids ? [...new Set(ids)].flatMap((id) => this.threads.get(id) ?? []) : this.threads.values();
     for (const st of states) {
+      if (st.rec.coordinatorHelperFor) continue;
       if (want.has(this.bucket(st.rec))) out.push(this.summary(st));
     }
     return sortByActivity(out);
@@ -1768,6 +1785,7 @@ export class Runner {
   recipeRunsSince(since: number): ThreadSummary[] {
     const out: ThreadSummary[] = [];
     for (const st of this.threads.values()) {
+      if (st.rec.coordinatorHelperFor) continue;
       if ((st.rec.schedule || st.rec.startedBy?.kind === 'runner') && Date.parse(st.rec.createdAt) >= since) out.push(this.summary(st));
     }
     return out;
@@ -1781,6 +1799,7 @@ export class Runner {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);
     const out: ThreadSummary[] = [];
     for (const st of this.threads.values()) {
+      if (st.rec.coordinatorHelperFor) continue;
       const hay = `${st.rec.title}\n${st.rec.preview}\n${st.rec.keywords ?? ''}`.toLowerCase();
       if (words.every((w) => hay.includes(w))) out.push(this.summary(st));
     }
@@ -1874,11 +1893,18 @@ export class Runner {
     return this.summary(this.mustGet(threadId));
   }
 
-  // What a sub-agent has done so far, from the CLI's transcript of it.
+  // What a sub-agent has done so far, from the CLI's transcript of it or from
+  // a hidden runner-managed coordinator helper's persisted event log.
   subagent(threadId: string, subagentId: string): { subagent?: Subagent; events: PersistedEvent[] } {
     const st = this.mustGet(threadId);
     const { rec } = st;
     const known = rec.subagents?.find((a) => a.id === subagentId);
+    const helper = this.threads.get(subagentId);
+    if (helper?.rec.coordinatorHelperFor === threadId) {
+      const log = this.store.log(subagentId);
+      const events = (log.lastSeq > 0 ? log.read(1, log.lastSeq) : []).map((e) => ({ ...e, threadId }));
+      return known ? { subagent: publicSubagent(known), events } : { events };
+    }
     const cwd = known?.cwd ?? rec.cwd;
     const account = this.accounts.get(known?.accountId ?? rec.accountId);
     const sessionId = known?.sessionId ?? rec.nativeSessionId;
@@ -2806,7 +2832,6 @@ export class Runner {
     if (held) throw new Error(held);
     const adapter = this.adapters[rec.provider];
     if (!adapter) throw new Error(`This runner can't run ${providerName(rec.provider)} threads.`);
-    if (this.coordinators?.forThread(rec.id) && rec.provider !== 'claude') throw new Error('This project coordinator needs a Claude pool/model so helper permissions can be enforced.');
     // Checked here, where every way a thread runs (a send, a carry-on, a
     // wake, a review) comes through, rather than at each of them.
     if (rec.copied) throw new Error(COPIED_REFUSAL);
@@ -3395,6 +3420,20 @@ export class Runner {
     const holdQueue = Boolean(rec.queue.length && (archive || snooze || waitFor || forApp));
     const loginBefore = rec.accountId;
     this.endTurn(st, ev.seq, outcome === 'failed' ? 'error' : 'idle', outcome, limitHit, netLost, holdQueue, signedOut);
+    if (rec.coordinatorHelperFor) {
+      const retrying = Boolean(rt.turn || rec.queue.length || rec.waitingForNetwork);
+      if (retrying) {
+        if (rt.turn) this.coordinators?.noteHelperTurn(rec.id, rt.turn.turnId);
+      } else {
+        if (rec.waitingForRoom) {
+          delete rec.waitingForRoom;
+          this.armRoomTimer();
+          this.markDirty(st);
+        }
+        this.coordinators?.onHelperTurn(rec.id, outcome, turn.lastText || r.error || '', turn.turnId);
+      }
+      return;
+    }
     // A pool thread refused as signed out that endTurn moved to another
     // login (afterTurn, onSignedOut) carries on there, like a limit or a
     // lost network. One that stayed put (pinned, a Codex login, nowhere to
@@ -3734,10 +3773,6 @@ export class Runner {
   // under the minimum room) or isn't in its pool any more, it moves first
   // (docs/protocol/settings.md, "Pools"). With nowhere better, the turn starts
   // where it is. A pinned thread (no poolId) never moves.
-  coordinatorAccounts(threadId: string, accounts: Account[]): Account[] {
-    return this.coordinators?.forThread(threadId) ? accounts.filter((a) => a.provider === 'claude') : accounts;
-  }
-
   beforeTurn(st: ThreadState): void {
     const { rec } = st;
     const pool = this.poolById(rec.poolId);
@@ -3747,7 +3782,7 @@ export class Runner {
     const inPool = pool.accountIds.includes(rec.accountId);
     if (current && inPool && loginOk(current)) return;
     const now = this.clock.now();
-    const next = nextLogin(pool, this.coordinatorAccounts(rec.id, accounts), rec, now);
+    const next = nextLogin(pool, accounts, rec, now);
     if ('waitUntil' in next) return;
     const why = !current ? `${rec.accountId} isn't on this Mac` : !inPool ? `${current.title} isn't in ${pool.title}` : current.planEnded ? `${current.title}'s plan has ended` : current.signedOut ? `${current.title} is signed out` : `${current.title} ${limitWhy(current, now)}`;
     this.moveLogin(st, accounts.find((a) => a.id === next.accountId)!, why);
@@ -4007,23 +4042,24 @@ export class Runner {
     if (typeof params.poolId === 'string' && params.accountId === undefined && !pool) {
       throw new RpcError(ErrorCode.badParams, `No pool called ${params.poolId}. Pools: ${this.pools().map((p) => p.id).join(', ') || 'none'}`);
     }
-    // The login to move to: the one named (which pins), or one of the new
-    // pool's when the current one isn't in it.
+    // The login to move to: the one named (which pins), or one of the pool's
+    // when moving pools or picking a model from another provider in the same pool.
+    const activePool = pool ?? (params.accountId === undefined && params.poolId === undefined && rec.poolId ? this.poolById(rec.poolId) : undefined);
     let toAccountId = params.accountId;
     // The provider the call asks for, when it says (or its model does): in
-    // a pool with both, a Codex model picked from the menu goes to a Codex
-    // login, even when the thread's Claude login is in that pool too.
+    // a pool with both, a Codex or Antigravity model picked from the menu goes
+    // to that provider's login, even when the thread's current login is in that pool too.
     const wanted = params.provider ?? (params.model ? this.modelProvider(params.model) : undefined);
-    const otherProvider = wanted !== undefined && wanted !== rec.provider && pool?.accountIds.some((id) => this.accounts.get(id)?.provider === wanted);
-    if (pool && (!pool.accountIds.includes(rec.accountId) || otherProvider)) {
-      const accounts = this.coordinatorAccounts(rec.id, this.usableAccounts());
+    const otherProvider = wanted !== undefined && wanted !== rec.provider && activePool?.accountIds.some((id) => this.accounts.get(id)?.provider === wanted);
+    if (activePool && (pool ? !activePool.accountIds.includes(rec.accountId) || otherProvider : otherProvider)) {
+      const accounts = this.usableAccounts();
       const provider = otherProvider ? wanted : rec.provider;
-      let id = pickInPool(pool, accounts, { provider });
-      if (!id) {
-        const next = nextLogin(pool, this.coordinatorAccounts(rec.id, accounts), rec, this.clock.now());
+      let id = pickInPool(activePool, accounts, { provider });
+      if (!id && !otherProvider) {
+        const next = nextLogin(activePool, accounts, rec, this.clock.now());
         if (!('waitUntil' in next)) id = next.accountId;
       }
-      toAccountId = id ?? poolAccounts(pool, accounts)[0]?.id;
+      toAccountId = id ?? poolAccounts(activePool, accounts).find((a) => !otherProvider || a.provider === wanted)?.id ?? poolAccounts(activePool, accounts)[0]?.id;
     }
     if (params.title !== undefined) {
       rec.title = cutSafely(params.title.trim(), 200) || rec.title;
@@ -4034,9 +4070,6 @@ export class Runner {
     const newCwd = params.cwd !== undefined ? path.resolve(expandHome(params.cwd.trim())) : undefined;
     if (newCwd !== undefined && !isDirectory(newCwd)) throw new RpcError(ErrorCode.badParams, `Folder not found: ${newCwd}`);
     const newAccount = toAccountId !== undefined ? this.accounts.get(toAccountId) : undefined;
-    if (this.coordinators?.forThread(rec.id) && ((newAccount && newAccount.provider !== 'claude') || (wanted && wanted !== 'claude') || (pool && !pool.accountIds.some((id) => this.accounts.get(id)?.provider === 'claude')))) {
-      throw new RpcError(ErrorCode.badParams, 'Project coordinators currently need a Claude model and a pool containing a Claude login.');
-    }
     if (toAccountId !== undefined && !newAccount) {
       throw new RpcError(ErrorCode.accountNotFound, `No account called ${toAccountId}`);
     }
@@ -4337,6 +4370,9 @@ export class Runner {
   // a mistake can be undone by hand) and forgets it.
   delete(threadId: string): Record<string, never> {
     const st = this.mustGet(threadId);
+    if (st.rec.coordinatorHelperFor && this.coordinators?.forThread(st.rec.coordinatorHelperFor)) {
+      throw new RpcError(ErrorCode.badParams, 'A coordinator helper session is managed by its project coordinator.');
+    }
     this.coordinators?.forget(threadId);
     const { rec, rt } = st;
     rt.deleted = true;
@@ -4375,7 +4411,7 @@ export class Runner {
     this.store.trash(threadId, this.clock.now());
     this.log.info('thread deleted', { threadId, title: rec.title });
     this.armSnoozeTimer();
-    this.notify({ method: 'thread.deleted', params: { threadId } });
+    if (!rec.coordinatorHelperFor) this.notify({ method: 'thread.deleted', params: { threadId } });
     return {};
   }
 
@@ -4834,7 +4870,7 @@ export class Runner {
       if (asked) st.rec.asked = asked;
     }
     this.markDirty(st);
-    this.notify({ method: 'thread.event', params: { threadId: st.rec.id, event } });
+    if (!st.rec.coordinatorHelperFor) this.notify({ method: 'thread.event', params: { threadId: st.rec.id, event } });
     return event;
   }
 
@@ -4866,7 +4902,7 @@ export class Runner {
     const ts = this.isoNow();
     for (const [itemId, d] of rt.pendingDeltas) {
       const event = { seq, ts, threadId: rec.id, ...(rt.turn ? { turnId: rt.turn.turnId } : {}), type: d.type, itemId, text: d.text } as AnyEvent;
-      this.notify({ method: 'thread.event', params: { threadId: rec.id, event } });
+      if (!rec.coordinatorHelperFor) this.notify({ method: 'thread.event', params: { threadId: rec.id, event } });
     }
     rt.pendingDeltas.clear();
   }
@@ -4968,7 +5004,7 @@ export class Runner {
         this.log.error("couldn't make a thread's summary", { threadId: id, error: String(e) });
         continue;
       }
-      this.notify({ method: 'thread.updated', params: { thread } });
+      if (!st.rec.coordinatorHelperFor) this.notify({ method: 'thread.updated', params: { thread } });
     }
     if (failed && !this.stopping) this.saveRetryTimer = this.clock.setTimeout(() => this.flush(), SAVE_RETRY_MS);
   }

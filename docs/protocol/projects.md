@@ -652,16 +652,17 @@ the experiment off every method fails with `-32601`.
 ## Project coordinators
 
 The `coordinators` experiment adds one optional coordinator to a project. It is an
-ordinary thread using the normal pool/model settings. The first implementation
-supports Claude: its SDK identifies helper tool calls separately from the parent.
-An unsupported provider is refused before creating a coordinator. No coordinator
-budget, spending limit or cost estimate is added.
+ordinary thread using the normal pool/model settings, and you can switch its model
+or provider at will. No coordinator budget, spending limit or cost estimate is
+added.
 
 The project home has Conversation, Activity, To-dos and Threads tabs. Its right
 Highlights pane draws the shared project goals, state and notes; these stay the
 same records `projects.get` and `projects.update` read and write. The conversation
-is the audit trail. Routine work uses native sub-agents, never separate inbox
-threads. Questions from helpers go to the coordinator. Only it asks the user.
+is the audit trail. Routine work uses runner-managed hidden helper sessions
+(started and resumed through the `coordinator` tool, never separate inbox
+threads), surfaced in Activity and readable via `threads.subagent`. Questions and
+permission requests from helpers go to the coordinator. Only it asks the user.
 
 `projects.update` optionally takes `ifUnchanged: { goals?, state?, notes? }`.
 The owning runner compares every supplied baseline before writing anything. A
@@ -690,31 +691,37 @@ title, doneWhen, state, run? }`; task state is `todo`, `working`, `blocked`,
 `review` or `done`. Run is `{ id, agentId?, nativeTaskId?, nativeRunId?, status,
 summary?, updatedAt }`.
 Run states are `queued`, `running`, `interrupted`, `completed`, `failed`, `stopped`.
-One transition function owns the allowed moves. A native dispatch reserves a run
-before the tool proceeds. Its native worker identity is attached by the trusted
-SDK hook, and native task results determine its status. The UI does not manually
-mark running work done. Questions have `{ id, agentId, questions, state, answer? }`.
+One transition function owns the allowed moves. Starting or resuming a helper
+reserves the run and starts a hidden runner-owned helper session (inheriting the
+coordinator's pool/model or overriding them). Its turn outcome updates the run
+and wakes the coordinator. The UI does not manually mark running work done.
+Questions have `{ id, agentId, questions, state, answer? }`.
 
 The runner stores the registry outside the model's context, including briefs,
-native identities and checkpoints. Each execution has its own native `run_id`;
-late results from earlier executions cannot finish resumed work. Native helper
-completion puts the task in review. The coordinator checks its result against
-`doneWhen` before `completeTask` marks it done; `archiveTask` retains the full
-finished record in `coordinator-history.jsonl` and frees its active-list space.
-These actions use the scoped coordinator tool, with `taskId`, rather than a
-manual running-task checkbox. Restart marks unfinished execution interrupted;
-the next coordinator turn reconciles it rather than blindly replaying work. A
-A known helper with a recorded native execution identity may be resumed
-explicitly. Otherwise a new helper starts from its saved checkpoint. Compaction
-waits for helpers to finish.
-It retains the charter and rereads canonical project records after compaction.
+helper session identities and checkpoints. Each execution has its own run
+generation; late results from earlier executions cannot finish resumed work.
+Helper completion puts the task in review and wakes the coordinator. The
+coordinator checks its result against `doneWhen` before `completeTask` marks it
+done; `archiveTask` retains the full finished record in `coordinator-history.jsonl`
+and frees its active-list space. These actions use the scoped coordinator tool,
+with `taskId`, rather than a manual running-task checkbox. Restart marks
+unfinished execution interrupted and does not auto-resume hidden helpers; the next
+coordinator turn reconciles them rather than blindly replaying work. A known
+helper may be resumed explicitly with `resumeHelper`. Otherwise a new helper
+starts from its saved checkpoint. Compaction (on CLIs that support `/compact`)
+waits for helpers to finish, retains the charter and rereads canonical project
+records after compaction.
 
 Only the user-facing app may start or pause a coordinator. The coordinator's
-`coordinator` tool may read its own registry, add tasks, update its charter and
-interests, set a wake time and record answers to helper questions. Thread-owned
-RPC credentials cannot start or reconfigure another coordinator. Parent tool
-permissions are enforced before the CLI's Full access bypass; helper tools are
-identified by the SDK's `agent_id`, never a tool argument claiming an identity.
+`coordinator` tool may read its own registry, add tasks, select/complete/archive
+tasks, start or resume hidden helpers, update its charter and interests, set a
+wake time and record answers to helper questions. Thread-owned RPC credentials
+cannot start or reconfigure another coordinator, and neither coordinator nor
+helper shells may use thread-owned RPC to create threads or mutate other work.
+Coordinator read-only and helper non-escalation boundaries are enforced in each
+adapter before Full access (Claude `PreToolUse`, Codex read-only sandbox and
+approval refusal, ACP `session/request_permission` and Cursor `ask` mode), plus
+hidden helper suppression of user approval and question cards.
 
 Pause blocks new dispatch and all coordinator/helper tool calls, cancels pending
 wake timers and interrupts its CLI. Resume reconciles interrupted work. It does

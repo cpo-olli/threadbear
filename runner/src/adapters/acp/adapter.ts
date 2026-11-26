@@ -22,6 +22,7 @@ import { commandRule, ruleMayCover, shellWords } from '../codex/approvals.ts';
 import { toolGuidance, type ToolDefinition } from '../codex/tools.ts';
 import { fileContext, type NormalizerContext } from '../context.ts';
 import { formContent, formQuestions, type FormSchema } from '../elicitation.ts';
+import { acpCoordinatorTool, isHelperQuestionTool } from '../../coordinator-policy.ts';
 import type { AdapterOutput, AgentAdapter, AgentSession, QuestionAnswer, SessionSink, StartSessionOptions, ToolApprovalAnswer, TurnResult, UserInput } from '../types.ts';
 import { SessionNotFoundError } from '../types.ts';
 import type { AcpAgent } from './agents.ts';
@@ -429,6 +430,12 @@ export class AcpSession implements AgentSession {
         mode: () => this.mode,
         rules: () => this.rules,
         addRules: (rules) => this.addRules(rules),
+        ...(opts.coordinator
+          ? {
+              checkCoordinator: (fullName: string, args: Record<string, unknown>) =>
+                opts.coordinator!.checkTool({ name: fullName, input: args, agentId: opts.coordinator!.role === 'helper' ? opts.threadId : undefined }),
+            }
+          : {}),
       });
       const url = await this.mcp.listen();
       mcpServers = [{ type: 'http', name: 'threadbear', url, headers: [{ name: 'Authorization', value: `Bearer ${this.mcp.token}` }] }];
@@ -451,7 +458,8 @@ export class AcpSession implements AgentSession {
     this.noteOptions(res);
     this.ownEfforts = modelEfforts(res.models);
     if (!opts.resume) {
-      this.preamble = [defs.length ? toolGuidance(defs) : '', defs.length ? (deps.extraGuidance?.() ?? '') : '', deps.agent.folderNote?.(opts.cwd) ?? '', opts.instructions ?? ''].filter(Boolean).join('\n\n') || undefined;
+      const isHelper = opts.coordinator?.role === 'helper';
+      this.preamble = [!isHelper && defs.length ? toolGuidance(defs) : '', !isHelper && defs.length ? (deps.extraGuidance?.() ?? '') : '', deps.agent.folderNote?.(opts.cwd) ?? '', opts.instructions ?? ''].filter(Boolean).join('\n\n') || undefined;
     }
     await this.applyMode();
     if (this.model) await this.applyModel(this.model);
@@ -520,9 +528,16 @@ export class AcpSession implements AgentSession {
     return run;
   }
 
+  private effectiveMode(): PermissionMode {
+    // Cursor's agent mode runs edits without asking, so a Cursor coordinator
+    // stays in ask (read-only) mode even when the thread is in Full access.
+    if (this.opts.coordinator?.role === 'coordinator' && this.deps.agent.provider === 'cursor') return 'ask';
+    return this.mode;
+  }
+
   private async settleMode(): Promise<void> {
     for (let i = 0; i < 8; i++) {
-      const want = this.deps.agent.modeFor(this.mode);
+      const want = this.deps.agent.modeFor(this.effectiveMode());
       if (!want || want === this.currentMode) return;
       await this.setAgentMode(want);
     }
@@ -539,11 +554,11 @@ export class AcpSession implements AgentSession {
         this.currentMode = want;
       }
     } catch (e) {
-      if (this.mode !== 'full') throw new Error(`Couldn't put ${providerName(this.deps.agent.provider)} in its ${want} mode, so this thread wasn't started (${(e as Error).message}).`);
+      if (this.effectiveMode() !== 'full') throw new Error(`Couldn't put ${providerName(this.deps.agent.provider)} in its ${want} mode, so this thread wasn't started (${(e as Error).message}).`);
       this.deps.log.info('could not set the agent mode', { threadId: this.opts.threadId, want, error: String(e) });
       return;
     }
-    if (this.currentMode !== want && this.mode !== 'full') throw new Error(`Couldn't put ${providerName(this.deps.agent.provider)} in its ${want} mode, so this thread wasn't started.`);
+    if (this.currentMode !== want && this.effectiveMode() !== 'full') throw new Error(`Couldn't put ${providerName(this.deps.agent.provider)} in its ${want} mode, so this thread wasn't started.`);
   }
 
   private modeChain: Promise<unknown> = Promise.resolve();
@@ -798,6 +813,29 @@ export class AcpSession implements AgentSession {
     const mcpCall = Boolean(frames?.mcp) || (p.toolCall !== undefined && isMcpFrame(p.toolCall));
     const seen = this.normalizer.noteCall(p.toolCall ?? {});
     this.emit(this.normalizer.flush());
+    const coord = this.opts.coordinator;
+    if (coord) {
+      const mcpNameEarly = p.toolCall ? this.deps.agent.mcpToolName?.(p.toolCall) : undefined;
+      const toolName = typeof p.toolCall?.name === 'string' ? p.toolCall.name : undefined;
+      const externalEarly = (mcpCall || mcpNameEarly !== undefined) && !(mcpNameEarly !== undefined && this.ownTools.has(mcpNameEarly));
+      const rawArgs = isPlainObject(p.toolCall?.rawInput) ? (p.toolCall.rawInput as Record<string, unknown>) : seen.input;
+      const policy = acpCoordinatorTool({ role: coord.role, kind: seen.kind, name: toolName, mcpName: mcpNameEarly, external: externalEarly });
+      const checkName = mcpNameEarly ? `mcp__${mcpNameEarly}` : (toolName ?? seen.kind ?? 'tool');
+      let refused: string | undefined;
+      try {
+        refused = coord.checkTool({ name: checkName, input: rawArgs, agentId: coord.role === 'helper' ? this.opts.threadId : undefined }) ?? policy.reason;
+      } catch {
+        refused = 'The runner could not verify this coordinator operation.';
+      }
+      if (coord.role === 'helper' && toolName && isHelperQuestionTool(toolName)) {
+        const rawQs = Array.isArray(rawArgs.questions) ? rawArgs.questions : [];
+        const qs: Question[] = rawQs
+          .filter((q): q is Record<string, unknown> => isPlainObject(q) && typeof q.question === 'string')
+          .map((q) => ({ question: String(q.question), header: typeof q.header === 'string' ? q.header : 'Helper question', options: Array.isArray(q.options) ? q.options.filter((o): o is { label: string; description?: string } => isPlainObject(o) && typeof o.label === 'string') : [], multiSelect: Boolean(q.multiSelect ?? q.is_multi_select) }));
+        if (qs.length) coord.helperQuestion?.(this.opts.threadId, qs);
+      }
+      if (refused) return this.answer(id, options, false, seen.id);
+    }
     // Read at the moment it's asked, not when the turn began.
     if (this.mode === 'full') return this.answer(id, options, true, seen.id);
     // One of this session's own threadbear tools: its MCP server asks where

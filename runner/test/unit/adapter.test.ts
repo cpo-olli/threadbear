@@ -108,38 +108,32 @@ function start(allowRules: string[] = [], extra: Record<string, unknown> = {}, d
   return { session, state, outputs, approvals, adapter };
 }
 
-test('a coordinator gate runs before Full access and trusts only the SDK helper identity', async () => {
-  const known = new Set<string>();
+test('a coordinator gate runs before Full access and blocks writes and native sub-agents', async () => {
   let paused = false;
   const calls: { name: string; agentId?: string }[] = [];
   const { session, state, approvals } = start([], {
     permissionMode: 'full',
     coordinator: {
+      role: 'coordinator',
       checkTool: (call: { name: string; agentId?: string }) => {
         calls.push(call);
-        return paused ? 'Coordinator paused.' : call.agentId && !known.has(call.agentId) ? 'Unknown helper.' : undefined;
+        return paused ? 'Coordinator paused.' : undefined;
       },
-      workerStarted: (id: string) => known.add(id),
     },
   });
   const pre = state.options.hooks.PreToolUse[0].hooks[0];
   const hook = (name: string, input: unknown = {}, agentId?: string) => pre({ hook_event_name: 'PreToolUse', tool_name: name, tool_use_id: 'call-1', tool_input: input, ...(agentId ? { agent_id: agentId } : {}) });
   try {
-    for (const name of ['Bash', 'Write', 'Skill', 'mcp__other__write', 'mcp__threadbear__create_thread']) {
+    for (const name of ['Bash', 'Write', 'Skill', 'Agent', 'Task', 'mcp__other__write', 'mcp__threadbear__create_thread']) {
       assert.equal((await hook(name)).hookSpecificOutput.permissionDecision, 'deny', name);
     }
-    assert.equal((await hook('Bash', { agent_id: 'worker-1' })).hookSpecificOutput.permissionDecision, 'deny', 'the model cannot put its helper identity in tool input');
-    assert.equal((await hook('Write', {}, 'unknown')).hookSpecificOutput.permissionDecision, 'deny');
-    await hook('Agent', { prompt: 'Read the marker' });
-    await state.frame!({ type: 'system', subtype: 'task_started', task_id: 'worker-1', run_id: 'run-001', task_type: 'local_agent', subagent_type: 'coordinator-worker', tool_use_id: 'call-1' });
-    assert.ok(known.has('worker-1'), 'the native task event registers its helper before SubagentStart');
-    await state.options.hooks.SubagentStart[0].hooks[0]({ hook_event_name: 'SubagentStart', agent_id: 'worker-1', agent_type: 'coordinator-worker' });
-    assert.deepEqual(await hook('Write', { file_path: '/tmp/a' }, 'worker-1'), {});
+    assert.equal((await hook('Bash', { agent_id: 'worker-1' })).hookSpecificOutput.permissionDecision, 'deny', 'the model cannot smuggle a helper identity in tool input');
     assert.deepEqual(await hook('mcp__threadbear__read_project'), {});
-    assert.equal(calls.at(-1)?.name, 'mcp__threadbear__read_project');
+    assert.deepEqual(await hook('mcp__threadbear__coordinator', { action: 'startHelper', brief: 'Do work' }), {});
+    assert.equal(calls.at(-1)?.name, 'mcp__threadbear__coordinator');
     assert.deepEqual(await hook('ToolSearch', { query: 'threadbear coordinator' }), {}, 'deferred MCP tools must remain discoverable');
+    assert.equal(state.options.agents, undefined, 'helpers run as runner-managed sessions rather than SDK-native sub-agents');
     paused = true;
-    assert.equal((await hook('Write', {}, 'worker-1')).hookSpecificOutput.permissionDecision, 'deny');
     assert.equal((await hook('Read')).hookSpecificOutput.permissionDecision, 'deny');
     assert.equal(approvals.length, 0, 'a gate refusal cannot turn into a user card');
   } finally {
@@ -149,7 +143,7 @@ test('a coordinator gate runs before Full access and trusts only the SDK helper 
 });
 
 test('coordinator verification failures deny a tool instead of dropping the boundary', async () => {
-  const { session, state } = start([], { permissionMode: 'full', coordinator: { checkTool: () => { throw new Error('record unavailable'); } } });
+  const { session, state } = start([], { permissionMode: 'full', coordinator: { role: 'coordinator', checkTool: () => { throw new Error('record unavailable'); } } });
   try {
     const pre = state.options.hooks.PreToolUse[0].hooks[0];
     const result = await pre({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'r1', tool_input: {} });
@@ -163,69 +157,33 @@ test('coordinator verification failures deny a tool instead of dropping the boun
   }
 });
 
-test('coordinator dispatch uses its controlled worker and cannot override the worker permissions', async () => {
-  const { session, state } = start([], { coordinator: { checkTool: () => undefined } });
-  try {
-    const pre = state.options.hooks.PreToolUse[0].hooks[0];
-    const result = await pre({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'a1', tool_input: { description: 'Fix it', prompt: 'Read the brief', subagent_type: 'general-purpose', mode: 'bypassPermissions', model: 'opus', tools: ['Bash'] } });
-    assert.equal(result.hookSpecificOutput.updatedInput.subagent_type, 'coordinator-worker');
-    assert.equal(result.hookSpecificOutput.updatedInput.mode, undefined);
-    assert.equal(result.hookSpecificOutput.updatedInput.tools, undefined);
-    assert.equal(result.hookSpecificOutput.updatedInput.model, undefined);
-    assert.equal(state.options.agents['coordinator-worker'].model, 'inherit');
-    assert.match(state.options.agents['coordinator-worker'].prompt, /report.*coordinator/i);
-  } finally {
-    state.close!();
-    await session.end();
-  }
-});
-
-test('coordinator helper questions go to the coordinator and approval needs never open helper cards', async () => {
+test('coordinator helper sessions allow work tools, route questions to the coordinator, and never open user cards', async () => {
   const questions: unknown[] = [];
   const { session, state, approvals } = start([], {
     permissionMode: 'ask',
     coordinator: {
+      role: 'helper',
       checkTool: () => undefined,
       helperQuestion: (agentId: string, items: unknown[]) => questions.push({ agentId, items }),
     },
   });
   try {
     const pre = state.options.hooks.PreToolUse[0].hooks[0];
+    assert.deepEqual(await pre({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: 'w0', tool_input: { file_path: '/tmp/a', content: 'b' } }), {});
+    assert.deepEqual(await pre({ hook_event_name: 'PreToolUse', tool_name: 'mcp__threadbear__read_project', tool_use_id: 'r0', tool_input: {} }), {});
     const q = { questions: [{ question: 'Which repo?', options: [{ label: 'Threadbear' }] }] };
-    const denied = await pre({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'q1', tool_input: q, agent_id: 'worker-1' });
+    const denied = await pre({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'q1', tool_input: q });
     assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
     assert.match(denied.hookSpecificOutput.permissionDecisionReason, /coordinator/i);
     assert.equal(questions.length, 1);
-    for (const name of ['mcp__threadbear__end_turn', 'mcp__threadbear__ask_secret', 'mcp__threadbear__delete_thread', 'Agent']) {
-      const result = await pre({ hook_event_name: 'PreToolUse', tool_name: name, tool_use_id: 'x1', tool_input: {}, agent_id: 'worker-1' });
+    for (const name of ['mcp__threadbear__end_turn', 'mcp__threadbear__ask_secret', 'mcp__threadbear__delete_thread', 'mcp__threadbear__coordinator', 'Agent', 'Task']) {
+      const result = await pre({ hook_event_name: 'PreToolUse', tool_name: name, tool_use_id: 'x1', tool_input: {} });
       assert.equal(result.hookSpecificOutput.permissionDecision, 'deny', name);
     }
-    const r = await state.options.canUseTool('Write', { file_path: '/tmp/a', content: 'b' }, { signal: new AbortController().signal, toolUseID: 'w1', agentID: 'worker-1' });
+    const r = await state.options.canUseTool('Write', { file_path: '/tmp/a', content: 'b' }, { signal: new AbortController().signal, toolUseID: 'w1' });
     assert.equal(r.behavior, 'deny');
     assert.match(r.message, /coordinator/i);
     assert.equal(approvals.length, 0);
-  } finally {
-    state.close!();
-    await session.end();
-  }
-});
-
-test('coordinator native task registration is bound to its dispatch and run before helper tools arrive', async () => {
-  const started: unknown[] = [];
-  const failed: unknown[] = [];
-  const { session, state, outputs } = start([], { permissionMode: 'full', coordinator: { checkTool: () => undefined, workerStarted: (...args: unknown[]) => started.push(args), workerFailed: (...args: unknown[]) => failed.push(args) } });
-  try {
-    const pre = state.options.hooks.PreToolUse[0].hooks[0];
-    await pre({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'dispatch-1', tool_input: { prompt: 'Read the marker' } });
-    await state.frame!({ type: 'system', subtype: 'task_started', task_id: 'worker-1', run_id: 'run-001', task_type: 'local_agent', subagent_type: 'coordinator-worker', tool_use_id: 'dispatch-1' });
-    assert.deepEqual(started, [['worker-1', 'coordinator-worker', { toolUseId: 'dispatch-1', runId: 'run-001' }]]);
-    assert.ok(outputs.some((o) => o.kind === 'subagent' && o.update.runId === 'run-001'));
-    await state.frame!({ type: 'system', subtype: 'task_started', task_id: 'rogue', run_id: 'run-001', task_type: 'local_agent', subagent_type: 'coordinator-worker', tool_use_id: 'unknown-dispatch' });
-    assert.equal(started.length, 1, 'an SDK task without an allowed coordinator dispatch is not enrolled');
-    const failure = state.options.hooks.PostToolUseFailure[0].hooks[0];
-    await failure({ hook_event_name: 'PostToolUseFailure', tool_name: 'Agent', tool_use_id: 'dispatch-1', tool_input: {}, error: 'Worker could not launch' });
-    await failure({ hook_event_name: 'PostToolUseFailure', tool_name: 'Agent', tool_use_id: 'dispatch-1', tool_input: {}, error: 'Worker could not launch' });
-    assert.deepEqual(failed, [['dispatch-1', 'Worker could not launch']], 'failed dispatch is reported once using its unique tool call, not a reused agent id');
   } finally {
     state.close!();
     await session.end();

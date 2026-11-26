@@ -605,6 +605,12 @@ export class CodexSession implements AgentSession {
       mode: () => this.mode,
       rules: () => this.rules,
       addRules: (rules) => this.addRules(rules),
+      ...(opts.coordinator
+        ? {
+            checkCoordinator: (fullName: string, args: Record<string, unknown>) =>
+              opts.coordinator!.checkTool({ name: fullName, input: args, agentId: opts.coordinator!.role === 'helper' ? opts.threadId : undefined }),
+          }
+        : {}),
     });
     this.proc = new AppServerProcess({
       binary: deps.codexBinary(),
@@ -633,7 +639,14 @@ export class CodexSession implements AgentSession {
       runsAsCode: (file) => runsAsCodeByName(file) || (opts.runsAsCode?.(file) ?? false),
       callTool: (params, o) => this.tools.call(params, o),
       now: this.now,
-      fullAccess: () => this.mode === 'full',
+      fullAccess: () => this.opts.coordinator?.role !== 'coordinator' && this.mode === 'full',
+      ...(opts.coordinator
+        ? {
+            coordinatorRole: opts.coordinator.role,
+            checkCoordinator: (method: string, input: Record<string, unknown>) =>
+              opts.coordinator!.checkTool({ name: method, input, agentId: opts.coordinator!.role === 'helper' ? opts.threadId : undefined }),
+          }
+        : {}),
     });
     this.proc.onNotification = (method, params) => this.enqueue(() => this.route(method, params));
     this.proc.onRequest = (id, method, params) => this.enqueue(() => this.request(id, method, params));
@@ -671,7 +684,7 @@ export class CodexSession implements AgentSession {
     const common = {
       cwd: opts.cwd,
       ...(this.model ? { model: this.model } : {}),
-      ...threadPolicy(this.mode),
+      ...threadPolicy(opts.coordinator?.role === 'coordinator' ? 'ask' : this.mode),
       // The thread's projects, as developer instructions: config.toml's
       // own key, set per thread like the rest of threadConfig.
       config: { ...home, ...threadConfig(opts.threadId, opts.env?.THREADBEAR_THREAD_KEY), ...mcpServerConfig(this.deps.mcpServers?.()), ...(opts.instructions ? { developer_instructions: opts.instructions } : {}) },
@@ -688,7 +701,8 @@ export class CodexSession implements AgentSession {
       const tools = dynamicToolSpecs(defs);
       // With tools, the guidance on using them leads the developer
       // instructions (the namespace description is too short to hold it).
-      const developer = [tools.length ? toolGuidance(defs) : '', tools.length ? (this.deps.extraGuidance?.() ?? '') : '', opts.instructions ?? ''].filter(Boolean).join('\n\n');
+      const isHelper = opts.coordinator?.role === 'helper';
+      const developer = [!isHelper && tools.length ? toolGuidance(defs) : '', !isHelper && tools.length ? (this.deps.extraGuidance?.() ?? '') : '', opts.instructions ?? ''].filter(Boolean).join('\n\n');
       const config = { ...common.config, ...(developer ? { developer_instructions: developer } : {}) };
       const params: ThreadStartParams = { ...common, config, ...(tools.length ? { dynamicTools: tools } : {}) };
       res = await this.proc.request<ThreadStartResponse>('thread/start', params);
@@ -999,7 +1013,7 @@ export class CodexSession implements AgentSession {
     const params: TurnStartParams = {
       threadId: this.threadId!,
       input: inputItems(input),
-      ...turnPolicy(this.mode),
+      ...turnPolicy(this.opts.coordinator?.role === 'coordinator' ? 'ask' : this.mode),
       summary: 'detailed',
     };
     if (input.id) params.clientUserMessageId = input.id;

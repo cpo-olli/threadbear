@@ -253,6 +253,8 @@ export type ThreadRecord = {
   // review thread (the thread whose change it checks), which never gets a
   // review of its own; labReviews counts the reviews since Mike last wrote.
   reviewOf?: string;
+  // Hidden runner-managed helper owned by a project coordinator's thread.
+  coordinatorHelperFor?: string;
   labReviews?: number;
   // The ledger of the review under way (lab-review.ts, LabLedger): its
   // findings and the agent's answers, until Mike next writes.

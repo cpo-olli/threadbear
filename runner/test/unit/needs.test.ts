@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PersistedEvent } from '../../src/protocol.ts';
 import { AGENT_MESSAGE_PREFIX } from '../../src/protocol.ts';
-import { handsOverAStep, offersToTakeItBack, PLAIN_CARD_NUDGE, plainCardNudge, wantsPlainCard, TRY_IT_FIRST, tryFirstNudge, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyAsks, replyAsksNudge, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply, unansweredItems } from '../../src/needs.ts';
+import { handsOverAStep, offersToTakeItBack, PLAIN_CARD_NUDGE, plainCardNudge, plainCardNudged, wantsPlainCard, TRY_IT_FIRST, tryFirstNudge, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyAsks, replyAsksNudge, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply, unansweredItems } from '../../src/needs.ts';
 import { END_TURN_TOOL } from '../../src/needs.ts';
 import { SERVER_NAME } from '../../src/threadbear-mcp.ts';
 import { ClaudeNormalizer, fileContext } from '../../src/adapters/claude/normalize.ts';
@@ -762,4 +762,12 @@ test('unansweredItems: cards Mike saw, less what he answered by card, words or a
   assert.deepEqual(unansweredItems(events), ['Email Peter the link', 'Send it to the list now?']);
   // A card answer names the ask; what the new card already carries isn't listed again.
   assert.deepEqual(unansweredItems([...events, said('x', { answers: [{ action: 'Send it to the list now?', answer: 'Wait' }] })], ['Email Peter the link']), []);
+});
+
+test('plainCardNudged recognizes Antigravity-prefixed tool errors too', () => {
+  const events = [
+    { seq: 1, ts: '2026-11-26T00:00:00.000Z', threadId: 't', type: 'turn.started' as const, turnId: 'turn-1' },
+    { seq: 2, ts: '2026-11-26T00:00:01.000Z', threadId: 't', type: 'tool.result' as const, itemId: 'c1', ok: false, text: `Encountered error in step execution: ${plainCardNudge()}`, truncated: false, images: [] },
+  ];
+  assert.equal(plainCardNudged(events), true);
 });

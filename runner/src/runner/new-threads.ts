@@ -195,6 +195,7 @@ export const newThreadsPart = {
     worktree?: boolean;
     startedBy?: ThreadStartedBy;
     detached?: boolean;
+    coordinatorHelperFor?: string;
     id?: string;
   }, ids?: { id: string; sessionId: string }): { st: ThreadState; notes: string[]; loginNote?: string } {
     this.checkAccepting();
@@ -204,7 +205,7 @@ export const newThreadsPart = {
     this.threads.set(rec.id, st);
     // What Mike picked last is what the next thread starts on, so a
     // schedule's own login or pool (a 9:00 standup's) doesn't move it.
-    if (params.origin === 'schedule') {
+    if (params.origin === 'schedule' || params.coordinatorHelperFor) {
       /* keep the last pick */
     } else if (!poolId) this.rememberAccount(account.id);
     else if (params.poolId !== undefined) this.rememberPool(poolId);
@@ -230,6 +231,7 @@ export const newThreadsPart = {
     worktree?: boolean;
     startedBy?: ThreadStartedBy;
     detached?: boolean;
+    coordinatorHelperFor?: string;
     id?: string;
   }, ids?: { id: string; sessionId: string }): { rec: ThreadRecord; account: Account; poolId?: string; notes: string[]; loginNote?: string } {
     // A box runs one thread (docs/virtual-runners.md, decision 1): only that
@@ -296,6 +298,7 @@ export const newThreadsPart = {
       lastTurnCompletedSeq: 0,
       queue: [],
       pendingApprovals: [],
+      ...(params.coordinatorHelperFor ? { coordinatorHelperFor: params.coordinatorHelperFor } : {}),
     };
     const checked = this.checkSettings(account, params.model || this.defaultModelFor(account.provider), params.effort ?? this.defaultEffortFor(account.provider));
     if (checked.model) rec.model = checked.model;

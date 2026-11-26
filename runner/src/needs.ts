@@ -768,7 +768,8 @@ function nudgedSince(events: PersistedEvent[], note: string): boolean {
       break;
     }
   }
-  return events.slice(start).some((e) => e.type === 'tool.result' && typeof e.text === 'string' && e.text.startsWith(note));
+  // Antigravity ACP prefixes thrown MCP tool errors with 'Encountered error in step execution: '.
+  return events.slice(start).some((e) => e.type === 'tool.result' && typeof e.text === 'string' && (e.text.startsWith(note) || e.text.startsWith(`Encountered error in step execution: ${note}`)));
 }
 
 // What end_turn says, once a turn, to a card with answers to pick from. Mike

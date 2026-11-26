@@ -77,11 +77,10 @@ export type StartSessionOptions = {
   // allow rule, including Full access. Helper identity comes from the SDK's
   // hook envelope, never tool arguments. The host owns pause and run records.
   coordinator?: {
+    role: 'coordinator' | 'helper';
     context?: () => string | undefined;
     checkTool(call: { name: string; input: Record<string, unknown>; agentId?: string; toolUseId?: string }): string | undefined;
     helperQuestion?(agentId: string, questions: Question[]): void;
-    workerStarted?(agentId: string, agentType?: string, dispatch?: { toolUseId: string; runId?: string }): void;
-    workerFailed?(toolUseId: string, reason: string): void;
   };
 };
 
