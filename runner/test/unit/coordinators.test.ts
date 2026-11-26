@@ -60,6 +60,20 @@ function recoverFresh(h: ReturnType<typeof setup>['h'], home: string) {
   return { host, adapter, codex, antigravity, c: replacement };
 }
 
+test('the coordinator keeps every open item as a to-do, and is told when its To-dos is empty', async () => {
+  const { c, project } = setup();
+  const { coordinator } = c.create({ projectId: project.id });
+  const ctx = () => c.context(coordinator.threadId)!;
+  assert.match(ctx(), /To-dos tab is the user’s list of everything still to do/);
+  assert.match(ctx(), /To-dos is empty/);
+  c.addTask(project.id, 'Choose the hotel', 'Mike has picked one');
+  assert.doesNotMatch(ctx(), /To-dos is empty/);
+  const task = c.get(project.id).tasks[0]!;
+  c.completeTask(project.id, task.id);
+  assert.match(ctx(), /To-dos is empty/);
+  c.stop();
+});
+
 test('a coordinator is one real thread per project, starts with shared notes and retains account selection', async () => {
   const { h, c, project, projects, claude } = setup();
   projects.update(project.id, { notes: 'Use the oldest food first.' });

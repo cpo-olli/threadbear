@@ -700,7 +700,9 @@ Run states are `queued`, `running`, `interrupted`, `completed`, `failed`, `stopp
 One transition function owns the allowed moves. Starting or resuming a helper
 reserves the run and starts a hidden runner-owned helper session (inheriting the
 coordinator's pool/model or overriding them). Its turn outcome updates the run
-and wakes the coordinator. The UI does not manually mark running work done.
+and wakes the coordinator. Tasks are the user's list of all open work, not only helper
+jobs: the coordinator is told to add one for each open step or decision (the user's
+own included, done with `completeTask`), and its desk says so when none are open. The UI does not manually mark running work done.
 Questions have `{ id, agentId, questions, state, answer? }`.
 
 **Open loops.** `loops` holds durable user questions and coordinator decisions
