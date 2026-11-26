@@ -315,8 +315,11 @@ impl Threadbear {
             style::secondary_text(cx)
         };
 
+        // Wraps so a narrow pane drops the second count onto its own line
+        // rather than pushing it past the edge.
         let mut header = h_flex()
             .w_full()
+            .flex_wrap()
             .items_center()
             .gap(px(7.))
             .child(
@@ -554,15 +557,16 @@ impl Threadbear {
                     .text_size(px(11.5))
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
+                            .flex_none()
                             .text_color(style::secondary_text(cx))
                             .child(parts.join(" · ")),
                     )
                     .child(
                         div()
-                            .flex_none()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_right()
                             .text_color(style::faint_text(cx))
                             .child("Collapsed while inspecting memory"),
                     ),
@@ -1173,10 +1177,7 @@ impl Threadbear {
         let count_label = if count == 0 {
             "No notes yet".to_owned()
         } else {
-            format!(
-                "{count} technical note{}",
-                if count == 1 { "" } else { "s" }
-            )
+            format!("{count} note{}", if count == 1 { "" } else { "s" })
         };
         if !open {
             return self.render_collapsed_agent_memory(project, &sections, &count_label, cx);
@@ -1209,15 +1210,7 @@ impl Threadbear {
                     .text_color(cx.theme().foreground)
                     .child("Agent memory"),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(11.5))
-                    .text_color(style::secondary_text(cx))
-                    .child(format!("· {count_label}")),
-            )
+            .child(div().flex_1())
             .child(
                 crate::highlights::tipped(
                     h_flex()
@@ -1296,11 +1289,7 @@ impl Threadbear {
             .filter_map(|(heading, _)| heading.as_deref())
             .take(3)
             .collect();
-        let detail = if preview_titles.is_empty() {
-            count_label.to_owned()
-        } else {
-            format!("{count_label} ({})", preview_titles.join(", "))
-        };
+        let preview = preview_titles.join(", ");
         crate::highlights::tipped(
             h_flex()
                 .id("coordinator-agent-memory-toggle")
@@ -1334,14 +1323,23 @@ impl Threadbear {
                 .text_color(cx.theme().foreground)
                 .child("Agent memory"),
         )
+        // The count never truncates; only the note titles after it give way
+        // when the pane is narrow.
+        .child(
+            div()
+                .flex_none()
+                .text_size(px(11.5))
+                .text_color(style::secondary_text(cx))
+                .child(format!("· {count_label}")),
+        )
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .truncate()
                 .text_size(px(11.5))
-                .text_color(style::secondary_text(cx))
-                .child(format!("· {detail}")),
+                .text_color(style::faint_text(cx))
+                .child(preview),
         )
         .child(
             h_flex()
