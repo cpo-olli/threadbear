@@ -1386,6 +1386,9 @@ export class Runner {
       }
       rec.pendingApprovals = [];
       rec.queue = [];
+      // Its coordinator reconciles it now, so no carry-on of its own.
+      delete rec.waitingForNetwork;
+      delete rec.netCarryOn;
       this.markDirty(st);
       return false;
     }
@@ -1637,7 +1640,7 @@ export class Runner {
   // the summary that saw it is made. Checked again, as a turn may have
   // started in between.
   sayScheduled(st: ThreadState, into: boolean): void {
-    if (st.rt.deleted || this.stopping) return;
+    if (st.rt.deleted || this.stopping || this.refusing || this.draining) return;
     if ((st.rt.waitState === 'scheduled') !== into) return;
     const now = this.clock.now();
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -1654,7 +1657,13 @@ export class Runner {
   }
 
   private waitState(st: ThreadState, sum: ThreadSummary): WaitState {
-    return waitStateOf(sum, { now: this.clock.now(), scheduled: this.scheduled(st.rec.id), helpers: this.coordinators?.helpersWorking(st.rec.id) ?? 0 });
+    // A message already taken and about to start a turn (a coordinator's
+    // wake waiting on the folder's settings look, rt.preLook) isn't
+    // "nothing needs you": without this the thread read as Hibernating, with
+    // its line, for the moment before the turn began (Gemini's review, 26 Nov
+    // 2026).
+    const starting = st.rec.queue.length > 0 && !st.rt.turn;
+    return waitStateOf(sum, { now: this.clock.now(), scheduled: this.scheduled(st.rec.id) && !starting, helpers: this.coordinators?.helpersWorking(st.rec.id) ?? 0 });
   }
 
   // Turn ends and folder moves, for the librarian.

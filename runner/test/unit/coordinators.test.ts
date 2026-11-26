@@ -278,6 +278,29 @@ test('a helper that ends while a restart refuses sends is saved interrupted, and
   fresh.c.stop();
 });
 
+test('a helper waiting for the network when the runner restarts does not carry on by itself; its coordinator reconciles it', async () => {
+  const { h, c, project, antigravity, home } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'antigravity-main', model: 'gemini-4-neon' });
+  await tick();
+  antigravity.sessions.at(-1)!.result('completed');
+  await tick();
+  const started = c.startHelper(project.id, { title: 'Build triage', doneWhen: 'Deployed', brief: 'Build it' });
+  await tick();
+  antigravity.sessions.find((s) => s.opts.threadId === started.helperId)!.result('failed', undefined, 'fetch failed', { errorKind: 'network' });
+  await tick();
+  assert.ok(h.store.load(started.helperId)!.waitingForNetwork, 'waiting for the network');
+  c.stop();
+  const fresh = recoverFresh(h, home);
+  await tick();
+  assert.equal(h.store.load(started.helperId)!.waitingForNetwork, undefined, 'the wait went with the runner');
+  (fresh.host.clock as FakeClock).advance(60_000);
+  await tick();
+  assert.equal(fresh.antigravity.sessions.filter((s) => s.opts.threadId === started.helperId).length, 0, 'no carry-on started before the coordinator reconciled');
+  assert.equal(fresh.c.get(project.id).tasks[0].run?.status, 'interrupted');
+  assert.equal(fresh.c.helpersWorking(coordinator.threadId), 0);
+  fresh.c.stop();
+});
+
 test('a stale turn id cannot finish a resumed helper run', async () => {
   const { c, project, antigravity } = setup();
   c.create({ projectId: project.id, accountId: 'antigravity-main', model: 'gemini-4-neon' });

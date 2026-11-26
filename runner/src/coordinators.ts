@@ -249,6 +249,12 @@ export class Coordinators {
     if (!this.deps.enabled()) return 0;
     return this.forThread(threadId)?.tasks.filter((t) => t.run && ['queued', 'running'].includes(t.run.status)).length ?? 0;
   }
+  // Whether a helper thread's run is one its active coordinator still has going.
+  helperRunActive(helperThreadId: string): boolean {
+    const row = this.helperOwner(helperThreadId);
+    if (!row || this.stopped || !this.deps.enabled() || row.state !== 'active') return false;
+    return row.tasks.some((t) => t.run?.helperThreadId === helperThreadId && ['queued', 'running'].includes(t.run.status));
+  }
   helperOwner(threadId: string): Coordinator | undefined {
     const ownerThreadId = this.deps.host.threads.get(threadId)?.rec.coordinatorHelperFor;
     if (ownerThreadId) return this.forThread(ownerThreadId);
