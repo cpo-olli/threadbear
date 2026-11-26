@@ -738,18 +738,15 @@ export function NewThread({ token }: { token: string }) {
     return { online, sentRunner, modelsFor, models, model, sentModel, sentEffort };
   };
   const { online, sentRunner, modelsFor, models, model, sentModel, sentEffort } = choicesAt(Math.max(clock, refreshed, Date.now()));
-  // A model or effort no login on any runner offers any more is dropped,
-  // not kept to come back by itself. Never by which runner it would land
-  // on: that turns on heartbeats, and a tab left in the background holds
-  // stale ones, which mustn't wipe a pick. What the runner it lands on
-  // can't take stays hidden instead: the selects show what a send carries.
-  // Set while rendering, once the logins are in; each set only clears, so
-  // it settles in one more render.
-  if (accounts !== undefined) {
-    const all = modelsOn(accounts);
-    if (modelId && !all.some((m) => m.id === modelId)) setModelId('');
-    if (effort && !all.some((m) => efforts(m).includes(effort))) setEffort('');
-  }
+  // A model no login on any runner offers any more is dropped, not kept to
+  // come back by itself. Never by which runner it would land on: that turns
+  // on heartbeats, and a tab left in the background holds stale ones, which
+  // mustn't wipe a pick. What the runner it lands on can't take, and an
+  // effort the model shown doesn't offer, stay hidden instead (the selects
+  // show what a send carries), and changing runner or model drops them.
+  // Set while rendering, once the logins are in; it only clears, so it
+  // settles in one more render.
+  if (accounts !== undefined && modelId && !modelsOn(accounts).some((m) => m.id === modelId)) setModelId('');
   // A pick that the new runner or model can't take is dropped, not kept
   // hidden to come back when Mike switches back.
   const pickRunner = (id: string) => {
@@ -815,7 +812,8 @@ export function NewThread({ token }: { token: string }) {
               }}
             />
             <div className="tools-row">
-              {online.length > 1 ? (
+              {/* Shown too while a picked runner is the only one up, so a send never names one unseen. */}
+              {online.length > 1 || sentRunner ? (
                 <select value={sentRunner} disabled={cmd.busy} onChange={(e) => pickRunner(e.target.value)} aria-label="Runner" title="Which runner it starts on">
                   <option value="">Main runner</option>
                   {online.map((r) => (
