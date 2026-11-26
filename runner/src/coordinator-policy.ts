@@ -23,7 +23,7 @@ export const HELPER_THREADBEAR_TOOLS = PROJECT_READS;
 // "agent-archive__x" must not ride on it. Claude names them
 // mcp__agent-archive__<tool>; an ACP agent's request agent-archive__<tool>
 // (AcpAgent.mcpToolName), which the ACP adapter also checks every frame of
-// the call agrees on. Codex coordinators keep only this server (codex
+// the call agrees on, and only where it gave the session the archive itself. Codex coordinators keep only this server (codex
 // adapter, coordinatorMcpOff).
 const ARCHIVE_READ_TOOLS = new Set(['get_archive_context', 'search_archive', 'list_recent_threads', 'list_user_messages', 'read_archive_thread', 'find_computer_history', 'read_computer_history_summary']);
 export const ARCHIVE_READ_TOOL_NAMES: readonly string[] = [...ARCHIVE_READ_TOOLS];

@@ -344,6 +344,8 @@ export class AcpSession implements AgentSession {
   private ownEfforts = new Map<string, { levels: EffortLevel[]; defaultEffort?: EffortLevel }>();
   // The threadbear tools this session's MCP server offers, as the agent names them.
   private ownTools = new Set<string>();
+  // Agent Archive is the runner's own server in this session (session start).
+  private archiveOurs = false;
   // Every frame of a tool call, by id, as the agent sent it: whether any said
   // it's an MCP call, and every argument list it carried. A later frame
   // can't wash out what an earlier one said (Codex's and Gemini's third
@@ -445,7 +447,23 @@ export class AcpSession implements AgentSession {
       this.ownTools = new Set(defs.map((d) => `threadbear__${d.name}`));
     }
     if (deps.agent.takesMcpServers) {
-      for (const [name, s] of Object.entries(deps.mcpServers?.() ?? {})) mcpServers.push({ name, command: s.command, args: s.args, env: [] });
+      const own = (deps.agent.mcpConfigFiles?.(os.homedir(), opts.cwd) ?? []).flatMap((f) => {
+        try {
+          return [fs.readFileSync(f, 'utf8')];
+        } catch {
+          return [];
+        }
+      });
+      for (const [name, s] of Object.entries(deps.mcpServers?.() ?? {})) {
+        // The agent's own config names a server the same: that one could
+        // answer instead, so ours isn't added, nor its calls trusted.
+        if (own.some((text) => text.includes(name))) {
+          deps.log.warn('acp: not adding a runner MCP server the agent config already names', { threadId: opts.threadId, name });
+          continue;
+        }
+        mcpServers.push({ name, command: s.command, args: s.args, env: [] });
+        if (name === 'agent-archive') this.archiveOurs = true;
+      }
     }
 
     let res: SessionResult;
@@ -817,7 +835,7 @@ export class AcpSession implements AgentSession {
   // saying it was that same tool and none running or writing anything, as
   // for the threadbear tools below. A call with no history never counts.
   private archiveRead(mcpName: string | undefined, frames: ReturnType<typeof this.callFrames.get>): boolean {
-    return Boolean(mcpName && archiveReadTool(mcpName) && frames && [...frames.ids].every((i) => i === mcpName) && frames.named.get(mcpName) === frames.acting && frames.kinds.size <= 1 && ![...frames.kinds].some((k) => k === 'execute' || writesFiles(k)));
+    return Boolean(this.archiveOurs && this.deps.agent.trustsRunnerMcp && mcpName && archiveReadTool(mcpName) && frames && [...frames.ids].every((i) => i === mcpName) && frames.named.get(mcpName) === frames.acting && frames.kinds.size <= 1 && ![...frames.kinds].some((k) => k === 'execute' || writesFiles(k)));
   }
 
   private async permission(id: RequestId, p: { toolCall?: AcpToolCall; options?: PermissionOption[] }): Promise<void> {

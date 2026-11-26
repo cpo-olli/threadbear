@@ -789,8 +789,12 @@ to offer a side job outside the project as a new thread; only the user's press
 starts it, so it can't use one to get round its own boundary. A coordinator may also call
 Agent Archive's read tools (exact names in `coordinator-policy.ts`) to look
 back before asking the user something already settled: on Claude by tool name;
-on Antigravity (which gets the archive as a stdio server in `session/new`) only
-when every frame of the call agrees it is that tool. A Codex coordinator's
+on Antigravity (which gets
+the archive as a stdio server in `session/new`, unless its own or the folder's
+config names an `agent-archive` server itself) only when every frame of the
+call agrees it is that tool. Grok threads get the archive too, but its calls
+ask like any other server's, as a Grok agent profile can put its own server
+under that name, so a Grok coordinator has no archive. A Codex coordinator's
 app-server starts with plugins and apps off, every other configured MCP server
 is switched off for its thread, and it refuses to start if
 `mcpServerStatus/list` shows any other server still offering tools, as Codex
