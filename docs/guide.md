@@ -1138,9 +1138,10 @@ files out of Highlights into other apps.
 
 ### Pull requests
 
-A GitHub pull request link clicked in a reply, or in Highlights' Links,
-opens as a tab in the panel instead of your browser (⌘-click still goes to
-the browser). In the desktop app only, and it needs the `gh` command line
+A GitHub pull request link clicked in a reply (a project coordinator's too),
+or in Highlights' Links, opens as a tab in the panel instead of your browser,
+as does Open in Panel in its right-click menu (⌘-click still goes to the
+browser). In the desktop app only, and it needs the `gh` command line
 tool installed and signed in (`gh auth login`); it acts on GitHub as
 whoever that is. A PR link in a reply has GitHub's pull request mark before
 it: green while it's open, grey as a draft, purple once merged and red if
