@@ -20,9 +20,10 @@ each wake.
 Project-thread completions and literal keyword matches are batched for ten
 minutes. A coordinator may also set a one-shot wake time. Failed delivery waits
 a minute before retrying. A helper's result is saved in the same write as its
-run's end and queued on the coordinator under its own delivery id, so a crash
-or restart between the two neither loses it nor sends it twice: the next runner
-delivers what's left. There is no polling model heartbeat. After fifty
+run's end and kept until the coordinator's turn that reads it finishes, not
+just until that turn starts: a crash, restart or pause that cuts the turn off
+sends it again, marked as possibly repeated. Report retries keep their own
+one-minute timer, apart from the event batch. There is no polling model heartbeat. After fifty
 idle minutes, at a safe boundary with no helper running, a context over 100,000
 tokens is compacted; over 150,000 tokens triggers a safe-boundary compaction
 sooner. These are experimental thresholds, not a guarantee about cache lifetime.

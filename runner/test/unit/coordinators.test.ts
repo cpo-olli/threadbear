@@ -266,6 +266,11 @@ test('a helper that carries on after the network came back still reaches its coo
   c.stop();
 });
 
+// Every text the coordinator's CLIs were sent, across runners.
+function told(adapters: { sessions: { opts: { threadId?: string }; sent: { text: string }[] }[] }[], threadId: string, needle: string): number {
+  return adapters.flatMap((a) => a.sessions).filter((s) => s.opts.threadId === threadId).flatMap((s) => s.sent).filter((m) => m.text.includes(needle)).length;
+}
+
 test('a helper that ends while a restart refuses sends keeps its report, and the next runner delivers it', async () => {
   const { h, c, project, antigravity, home } = setup();
   const { coordinator } = c.create({ projectId: project.id, accountId: 'antigravity-main', model: 'gemini-4-neon' });
@@ -279,59 +284,86 @@ test('a helper that ends while a restart refuses sends keeps its report, and the
   helperSession.text('m1', 'Merged, not deployed yet.');
   helperSession.sink.exited(new Error('killed'));
   await tick();
-  const run = c.get(project.id).tasks[0].run!;
-  assert.equal(run.status, 'failed', 'its real outcome');
+  assert.equal(c.get(project.id).tasks[0].run!.status, 'failed', 'its real outcome');
   assert.equal(c.helpersWorking(coordinator.threadId), 0);
   assert.equal(c.forThread(coordinator.threadId)!.reports?.length, 1, 'kept for later');
   c.stop();
   const fresh = recoverFresh(h, home);
   await tick();
-  const woke = fresh.antigravity.sessions.filter((s) => s.opts.threadId === coordinator.threadId).at(-1);
-  assert.ok(woke?.sent.some((m) => m.text.includes('A helper turn finished') && m.text.includes('Merged, not deployed yet')), 'the next runner delivers the report');
+  assert.equal(told([fresh.antigravity], coordinator.threadId, 'Merged, not deployed yet'), 1, 'the next runner delivers the report');
+  // Forgotten once the turn that read it finishes.
+  fresh.antigravity.sessions.filter((s) => s.opts.threadId === coordinator.threadId).at(-1)!.result('completed');
+  await tick();
   assert.equal(fresh.c.forThread(coordinator.threadId)!.reports, undefined);
   fresh.c.stop();
 });
 
-test('a crash before the helper report is queued on the coordinator loses nothing: the next runner delivers it once', async () => {
-  const { h, c, project, claude, home } = setup();
+test('a helper report is kept until the coordinator turn that reads it finishes', async () => {
+  const { c, project, claude } = setup();
   const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
   await tick();
-  // Its own turn is still going, so the wake queues behind it.
+  claude.sessions.at(-1)!.result('completed');
+  await tick();
   const started = c.startHelper(project.id, { title: 'Build triage', doneWhen: 'Deployed', brief: 'Build it' });
   await tick();
-  // The process dies as the wake is saved on the coordinator's thread: its
-  // record never reaches the disk.
-  const save = h.runner.store.save.bind(h.runner.store);
-  let crashed = false;
-  h.runner.store.save = (record) => {
-    if (record.id === coordinator.threadId && record.queue.some((q) => q.text.includes('A helper turn finished'))) { crashed = true; throw Error('Crash before thread save'); }
-    save(record);
-  };
   const helperSession = claude.sessions.find((s) => s.opts.threadId === started.helperId)!;
   helperSession.text('m1', 'Deployed to prod.');
   helperSession.result('completed');
   await tick();
+  assert.equal(told([claude], coordinator.threadId, 'Deployed to prod.'), 1);
+  const report = c.forThread(coordinator.threadId)!.reports?.[0];
+  assert.ok(report?.sentAs, 'sent, awaiting its turn');
+  claude.sessions.filter((s) => s.opts.threadId === coordinator.threadId).at(-1)!.result('completed');
+  await tick();
+  assert.equal(c.forThread(coordinator.threadId)!.reports, undefined);
+  c.stop();
+});
+
+test('an idle coordinator whose report turn started in the log but never reached disk or the CLI gets it again from the next runner', async () => {
+  const { h, c, project, claude, home } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  claude.sessions.at(-1)!.result('completed');
+  await tick();
+  const started = c.startHelper(project.id, { title: 'Build triage', doneWhen: 'Deployed', brief: 'Build it' });
+  await tick();
+  // From here the coordinator thread's record never reaches the disk: the
+  // process dies with the report's turn.started in the log only.
+  const save = h.runner.store.save.bind(h.runner.store);
+  let crashed = false;
+  h.runner.store.save = (record) => {
+    if (record.id === coordinator.threadId) { crashed = true; throw Error('Crash before thread save'); }
+    save(record);
+  };
+  const before = claude.sessions.filter((s) => s.opts.threadId === coordinator.threadId).length;
+  const live = claude.sessions.filter((s) => s.opts.threadId === coordinator.threadId).at(-1)!;
+  const sentBefore = live.sent.length;
+  const helperSession = claude.sessions.find((s) => s.opts.threadId === started.helperId)!;
+  helperSession.text('m1', 'Deployed to prod.');
+  helperSession.result('completed');
+  // The process dies before the turn reaches the CLI.
+  live.sent.length = sentBefore;
   assert.ok(crashed, 'the crash happened');
-  assert.equal(c.get(project.id).tasks[0].run?.status, 'completed');
+  assert.equal(claude.sessions.filter((s) => s.opts.threadId === coordinator.threadId).length, before);
+  assert.ok(h.runner.events(coordinator.threadId, { limit: 10_000 }).events.some((e) => e.type === 'turn.started' && e.turnId === h.runner.threads.get(coordinator.threadId)!.rec.turnId), 'its turn started in the log');
   c.stop();
   h.runner.store.save = save;
   const fresh = recoverFresh(h, home);
   await tick();
-  const delivered = () => fresh.host.events(coordinator.threadId, { limit: 10_000 }).events.filter((e) => e.type === 'user.message' && e.text.includes('Deployed to prod.')).length
-    + fresh.host.threads.get(coordinator.threadId)!.rec.queue.filter((q) => q.text.includes('Deployed to prod.')).length;
-  assert.equal(delivered(), 1, 'delivered once by the next runner');
-  assert.equal(fresh.c.forThread(coordinator.threadId)!.reports, undefined);
+  assert.equal(told([fresh.adapter], coordinator.threadId, 'A helper turn finished'), 1, 'the next runner sends it again');
+  assert.equal(told([fresh.adapter], coordinator.threadId, 'Sent again'), 1, 'saying it may repeat');
   fresh.c.stop();
 });
 
-test('a crash after the helper report is queued but before it is forgotten does not deliver it twice', async () => {
+test('a crash after the helper report is queued on a busy coordinator delivers it once', async () => {
   const { h, c, project, claude, home } = setup();
   const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
   await tick();
   // Its own turn is still going, so the wake queues behind it.
   const started = c.startHelper(project.id, { title: 'Build triage', doneWhen: 'Deployed', brief: 'Build it' });
   await tick();
-  // The thread's record with the wake is saved, then the process dies.
+  // The thread's record with the wake is saved, then the process dies
+  // before the registry notes it went.
   const save = h.runner.store.save.bind(h.runner.store);
   let crashed = false;
   h.runner.store.save = (record) => {
@@ -343,16 +375,52 @@ test('a crash after the helper report is queued but before it is forgotten does 
   helperSession.result('completed');
   await tick();
   assert.ok(crashed, 'the crash happened');
-  assert.equal(c.forThread(coordinator.threadId)!.reports?.length, 1, 'still on the books when the process died');
+  assert.equal(c.forThread(coordinator.threadId)!.reports?.[0].sentAs, undefined, 'the registry never noted it went');
   c.stop();
   h.runner.store.save = save;
   const fresh = recoverFresh(h, home);
   await tick();
-  const delivered = fresh.host.events(coordinator.threadId, { limit: 10_000 }).events.filter((e) => e.type === 'user.message' && e.text.includes('Deployed to prod.')).length
-    + fresh.host.threads.get(coordinator.threadId)!.rec.queue.filter((q) => q.text.includes('Deployed to prod.')).length;
-  assert.equal(delivered, 1);
-  assert.equal(fresh.c.forThread(coordinator.threadId)!.reports, undefined);
+  const queued = fresh.host.threads.get(coordinator.threadId)!.rec.queue.filter((q) => q.text.includes('A helper turn finished')).length;
+  assert.equal(queued + told([fresh.adapter], coordinator.threadId, 'A helper turn finished'), 1, 'once, from the queue it was saved in');
+  assert.equal(told([fresh.adapter], coordinator.threadId, 'Sent again'), 0);
+  assert.ok(fresh.c.forThread(coordinator.threadId)!.reports?.[0].sentAs, 'waiting for that turn');
   fresh.c.stop();
+});
+
+test('a report retry keeps to its own timer and leaves the ten-minute event batch alone', async () => {
+  const { c, h, project, claude } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  claude.sessions.at(-1)!.result('completed');
+  await tick();
+  const row = c.forThread(coordinator.threadId)!;
+  row.events.push({ key: 'E', text: 'A project event' });
+  c.update(project.id, {});
+  const started = c.startHelper(project.id, { title: 'Build triage', doneWhen: 'Deployed', brief: 'Build it' });
+  await tick();
+  h.runner.refuseNewTurns('busy');
+  const helperSession = claude.sessions.find((s) => s.opts.threadId === started.helperId)!;
+  helperSession.result('failed', undefined, 'boom');
+  await tick();
+  assert.equal(row.reports?.length, 1);
+  h.runner.refusing = undefined;
+  h.clock.advance(61_000);
+  await tick();
+  assert.equal(told([claude], coordinator.threadId, 'A helper turn finished'), 1, 'the report went on its retry');
+  assert.equal(told([claude], coordinator.threadId, 'A project event'), 0, 'the batch still waits');
+  assert.equal(row.events.length, 1);
+  c.stop();
+});
+
+test('undelivered helper reports are capped, and a registry with many still loads', async () => {
+  const { c, project, home } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  const row = c.forThread(coordinator.threadId)!;
+  row.reports = Array.from({ length: 150 }, (_, i) => ({ id: `r${i}`, text: `report ${i}`, sentAs: `t${i}` }));
+  c.update(project.id, {});
+  c.stop();
+  assert.doesNotThrow(() => new Coordinators({ home, host: setup(home).h.runner, projects: new Projects({ home, clock: new FakeClock(), log: nullLogger }), clock: new FakeClock(), enabled: () => true, log: nullLogger }));
 });
 
 test('a helper waiting for the network when the runner restarts does not carry on by itself; its coordinator reconciles it', async () => {
