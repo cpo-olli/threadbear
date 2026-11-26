@@ -1698,6 +1698,14 @@ test('coordinator refusals say what to use instead, and the ids it is given work
   assert.match((await coordTool.handler({ action: 'dropTask', taskId: moot.id, summary: '  ' })).content[0]!.text, /pass summary/);
   await coordTool.handler({ action: 'archiveTask', taskId: moot.id, summary: 'Taking an Uber instead' });
   assert.equal(c.get(project.id).tasks.some((t) => t.id === moot.id), false);
+  // A finished helper's task in review is never dropped by a summary.
+  const reviewed = c.addTask(project.id, 'Check prices', 'Prices listed').tasks.at(-1)!;
+  // Review comes from a finished helper; set directly for this check.
+  (c as unknown as { rows: Map<string, { tasks: { id: string; state: string }[] }> }).rows.get(project.id)!.tasks.find((t) => t.id === reviewed.id)!.state = 'review';
+  assert.match((await coordTool.handler({ action: 'archiveTask', taskId: reviewed.id, summary: 'Verified' })).content[0]!.text, /in review.*completeTask/);
+  assert.ok(c.get(project.id).tasks.some((t) => t.id === reviewed.id));
+  c.completeTask(project.id, reviewed.id);
+  c.archiveTask(project.id, reviewed.id);
   const finished = c.addTask(project.id, 'Pack', 'Packed').tasks.at(-1)!;
   c.completeTask(project.id, finished.id);
   assert.throws(() => c.dropTask(project.id, finished.id, 'Already done'), /archiveTask/);
@@ -1715,7 +1723,7 @@ test('coordinator refusals say what to use instead, and the ids it is given work
   assert.throws(() => c.dropTask(project.id, started.taskId, 'Moot'), /helper is working/);
   assert.match((await coordTool.handler({ action: 'resumeHelper', taskId: started.taskId, brief: 'More' })).content[0]!.text, /"Check pantry"/);
   // selectTask on started work says to resume it.
-  assert.throws(() => c.selectTask(project.id, started.taskId), new RegExp(`already has a helper run \\(running, helper ${started.helperId}\\).*resumeHelper`));
+  assert.throws(() => c.selectTask(project.id, started.taskId), new RegExp(`already working on that task \\(helper ${started.helperId}\\)`));
 
   // read_thread finds the helper by the short id the desk shows.
   const read = buildThreadbearTools(h.runner, coordinator.threadId, () => h.clock.now(), undefined, projectControl(projects), undefined, { coordinators: () => c })
@@ -1724,6 +1732,11 @@ test('coordinator refusals say what to use instead, and the ids it is given work
   assert.notEqual(r.isError, true, r.content[0]!.text);
   assert.match(r.content[0]!.text, new RegExp(started.helperId));
   assert.notEqual((await read.handler({ threadId: started.helperId })).isError, true, 'the whole id from the wake payload too');
+  // Another thread can't reach a helper, by whole id either.
+  const other = h.runner.create({ text: 'Hi', accountId: 'claude-3' }).thread;
+  const otherRead = buildThreadbearTools(h.runner, other.id, () => h.clock.now(), undefined, projectControl(projects), undefined, { coordinators: () => c })
+    .find((t) => t.name === 'read_thread') as unknown as { handler: (p: Record<string, unknown>) => Promise<{ content: { text: string }[]; isError?: boolean }> };
+  assert.match((await otherRead.handler({ threadId: started.helperId })).content[0]!.text, /No thread with id/);
   // Only read_thread: send_message never steers a helper around the desk.
   const send = buildThreadbearTools(h.runner, coordinator.threadId, () => h.clock.now(), undefined, projectControl(projects), undefined, { coordinators: () => c })
     .find((t) => t.name === 'send_message') as unknown as { handler: (p: Record<string, unknown>, extra: unknown) => Promise<{ content: { text: string }[]; isError?: boolean }> };

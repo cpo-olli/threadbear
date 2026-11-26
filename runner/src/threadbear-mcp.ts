@@ -467,6 +467,7 @@ export function buildThreadbearTools(
   // ownHelpers: also a coordinator's own hidden helpers, which lists leave
   // out, for read_thread only (Gemini review: send_message would steer one
   // around resumeHelper, and end_turn's waitFor and links can't use one).
+  // Without it a helper isn't found, by whole id either.
   const find = async (id: string, ownHelpers = false): Promise<{ id: string; other?: { t: RemoteThread; runner: string } }> => {
     // A whole id is looked up by itself. Listing every thread for it cost a
     // draining runner 2.8 MB from the primary per call, and parallel calls
@@ -490,7 +491,13 @@ export function buildThreadbearTools(
           if (e instanceof RpcError && e.code === ErrorCode.threadNotFound) return undefined;
           throw e;
         });
-        if (t?.id === id) return { id };
+        if (t?.id === id) {
+          // A hidden helper only for its own coordinator's read_thread
+          // (Gemini review: its whole id passed waitFor and ask links).
+          const owner = opts.coordinators?.()?.helperOwner(id);
+          if (!owner || (ownHelpers && owner.threadId === selfId)) return { id };
+          throw new Error(`No thread with id ${id}. list_threads shows them.`);
+        }
       }
       let hits: ThreadSummary[] = [];
       if (!whole) {
@@ -2209,7 +2216,9 @@ export function buildThreadbearTools(
         else if (p.action === 'selectTask') service.selectTask(own.projectId, p.taskId ?? '');
         // A session from before dropTask keeps the old action list, so an
         // unfinished task archived with a summary of why is dropped.
-        else if (p.action === 'dropTask' || (p.action === 'archiveTask' && (p.summary?.trim() || p.answer?.trim()) && service.get(own.projectId).tasks.find((t) => t.id === p.taskId)?.state !== 'done')) {
+        // Only a to-do or blocked one: a task in review is finished work to
+        // completeTask, never dropped by a summary (Gemini review).
+        else if (p.action === 'dropTask' || (p.action === 'archiveTask' && (p.summary?.trim() || p.answer?.trim()) && ['todo', 'blocked'].includes(service.get(own.projectId).tasks.find((t) => t.id === p.taskId)?.state ?? ''))) {
           service.dropTask(own.projectId, p.taskId ?? '', p.summary?.trim() || p.answer);
         } else if (p.action === 'archiveTask') service.archiveTask(own.projectId, p.taskId ?? '');
         else if (p.action === 'openLoop') {
@@ -2474,6 +2483,8 @@ export function buildThreadbearTools(
       handle(async ({ threadId, id: alias, text }, extra) => {
         const asked = threadId ?? alias;
         if (!asked) throw new Error('threadId is required. list_threads shows the ids.');
+        // A hidden helper is driven by its coordinator's desk, never steered around it.
+        if (opts.coordinators?.()?.helperOwner(asked)) throw new Error("That's a project coordinator's hidden helper. Its coordinator carries it on with coordinator action resumeHelper; nothing was sent.");
         const hit = await find(asked).catch(async (e: unknown) => {
           // The thread on another Mac that started this one, which this
           // runner's key may not reach: the main Mac passes this thread's
@@ -2486,8 +2497,6 @@ export function buildThreadbearTools(
         });
         const id = hit.id;
         if (id === selfId) throw new Error("That's this thread. Just carry on here.");
-        // A hidden helper is driven by its coordinator's desk, never steered around it.
-        if (opts.coordinators?.()?.helperOwner(id)) throw new Error("That's a project coordinator's hidden helper. Its coordinator carries it on with coordinator action resumeHelper; nothing was sent.");
         // Another runner's thread counts as full access (modeOf), so a
         // restricted caller is asked first there too.
         const head = await from();

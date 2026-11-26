@@ -695,8 +695,11 @@ export class Coordinators {
     const row = this.must(projectId);
     const task = row.tasks.find((t) => t.id === id);
     if (!task) throw bad('That task is not in this project.');
-    if (task.run) throw bad(`That task already has a helper run (${task.run.status}, helper ${task.run.helperThreadId ?? task.run.agentId ?? 'unknown'}). Carry it on with resumeHelper and this taskId; selectTask is only for an unstarted to-do.`);
-    if (task.state !== 'todo') throw bad(`That task is ${task.state}. selectTask is only for an unstarted to-do; resumeHelper carries on existing work.`);
+    const helper = task.run ? `helper ${task.run.helperThreadId ?? task.run.agentId ?? 'unknown'}` : '';
+    if (task.run && ['queued', 'running'].includes(task.run.status)) throw bad(`A helper is already working on that task (${helper}). You are woken when its turn ends; nothing to select.`);
+    if (task.state === 'done') throw bad('That task is done: archive it with archiveTask, or addTask for new work.');
+    if (task.run) throw bad(`That task already has a helper run (${task.run.status}, ${helper}). Carry it on with resumeHelper and this taskId; selectTask is only for an unstarted to-do.`);
+    if (task.state !== 'todo') throw bad(`That task is ${task.state}. selectTask is only for an unstarted to-do.`);
     row.selectedTaskId = id; this.changed(row); return this.get(projectId);
   }
 
@@ -705,6 +708,7 @@ export class Coordinators {
     const row = this.must(projectId);
     const task = row.tasks.find((t) => t.id === id);
     if (!task) throw bad('That task is not in this project.');
+    if (task.state === 'review') throw bad('This task is in review: check its result against doneWhen, call completeTask, then archiveTask. If it is not wanted after all, dropTask with a summary saying why.');
     if (task.state !== 'done') throw bad('Only a finished task can be archived. To drop a to-do that is no longer needed, call dropTask (or archiveTask) with a summary saying why.');
     this.toHistory(row, task, { archivedAt: this.now() });
     return this.get(projectId);
