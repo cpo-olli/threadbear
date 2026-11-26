@@ -69,6 +69,100 @@ impl Task {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoopKind {
+    UserQuestion,
+    WaitingOnUser,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoopState {
+    Open,
+    Answered,
+    Closed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Loop {
+    pub id: String,
+    pub kind: LoopKind,
+    pub state: LoopState,
+    pub title: String,
+    pub summary: Option<String>,
+    pub options: Vec<String>,
+    pub source_seq: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub closed_at: Option<String>,
+}
+
+impl Loop {
+    pub fn is_open(&self) -> bool {
+        self.state != LoopState::Closed
+    }
+
+    pub fn needs_signoff(&self) -> bool {
+        self.kind == LoopKind::UserQuestion && self.state == LoopState::Answered
+    }
+
+    pub fn waiting_on_user(&self) -> bool {
+        self.kind == LoopKind::WaitingOnUser && self.state == LoopState::Open
+    }
+
+    pub fn checking(&self) -> bool {
+        self.kind == LoopKind::UserQuestion && self.state == LoopState::Open
+    }
+
+    fn sort_rank(&self) -> u8 {
+        if self.needs_signoff() {
+            0
+        } else if self.waiting_on_user() {
+            1
+        } else {
+            2
+        }
+    }
+
+    pub fn decode(v: &Value) -> Option<Self> {
+        let kind = match v["kind"].as_str()? {
+            "user_question" => LoopKind::UserQuestion,
+            "waiting_on_user" => LoopKind::WaitingOnUser,
+            _ => return None,
+        };
+        let state = match v["state"].as_str()? {
+            "open" => LoopState::Open,
+            "answered" => LoopState::Answered,
+            "closed" => LoopState::Closed,
+            _ => return None,
+        };
+        Some(Self {
+            id: identity(v, "id")?,
+            kind,
+            state,
+            title: identity(v, "title")?,
+            summary: v["summary"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned),
+            options: v["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .take(4)
+                .map(str::to_owned)
+                .collect(),
+            source_seq: v["sourceSeq"].as_i64().filter(|n| *n >= 0),
+            created_at: v["createdAt"].as_str().unwrap_or("").to_owned(),
+            updated_at: v["updatedAt"].as_str().unwrap_or("").to_owned(),
+            closed_at: identity(v, "closedAt"),
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Coordinator {
     pub project_id: String,
@@ -77,6 +171,7 @@ pub struct Coordinator {
     pub charter: String,
     pub interests: Vec<String>,
     pub tasks: Vec<Task>,
+    pub loops: Vec<Loop>,
     pub updated_at: String,
 }
 
@@ -123,6 +218,12 @@ impl Coordinator {
                     })
                 })
                 .collect(),
+            loops: v["loops"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Loop::decode)
+                .collect(),
             updated_at: v["updatedAt"].as_str().unwrap_or("").to_owned(),
         })
     }
@@ -141,6 +242,57 @@ impl Coordinator {
             .filter(|t| t.state == TaskState::Working && t.status == "running")
             .count()
     }
+
+    pub fn open_loops(&self) -> Vec<&Loop> {
+        let mut open = self
+            .loops
+            .iter()
+            .filter(|l| l.is_open())
+            .collect::<Vec<_>>();
+        open.sort_by_key(|l| l.sort_rank());
+        open
+    }
+
+    pub fn waiting_count(&self) -> usize {
+        self.loops.iter().filter(|l| l.waiting_on_user()).count()
+    }
+
+    pub fn signoff_count(&self) -> usize {
+        self.loops.iter().filter(|l| l.needs_signoff()).count()
+    }
+
+    pub fn actionable_loops(&self) -> usize {
+        self.waiting_count() + self.signoff_count()
+    }
+}
+
+/// Splits markdown notes into `(heading, body)` cards on `## ` headings for the
+/// Agent memory drawer. Notes without `## ` headings stay as one card.
+pub fn note_sections(notes: &str) -> Vec<(Option<String>, String)> {
+    let trimmed = notes.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let mut sections: Vec<(Option<String>, Vec<&str>)> = Vec::new();
+    for line in trimmed.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            let title = heading.trim();
+            if !title.is_empty() {
+                sections.push((Some(title.to_owned()), Vec::new()));
+                continue;
+            }
+        }
+        if let Some((_, body)) = sections.last_mut() {
+            body.push(line);
+        } else {
+            sections.push((None, vec![line]));
+        }
+    }
+    sections
+        .into_iter()
+        .map(|(title, lines)| (title, lines.join("\n").trim().to_owned()))
+        .filter(|(title, body)| title.is_some() || !body.is_empty())
+        .collect()
 }
 
 /// Coordinators sit below Starred by default. Their ordinary thread is
@@ -318,5 +470,54 @@ mod tests {
             &[c],
         );
         assert_eq!(result[0].key, "archived");
+    }
+
+    #[test]
+    fn open_loops_decode_tolerantly_and_sort_signoff_before_waiting_before_checking() {
+        let c = Coordinator::decode(&json!({
+            "projectId": "p",
+            "threadId": "t",
+            "state": "active",
+            "loops": [
+                {"id": "chk", "kind": "user_question", "state": "open", "title": "Does waterproofing muffle mic?"},
+                {"id": "wait", "kind": "waiting_on_user", "state": "open", "title": "Build iOS auto-resume?", "summary": "Uses geofence.", "options": ["Build it", "Not yet"], "sourceSeq": 12},
+                {"id": "ans", "kind": "user_question", "state": "answered", "title": "What sensors are in Omi CV1?", "summary": "6-axis IMU and 2 PDM mics.", "sourceSeq": 7},
+                {"id": "done", "kind": "waiting_on_user", "state": "closed", "title": "Old decision"},
+                {"id": "bad", "kind": "future_kind", "state": "open", "title": "Ignored"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(c.loops.len(), 4);
+        let open = c.open_loops();
+        assert_eq!(
+            open.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(),
+            ["ans", "wait", "chk"]
+        );
+        assert_eq!(c.signoff_count(), 1);
+        assert_eq!(c.waiting_count(), 1);
+        assert_eq!(c.actionable_loops(), 2);
+        assert_eq!(open[1].options, ["Build it", "Not yet"]);
+        assert_eq!(open[1].source_seq, Some(12));
+    }
+
+    #[test]
+    fn note_sections_splits_h2_headings_and_handles_plain_notes() {
+        assert!(note_sections("   ").is_empty());
+        assert_eq!(
+            note_sections("Just a plain note."),
+            vec![(None, "Just a plain note.".to_owned())]
+        );
+        let parsed =
+            note_sections("## Hardware\n6-axis IMU\n\n## ASR Pipeline\nTinker Desk poller\n");
+        assert_eq!(
+            parsed,
+            vec![
+                (Some("Hardware".to_owned()), "6-axis IMU".to_owned()),
+                (
+                    Some("ASR Pipeline".to_owned()),
+                    "Tinker Desk poller".to_owned()
+                ),
+            ]
+        );
     }
 }

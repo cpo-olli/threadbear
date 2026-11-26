@@ -1249,12 +1249,17 @@ its model or provider at any time from the composer. It runs on this Mac; its
 conversation stays in a Coordinators section below Starred by default, while routine helpers
 run as hidden sessions out of the inbox and appear on the Activity tab.
 The project home has Conversation, Activity, To-dos and Threads tabs, with
-Highlights keeping the project's shared goals, state and notes beside them. You
-can edit that document directly; if another thread changed a field while you
-were editing, your draft stays open so you can merge it. Helpers report to the
-coordinator, which checks their results and brings you decisions it cannot
-settle. Pause stops it and its helpers, and Resume reconciles interrupted work
-first. Other Macs, the phones and the website show the coordinator's
+Highlights organized into three parts beside the chat: sticky **Open loops** at
+the top (your open or answered questions and decisions waiting on you, staying
+open until you close or reply to them), the scrollable **Project brief** (state,
+goals, active work and links), and a collapsed **Agent memory** drawer at the
+bottom for technical notes read and written by the coordinator and its helpers.
+You can edit the brief or open Agent memory to edit the raw notes directly; if
+another thread changed a field while you were editing, your draft stays open so
+you can merge it. Helpers report to the coordinator, which checks their results
+and brings you decisions it cannot settle. Pause stops it and its helpers, and
+Resume reconciles interrupted work first. Other Macs, the phones and the
+website show the coordinator's
 conversation and questions, while setup and the living document are desktop
 controls in this version. The coordinator can follow project-thread completions,
 literal interest keywords and times it schedules itself; automatic email, Slack

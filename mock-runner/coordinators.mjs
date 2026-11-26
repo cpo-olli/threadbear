@@ -35,6 +35,39 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
         { id: 'notes', state: 'working', title: 'Keep project notes in sync', doneWhen: 'Edits from the coordinator and project page share the same document.', run: { agentId: 'helper_notes', status: 'running' } },
         { id: 'research', state: 'done', title: 'Compare the Prints document model', doneWhen: 'The focused document approach is included in the design.', run: { status: 'completed', summary: 'The project document uses the existing shared goals, state and notes.' } },
       ],
+      loops: p.title === 'Threadbear' ? [
+        {
+          id: 'loop_answered',
+          kind: 'user_question',
+          state: 'answered',
+          title: 'Do open questions stay pinned when new turns arrive?',
+          summary: 'Yes. Open questions stay pinned at the top of Highlights until you explicitly close them.',
+          options: [],
+          sourceSeq: 3,
+          createdAt: ts,
+          updatedAt: ts,
+        },
+        {
+          id: 'loop_decision',
+          kind: 'waiting_on_user',
+          state: 'open',
+          title: 'Collapse technical notes behind Agent memory by default?',
+          summary: 'Keeps technical specs out of your project brief until you expand the drawer.',
+          options: ['Collapse by default', 'Keep expanded'],
+          sourceSeq: 3,
+          createdAt: ts,
+          updatedAt: ts,
+        },
+        {
+          id: 'loop_checking',
+          kind: 'user_question',
+          state: 'open',
+          title: 'Check whether iPhone needs the same open loops drawer',
+          options: [],
+          createdAt: ts,
+          updatedAt: ts,
+        },
+      ] : [],
     };
     coordinators.push(coordinator);
     return coordinator;
@@ -43,7 +76,7 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
   if (initial) {
     initial.goals = 'Make Threadbear a place to talk to a project, follow its work and make the decisions that need you.';
     initial.state = 'The coordinator experiment is being built. Two helpers are working on the project home and shared notes. The approved design keeps the conversation beside a living project document.';
-    initial.notes = '## Decisions\n\n- Use the same pools and model picker as ordinary threads.\n- Routine work stays in helpers, outside the inbox.\n- Keep questions with the coordinator.\n- Project goals, state and notes are shared with the project page.';
+    initial.notes = '## Decisions\n\n- Use the same pools and model picker as ordinary threads.\n- Routine work stays in helpers, outside the inbox.\n- Keep questions with the coordinator.\n- Project goals, state and notes are shared with the project page.\n\n## Runner & Storage\n\n- Coordinator state persists in `coordinators.json`.\n- `loops` survives reloads and merges cleanly with legacy records.';
     make(initial);
   }
   return (method, p) => {
@@ -71,6 +104,47 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
     } else if (method === 'coordinators.addTask') {
       if (!p.title?.trim() || !p.doneWhen?.trim()) throw error(-32602, 'Add a title and what finished looks like.');
       coordinator.tasks.push({ id: `todo_${coordinator.tasks.length}`, state: 'todo', title: p.title, doneWhen: p.doneWhen });
+    } else if (method === 'coordinators.closeLoop') {
+      const loop = coordinator.loops.find((l) => l.id === p.loopId);
+      if (!loop) throw error(-32602, 'Loop not found.');
+      const ts = now();
+      loop.state = 'closed';
+      loop.updatedAt = ts;
+      loop.closedAt = ts;
+    } else if (method === 'coordinators.reopenLoop') {
+      const loop = coordinator.loops.find((l) => l.id === p.loopId);
+      if (!loop) throw error(-32602, 'Loop not found.');
+      loop.state = loop.kind === 'user_question' && loop.summary ? 'answered' : 'open';
+      loop.updatedAt = now();
+      delete loop.closedAt;
+    } else if (method === 'coordinators.replyLoop') {
+      if (coordinator.state === 'paused') throw error(-32602, 'Coordinator is paused. Resume it before replying.');
+      const loop = coordinator.loops.find((l) => l.id === p.loopId);
+      if (!loop) throw error(-32602, 'Loop not found.');
+      const text = String(p.text ?? '').trim();
+      if (!text) throw error(-32602, 'Add a reply first.');
+      const ts = now();
+      const shouldClose = p.close ?? (loop.kind === 'waiting_on_user');
+      if (shouldClose) {
+        loop.state = 'closed';
+        loop.closedAt = ts;
+      } else {
+        loop.state = 'open';
+        delete loop.closedAt;
+      }
+      loop.updatedAt = ts;
+      const entry = threads.get(coordinator.threadId);
+      if (entry) {
+        const seq = entry.events.length + 1;
+        const event = { type: 'user.message', text: `Re: ${loop.title}\n\n${text}`, images: [], seq, ts, threadId: coordinator.threadId, turnId: `loop_reply_${seq}` };
+        entry.events.push(event);
+        entry.summary.lastSeq = seq;
+        entry.summary.lastSeenSeq = seq;
+        entry.summary.updatedAt = ts;
+        entry.summary.lastActivityAt = ts;
+        broadcast('thread.event', { threadId: coordinator.threadId, event });
+        threadChanged(coordinator.threadId);
+      }
     } else if (method === 'coordinators.update') {
       if (p.charter !== undefined) coordinator.charter = p.charter;
       if (p.interests !== undefined) coordinator.interests = p.interests;

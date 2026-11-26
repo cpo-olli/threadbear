@@ -772,3 +772,155 @@ test('adding a coordinator when every login for its chosen provider in the pool 
   assert.equal(h.runner.threadRecords().length, 0);
   c.stop();
 });
+
+test('durable open loops track user questions and coordinator asks across overlapping topics, with close/reopen/reply and restart recovery', async () => {
+  const { h, c, project, home, claude } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  const session = claude.sessions.at(-1)!;
+  session.result('completed');
+  await tick();
+
+  // Coordinator records a user question while checking, then marks it answered with a summary.
+  const q1 = c.openLoop(project.id, { kind: 'user_question', title: 'What hardware and sensors are inside Omi CV1?' });
+  assert.equal(c.get(project.id).loops.length, 1);
+  assert.equal(c.get(project.id).loops[0]!.state, 'open');
+
+  // Deduplicates by normalized title rather than creating a second loop.
+  const q1Dup = c.openLoop(project.id, {
+    kind: 'user_question',
+    title: '  what hardware   and sensors are inside omi cv1? ',
+    state: 'answered',
+    summary: '6-axis IMU and 2x PDM mics, disabled on stock 3.0.24.',
+  });
+  assert.equal(q1Dup.loopId, q1.loopId);
+  assert.equal(c.get(project.id).loops.length, 1);
+  assert.equal(c.get(project.id).loops[0]!.state, 'answered');
+
+  // Auto-captures waiting_on_user asks from turn.completed without overwriting earlier loops.
+  h.runner.publish({
+    method: 'thread.event',
+    params: {
+      threadId: coordinator.threadId,
+      seq: 12,
+      event: {
+        type: 'turn.completed',
+        seq: 12,
+        turnId: 'turn-1',
+        outcome: 'completed',
+        needs: 'you',
+        asks: [{ action: 'Build iOS movement auto-resume?', why: 'Bypasses 2h 100% battery flatline.', options: ['Build it', 'Not yet'] }],
+      },
+    },
+  } as never);
+  h.runner.publish({
+    method: 'thread.event',
+    params: {
+      threadId: coordinator.threadId,
+      seq: 18,
+      event: {
+        type: 'turn.completed',
+        seq: 18,
+        turnId: 'turn-2',
+        outcome: 'completed',
+        needs: 'you',
+        asks: [{ action: 'Which voice-triage fixes should I ship?', options: ['Dedupe + queue floor', '+ LLM TV filter'] }],
+      },
+    },
+  } as never);
+  assert.equal(c.get(project.id).loops.length, 3);
+  const ask1 = c.get(project.id).loops[1]!;
+  const ask2 = c.get(project.id).loops[2]!;
+  assert.equal(ask1.kind, 'waiting_on_user');
+  assert.deepEqual(ask1.options, ['Build it', 'Not yet']);
+  assert.equal(ask1.sourceSeq, 12);
+  assert.equal(ask2.title, 'Which voice-triage fixes should I ship?');
+
+  // Open loops are included in the coordinator's desk context.
+  assert.match(c.context(coordinator.threadId)!, /What hardware and sensors/);
+  assert.match(c.context(coordinator.threadId)!, /Build iOS movement auto-resume/);
+
+  // Explicit close + reopen (Undo) on answered user question restores answered state.
+  c.closeLoop(project.id, q1.loopId);
+  assert.equal(c.get(project.id).loops[0]!.state, 'closed');
+  assert.ok(c.get(project.id).loops[0]!.closedAt);
+  c.reopenLoop(project.id, q1.loopId);
+  assert.equal(c.get(project.id).loops[0]!.state, 'answered');
+  assert.equal(c.get(project.id).loops[0]!.closedAt, undefined);
+
+  // Follow-up reply on a user question sends to the thread and returns it to open (Checking...).
+  c.replyLoop(project.id, q1.loopId, 'Does stock firmware expose battery voltage?');
+  await tick();
+  assert.equal(c.get(project.id).loops[0]!.state, 'open');
+  assert.ok(session.sent.some((m) => m.text.includes('Follow-up on') && m.text.includes('battery voltage')));
+
+  // Answering a waiting_on_user loop via replyLoop closes it and messages the coordinator.
+  c.replyLoop(project.id, ask1.id, 'Build it');
+  await tick();
+  assert.equal(c.get(project.id).loops[1]!.state, 'closed');
+  assert.ok(session.sent.some((m) => m.text.includes('Build iOS movement auto-resume?') && m.text.includes('Build it')));
+
+  // Answering an ask on the composer card (user.message answers) auto-closes the matching loop.
+  h.runner.publish({
+    method: 'thread.event',
+    params: {
+      threadId: coordinator.threadId,
+      seq: 22,
+      event: {
+        type: 'user.message',
+        seq: 22,
+        text: 'Dedupe + queue floor',
+        answers: [{ action: 'Which voice-triage fixes should I ship?', answer: 'Dedupe + queue floor' }],
+      },
+    },
+  } as never);
+  assert.equal(c.get(project.id).loops[2]!.state, 'closed');
+
+  // Paused coordinator refuses replyLoop, while closeLoop still works.
+  await c.pause(project.id, true);
+  assert.throws(() => c.replyLoop(project.id, q1.loopId, 'Still checking?'), /paused/);
+  c.closeLoop(project.id, q1.loopId);
+  assert.equal(c.get(project.id).loops[0]!.state, 'closed');
+
+  // Loops persist across restart, and legacy coordinators.json without loops loads cleanly.
+  c.stop();
+  const restarted = recoverFresh(h, home);
+  assert.equal(restarted.c.get(project.id).loops.length, 3);
+  restarted.c.stop();
+
+  const raw = JSON.parse(fs.readFileSync(path.join(home, 'coordinators.json'), 'utf8')) as Record<string, unknown>[];
+  delete raw[0]!.loops;
+  fs.writeFileSync(path.join(home, 'coordinators.json'), JSON.stringify(raw));
+  const legacy = recoverFresh(h, home);
+  assert.deepEqual(legacy.c.get(project.id).loops, []);
+  legacy.c.stop();
+});
+
+test('coordinator MCP tool supports openLoop, updateLoop, and closeLoop', async () => {
+  const { h, c, project } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  const tools = buildThreadbearTools(
+    {} as never,
+    coordinator.threadId,
+    () => h.clock.now(),
+    undefined,
+    {} as ProjectControl,
+    undefined,
+    { coordinators: () => c },
+  );
+  const coordTool = tools.find((t) => t.name === 'coordinator') as unknown as { handler: (p: Record<string, unknown>) => Promise<{ content: { text: string }[] }> };
+  assert.ok(coordTool);
+  const openedRes = await coordTool.handler({ action: 'openLoop', loopKind: 'user_question', title: 'Does waterproofing muffle mic level 8?' });
+  const opened = JSON.parse(openedRes.content[0]!.text) as { loopId: string };
+  assert.equal(c.get(project.id).loops[0]!.state, 'open');
+
+  await coordTool.handler({ action: 'updateLoop', loopId: opened.loopId, loopState: 'answered', summary: 'Minimal attenuation under 1 dB.' });
+  assert.equal(c.get(project.id).loops[0]!.state, 'answered');
+  assert.equal(c.get(project.id).loops[0]!.summary, 'Minimal attenuation under 1 dB.');
+
+  await coordTool.handler({ action: 'closeLoop', loopId: opened.loopId });
+  assert.equal(c.get(project.id).loops[0]!.state, 'closed');
+  c.stop();
+});
+

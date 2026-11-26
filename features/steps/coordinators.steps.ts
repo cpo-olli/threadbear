@@ -2,7 +2,21 @@ import assert from 'node:assert/strict';
 import { Then, When } from '@cucumber/cucumber';
 import type { ThreadbearWorld } from '../support/world.ts';
 
-type Coordinator = { on: boolean; setup: string | null; thread: string | null; tab: string; state: string | null; tasks: { title: string; state: string }[] | null; documentShown: boolean; editing: { draft: string; reviewCurrent: string | null } | null; document: { state: string; notes: string } | null };
+type Coordinator = {
+  on: boolean;
+  setup: string | null;
+  thread: string | null;
+  tab: string;
+  state: string | null;
+  tasks: { title: string; state: string }[] | null;
+  loops: { id: string; kind: string; state: string; title: string }[] | null;
+  openLoopsCount: number | null;
+  agentMemoryOpen: boolean;
+  undoLoop: { loopId: string; title: string } | null;
+  documentShown: boolean;
+  editing: { draft: string; reviewCurrent: string | null } | null;
+  document: { state: string; notes: string } | null;
+};
 const coordinator = (d: unknown) => (d as { coordinator?: Coordinator }).coordinator;
 
 Then('the coordinator experiment is {string}', async function (this: ThreadbearWorld, state: string) {
@@ -112,7 +126,7 @@ async function scrollDocumentToBottom(world: ThreadbearWorld): Promise<void> {
 }
 
 When('I edit the project notes and add {string}', async function (this: ThreadbearWorld, text: string) {
-  await scrollDocumentToBottom(this);
+  await this.until('agent memory open', (d) => Boolean(coordinator(d)?.documentShown && coordinator(d)?.agentMemoryOpen));
   await this.app.do({ cmd: 'click', tip: 'Edit the notes (or double-click it)' });
   await this.app.do({ cmd: 'type', here: true, text: `\n${text}` });
 });
@@ -148,4 +162,42 @@ Then('the project notes contain {string}', async function (this: ThreadbearWorld
 
 Then('the project editor is closed', async function (this: ThreadbearWorld) {
   await this.until('the editor closed after saving', (d) => Boolean(coordinator(d)) && coordinator(d)?.editing === null);
+});
+
+Then('agent memory is collapsed', async function (this: ThreadbearWorld) {
+  await this.until('agent memory collapsed', (d) => Boolean(coordinator(d)?.documentShown) && coordinator(d)?.agentMemoryOpen === false);
+});
+
+Then('agent memory is open', async function (this: ThreadbearWorld) {
+  await this.until('agent memory open', (d) => Boolean(coordinator(d)?.documentShown) && coordinator(d)?.agentMemoryOpen === true);
+});
+
+When('I open agent memory', async function (this: ThreadbearWorld) {
+  await this.until('the shared project document', (d) => Boolean(coordinator(d)?.documentShown));
+  await this.app.do({ cmd: 'click', tip: 'Show agent memory notes' });
+});
+
+When('I close agent memory', async function (this: ThreadbearWorld) {
+  await this.until('agent memory open', (d) => Boolean(coordinator(d)?.agentMemoryOpen));
+  await this.app.do({ cmd: 'click', tip: 'Hide agent memory notes' });
+});
+
+Then('the coordinator has {int} open loops', async function (this: ThreadbearWorld, count: number) {
+  await this.until(`${count} open loops`, (d) => coordinator(d)?.openLoopsCount === count);
+});
+
+When('I close the answered open loop', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'click', tip: 'Mark this question answered and close it' });
+});
+
+Then('the undo banner is shown for the closed loop', async function (this: ThreadbearWorld) {
+  await this.until('undo banner shown', (d) => Boolean(coordinator(d)?.undoLoop));
+});
+
+When('I undo closing the open loop', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'click', tip: 'Reopen this closed loop' });
+});
+
+When('I reply {string} to the waiting open loop', async function (this: ThreadbearWorld, option: string) {
+  await this.app.do({ cmd: 'click', tip: `Reply "${option}" and close this loop` });
 });

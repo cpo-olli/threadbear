@@ -2055,13 +2055,13 @@ export function buildThreadbearTools(
     endTurn(),
     ...(isCoordinator ? [tool(
       'coordinator',
-      'Read your durable project desk, add/select/complete/archive bounded jobs, start or resume a hidden implementation helper (startHelper / resumeHelper), update your charter/interests or wake time, or record an answer to a helper question. Keep shared project goals/state/notes with update_project. Helpers run in hidden sessions and wake you when they finish; ask the user only for decisions your instructions do not settle.',
+      'Read your durable project desk, add/select/complete/archive bounded jobs, start or resume a hidden implementation helper (startHelper / resumeHelper), manage durable open loops (openLoop / updateLoop / closeLoop for user questions and decisions waiting on the user), update your charter/interests or wake time, or record an answer to a helper question. Keep shared project goals/state concise as the user brief and put technical details in project notes (Agent memory) with update_project.',
       {
-        action: z.enum(['get', 'addTask', 'selectTask', 'completeTask', 'archiveTask', 'startHelper', 'resumeHelper', 'update', 'answer']),
+        action: z.enum(['get', 'addTask', 'selectTask', 'completeTask', 'archiveTask', 'startHelper', 'resumeHelper', 'openLoop', 'updateLoop', 'closeLoop', 'update', 'answer']),
         taskId: z.string().optional(),
         helperId: z.string().optional(),
         brief: z.string().max(16_000).optional(),
-        title: z.string().max(200).optional(),
+        title: z.string().max(240).optional(),
         doneWhen: z.string().max(1000).optional(),
         cwd: z.string().max(1000).optional(),
         model: z.string().max(200).optional(),
@@ -2073,6 +2073,12 @@ export function buildThreadbearTools(
         wakeAt: z.string().nullable().optional(),
         questionId: z.string().optional(),
         answer: z.string().max(4000).optional(),
+        loopId: z.string().optional(),
+        loopKind: z.enum(['user_question', 'waiting_on_user']).optional(),
+        loopState: z.enum(['open', 'answered']).optional(),
+        summary: z.string().max(1000).optional(),
+        options: z.array(z.string().max(80)).max(4).optional(),
+        sourceSeq: z.number().int().nonnegative().optional(),
       },
       handle(async (p) => {
         const service = opts.coordinators?.();
@@ -2084,7 +2090,27 @@ export function buildThreadbearTools(
         else if (p.action === 'completeTask') service.completeTask(own.projectId, p.taskId ?? '');
         else if (p.action === 'selectTask') service.selectTask(own.projectId, p.taskId ?? '');
         else if (p.action === 'archiveTask') service.archiveTask(own.projectId, p.taskId ?? '');
-        else if (p.action === 'startHelper') {
+        else if (p.action === 'openLoop') {
+          const opened = service.openLoop(own.projectId, {
+            kind: p.loopKind ?? 'user_question',
+            title: p.title ?? '',
+            ...(p.summary !== undefined ? { summary: p.summary } : {}),
+            ...(p.loopState !== undefined ? { state: p.loopState } : {}),
+            ...(p.options !== undefined ? { options: p.options } : {}),
+            ...(p.sourceSeq !== undefined ? { sourceSeq: p.sourceSeq } : {}),
+          });
+          return JSON.stringify(opened);
+        } else if (p.action === 'updateLoop') {
+          service.updateLoop(own.projectId, p.loopId ?? '', {
+            ...(p.title !== undefined ? { title: p.title } : {}),
+            ...(p.summary !== undefined ? { summary: p.summary } : {}),
+            ...(p.loopState !== undefined ? { state: p.loopState } : {}),
+            ...(p.options !== undefined ? { options: p.options } : {}),
+            ...(p.sourceSeq !== undefined ? { sourceSeq: p.sourceSeq } : {}),
+          });
+        } else if (p.action === 'closeLoop') {
+          service.closeLoop(own.projectId, p.loopId ?? '');
+        } else if (p.action === 'startHelper') {
           const started = service.startHelper(own.projectId, {
             ...(p.taskId ? { taskId: p.taskId } : {}),
             brief: p.brief ?? '',

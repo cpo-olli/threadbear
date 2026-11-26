@@ -84,6 +84,7 @@ Feature: Project coordinators
   @coordinators.home @coordinators @swift-pending
   Scenario: A conflicting document edit keeps the draft until the current version is reviewed
     When I open the project "Threadbear"
+    And I open agent memory
     And I edit the project notes and add "My draft decision."
     And the coordinator changes the saved notes to "The coordinator's new decision."
     And I save the project text
@@ -96,4 +97,26 @@ Feature: Project coordinators
     Then the project notes contain "My draft decision."
     And the project notes contain "The coordinator's new decision."
     And the project editor is closed
+    And there's no error bar
+
+  @coordinators.home @coordinators @swift-pending
+  Scenario: Agent memory stays collapsed until opened
+    When I open the project "Threadbear"
+    Then agent memory is collapsed
+    When I open agent memory
+    Then agent memory is open
+    When I close agent memory
+    Then agent memory is collapsed
+
+  @coordinators.home @coordinators @swift-pending
+  Scenario: Open loops stay pinned until closed, can be undone, and accept quick replies
+    When I open the project "Threadbear"
+    Then the coordinator has 3 open loops
+    When I close the answered open loop
+    Then the coordinator has 2 open loops
+    And the undo banner is shown for the closed loop
+    When I undo closing the open loop
+    Then the coordinator has 3 open loops
+    When I reply "Collapse by default" to the waiting open loop
+    Then the coordinator has 2 open loops
     And there's no error bar

@@ -2163,6 +2163,29 @@ impl ThreadPane {
         self.light_row(row_id.to_owned(), cx);
     }
 
+    /// Scrolls to and highlights the transcript row at or just before `target_seq`
+    /// (used by coordinator open-loop Jump links). Falls back to focusing the composer.
+    pub(crate) fn reveal_seq(
+        &mut self,
+        target_seq: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let row_id = self
+            .feed
+            .model()
+            .rows()
+            .iter()
+            .rev()
+            .find(|r| r.seq <= target_seq)
+            .map(|r| r.id.clone());
+        if let Some(id) = row_id {
+            self.reveal_row(&id, window, cx);
+        } else {
+            self.focus_composer(window, cx);
+        }
+    }
+
     /// Lights a row up for a moment so the eye lands on the step (`light`).
     fn light_row(&mut self, row_id: String, cx: &mut Context<Self>) {
         self.rows.lit_row = Some(row_id.clone());

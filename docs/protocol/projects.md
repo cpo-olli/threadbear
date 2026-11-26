@@ -657,11 +657,14 @@ or provider at will. No coordinator budget, spending limit or cost estimate is
 added.
 
 The project home has Conversation, Activity, To-dos and Threads tabs. Its right
-Highlights pane draws the shared project goals, state and notes; these stay the
-same records `projects.get` and `projects.update` read and write. The conversation
-is the audit trail. Routine work uses runner-managed hidden helper sessions
-(started and resumed through the `coordinator` tool, never separate inbox
-threads), surfaced in Activity and readable via `threads.subagent`. Questions and
+Highlights pane pins durable Open loops above the living project brief (shared
+`state`, `goals`, active work and `links`), and tucks the shared `notes` into a
+collapsible Agent memory drawer at the bottom so technical agent notes stay out
+of the way unless opened. These fields remain the same canonical records
+`projects.get` and `projects.update` read and write. The conversation is the
+audit trail. Routine work uses runner-managed hidden helper sessions (started
+and resumed through the `coordinator` tool, never separate inbox threads),
+surfaced in Activity and readable via `threads.subagent`. Questions and
 permission requests from helpers go to the coordinator. Only it asks the user.
 
 `projects.update` optionally takes `ifUnchanged: { goals?, state?, notes? }`.
@@ -679,6 +682,9 @@ Requests (local runner; other clients tolerate the unknown methods/notification)
 | `coordinators.addTask` | `{ projectId, title, doneWhen }` | `{ coordinator }` |
 | `coordinators.update` | `{ projectId, charter?, interests?, wakeAt? }` | `{ coordinator }` |
 | `coordinators.answer` | `{ projectId, questionId, answer }` | `{ coordinator }` |
+| `coordinators.closeLoop` | `{ projectId, loopId }` | `{ coordinator }` |
+| `coordinators.reopenLoop` | `{ projectId, loopId }` | `{ coordinator }` |
+| `coordinators.replyLoop` | `{ projectId, loopId, text, close? }` | `{ coordinator }` |
 
 `coordinators.updated` carries `{ coordinators: Coordinator[] }`, and the app
 loads `coordinators.list` again after reconnect. With the experiment off, lists
@@ -686,16 +692,37 @@ are empty and writes refuse; existing coordinator identities still retain their
 tool restrictions. They cannot become unrestricted threads by turning it off.
 
 `Coordinator` is `{ projectId, threadId, state: "active" | "paused", charter,
-interests: string[], tasks, questions, updatedAt, wakeAt? }`. Tasks have `{ id,
-title, doneWhen, state, run? }`; task state is `todo`, `working`, `blocked`,
-`review` or `done`. Run is `{ id, agentId?, nativeTaskId?, nativeRunId?, status,
-summary?, updatedAt }`.
+interests: string[], tasks, questions, loops, updatedAt, wakeAt? }`. Tasks have
+`{ id, title, doneWhen, state, run? }`; task state is `todo`, `working`,
+`blocked`, `review` or `done`. Run is `{ id, agentId?, nativeTaskId?,
+nativeRunId?, status, summary?, updatedAt }`.
 Run states are `queued`, `running`, `interrupted`, `completed`, `failed`, `stopped`.
 One transition function owns the allowed moves. Starting or resuming a helper
 reserves the run and starts a hidden runner-owned helper session (inheriting the
 coordinator's pool/model or overriding them). Its turn outcome updates the run
 and wakes the coordinator. The UI does not manually mark running work done.
 Questions have `{ id, agentId, questions, state, answer? }`.
+
+**Open loops.** `loops` holds durable user questions and coordinator decisions
+so overlapping topics in chat cannot push earlier questions or asks out of view.
+Each loop is `{ id, kind: "user_question" | "waiting_on_user", state: "open" |
+"answered" | "closed", title, summary?, options?, sourceSeq?, createdAt,
+updatedAt, closedAt? }`. Older coordinators without `loops` default to `[]`.
+- `user_question` loops are opened or updated by the coordinator via `openLoop`
+  and `updateLoop`: `open` while checking, `answered` with a short `summary`
+  once answered. They stay visible until explicitly closed (`coordinators.closeLoop`
+  or `closeLoop` after explicit user sign-off). `coordinators.reopenLoop` undoes
+  a close.
+- `waiting_on_user` loops are captured automatically when the coordinator ends
+  a turn with `needs: "you"` and `asks` (taking each ask's `action`, `why`,
+  `options` and the turn's event `seq`), deduplicated by normalized title, and
+  can also be opened/updated with `openLoop`/`updateLoop`. Answering an ask on
+  the composer card (`answers`) closes its matching `waiting_on_user` loop;
+  sending an unrelated message leaves earlier loops open.
+- `coordinators.replyLoop` sends the user's reply to the coordinator thread
+  referencing the loop's title (refused while paused). For `waiting_on_user`
+  (default `close: true`) it closes the loop; for `user_question` (`close: false`,
+  follow-up) it moves the loop back to `open`.
 
 The runner stores the registry outside the model's context, including briefs,
 helper session identities and checkpoints. Each execution has its own run
@@ -714,8 +741,9 @@ records after compaction.
 
 Only the user-facing app may start or pause a coordinator. The coordinator's
 `coordinator` tool may read its own registry, add tasks, select/complete/archive
-tasks, start or resume hidden helpers, update its charter and interests, set a
-wake time and record answers to helper questions. Thread-owned RPC credentials
+tasks, start or resume hidden helpers, manage open loops (`openLoop`,
+`updateLoop`, `closeLoop`), update its charter and interests, set a wake time
+and record answers to helper questions. Thread-owned RPC credentials
 cannot start or reconfigure another coordinator, and neither coordinator nor
 helper shells may use thread-owned RPC to create threads or mutate other work.
 Coordinator read-only and helper non-escalation boundaries are enforced in each
@@ -741,4 +769,5 @@ This version watches completed project threads and literal interest keywords.
 It does not yet classify incoming email, Slack or Sentry through the librarian.
 The project document follows the existing canonical project updates in place;
 a browsable document-version history and per-edit source links are not included.
+
 
