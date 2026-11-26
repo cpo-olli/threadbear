@@ -721,6 +721,10 @@ updatedAt, closedAt? }`. Older coordinators without `loops` default to `[]`.
   can also be opened/updated with `openLoop`/`updateLoop`. Answering an ask on
   the composer card (`answers`) closes its matching `waiting_on_user` loop;
   sending an unrelated message leaves earlier loops open.
+- The desktop's Open loops pane doesn't draw `waiting_on_user` loops. It
+  mirrors the coordinator thread's live `asks` instead, one read-only row each
+  that takes you to the Needs you card, where they're answered. The loops stay
+  in the registry for the coordinator's own context.
 - `coordinators.replyLoop` sends the user's reply to the coordinator thread
   referencing the loop's title (refused while paused). For `waiting_on_user`
   (default `close: true`) it closes the loop; for `user_question` (`close: false`,

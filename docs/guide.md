@@ -1255,9 +1255,9 @@ The project home has Conversation, Activity, To-dos and Threads tabs. To-dos
 lists everything still open on the project, not just helpers' jobs: steps only
 you can take and decisions you still have to make are on it too. The
 Highlights pane beside the chat has three parts: sticky **Open loops** at
-the top (your open or answered questions and decisions waiting on you, staying
-open until you close or reply to them; clicking one of a decision's answers picks it and
-opens a box for anything else you want to add, and Send sends both), the scrollable **Project brief** (state,
+the top (questions you asked it, staying until you close them, plus a line for
+each decision on its Needs you card; you answer those on the card, and clicking
+the line takes you there), the scrollable **Project brief** (state,
 goals, active work and links), and a collapsed **Agent memory** drawer at the
 bottom for technical notes read and written by the coordinator and its helpers.
 You can edit the brief or open Agent memory to edit the raw notes directly; if

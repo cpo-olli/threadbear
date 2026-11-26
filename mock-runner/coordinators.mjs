@@ -163,6 +163,26 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
       // baseline, then projects.get gives the editor the version to review.
       target.notes = String(p.text);
       target.updatedAt = now();
+    } else if (method === 'mock.coordinatorAsk') {
+      // The coordinator ends a turn on a decision for Mike: its Needs you card
+      // shows, and Open loops mirrors it.
+      const entry = threads.get(coordinator.threadId);
+      const decision = coordinator.loops.find((l) => l.kind === 'waiting_on_user');
+      const asks = [{ action: decision.title, why: decision.summary, options: decision.options }];
+      const ts = now();
+      const turnId = `coordinator_ask_${entry.events.length}`;
+      for (const e of [
+        { type: 'turn.started' },
+        { type: 'assistant.text', itemId: `${turnId}_reply`, text: 'One decision for you before the helpers carry on.' },
+        { type: 'turn.completed', outcome: 'completed', needs: 'you', asks, durationMs: 900 },
+      ]) {
+        const event = { ...e, seq: entry.events.length + 1, ts, threadId: coordinator.threadId, turnId };
+        entry.events.push(event);
+        broadcast('thread.event', { threadId: coordinator.threadId, event });
+      }
+      const seq = entry.events.length;
+      Object.assign(entry.summary, { needsYou: true, needs: 'you', asks, asksSeq: seq, lastSeq: seq, lastSeenSeq: seq, updatedAt: ts, lastActivityAt: ts });
+      threadChanged(coordinator.threadId);
     } else if (method === 'mock.coordinatorVerify') {
       coordinator.tasks[0].state = 'done';
       target.state = 'The project home is ready. The coordinator checked the helper result and the conversation and living document use the same project state.';

@@ -13,7 +13,6 @@ type Coordinator = {
   openLoopsCount: number | null;
   agentMemoryOpen: boolean;
   undoLoop: { loopId: string; title: string } | null;
-  replyingLoop: { loopId: string; picked: string | null } | null;
   documentShown: boolean;
   editing: { draft: string; reviewCurrent: string | null } | null;
   document: { state: string; notes: string } | null;
@@ -201,14 +200,19 @@ When('I undo closing the open loop', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'click', tip: 'Reopen this closed loop' });
 });
 
-When('I pick {string} on the waiting open loop', async function (this: ThreadbearWorld, option: string) {
-  await this.app.do({ cmd: 'click', tip: `Pick "${option}", then add anything else and send` });
+When('the coordinator asks me a decision', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'mock', method: 'coordinatorAsk', params: {} });
 });
 
-Then('the reply box is open with {string} picked', async function (this: ThreadbearWorld, option: string) {
-  await this.until(`reply box with "${option}" picked`, (d) => coordinator(d)?.replyingLoop?.picked === option);
+Then('Open loops shows the decision without answer buttons', async function (this: ThreadbearWorld) {
+  await this.until('the decision mirrored in Open loops', (d) => coordinator(d)?.openLoopsCount === 3);
+  const labels = JSON.parse(await this.app.do({ cmd: 'labels' })) as { label: string }[];
+  assert.equal(labels.some((control) => control.label === 'Answer this on the Needs you card'), true);
+  for (const gone of ['Reply "Collapse by default" and close this loop', 'Pick "Collapse by default", then add anything else and send', 'Write your reply to this decision', 'Close this decision without replying']) {
+    assert.equal(labels.some((control) => control.label === gone), false, `${gone} should be on the Needs you card only`);
+  }
 });
 
-When('I send the picked reply {string}', async function (this: ThreadbearWorld, option: string) {
-  await this.app.do({ cmd: 'click', tip: `Send "${option}" and close this loop` });
+When('I click the decision in Open loops', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'click', tip: 'Answer this on the Needs you card' });
 });

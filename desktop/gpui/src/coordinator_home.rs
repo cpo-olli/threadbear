@@ -18,7 +18,6 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use serde_json::{json, Value};
 use threadbear_core::coordinators::{note_sections, Coordinator, Loop, LoopKind, LoopState, State};
-use threadbear_core::inbox::{ago, parse_ms};
 use threadbear_core::projects::{Project, TextField};
 
 impl Threadbear {
@@ -296,16 +295,23 @@ impl Threadbear {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let open_loops: Vec<Loop> = coordinator.open_loops().into_iter().cloned().collect();
-        let waiting = coordinator.waiting_count();
+        // Decisions waiting on Mike are answered on the Needs you card under the
+        // conversation, so this pane only mirrors that card's live asks, read
+        // only. The runner's waiting_on_user loops stay out of it: once the card
+        // moves on they'd linger here with nowhere to answer them.
+        let open_loops: Vec<Loop> = coordinator
+            .open_loops()
+            .into_iter()
+            .filter(|l| !l.waiting_on_user())
+            .cloned()
+            .collect();
         let signoff = coordinator.signoff_count();
         let asks = self
             .threads
             .get(&coordinator.thread_id)
             .and_then(|t| t.asks.clone())
             .unwrap_or_default();
-        let legacy_waiting = if open_loops.is_empty() { asks.len() } else { 0 };
-        let total_waiting = waiting + legacy_waiting;
+        let total_waiting = asks.len();
 
         let pin_color = if total_waiting > 0 {
             style::needs_you_text(cx)
@@ -352,7 +358,7 @@ impl Threadbear {
                 style::added_text(cx),
             ));
         }
-        if open_loops.is_empty() && legacy_waiting == 0 {
+        if open_loops.is_empty() && asks.is_empty() {
             header = header.child(
                 div()
                     .text_size(px(11.))
@@ -377,12 +383,15 @@ impl Threadbear {
 
         if memory_open {
             return self
-                .append_collapsed_loops(zone, project, &open_loops, window, cx)
+                .append_collapsed_loops(zone, project, &open_loops, asks.len(), window, cx)
                 .into_any_element();
         }
 
-        if !open_loops.is_empty() {
+        if !open_loops.is_empty() || !asks.is_empty() {
             let mut list = v_flex().w_full().gap(px(7.));
+            for (index, ask) in asks.into_iter().enumerate() {
+                list = list.child(self.render_waiting_row(index, ask.action, cx));
+            }
             for item in &open_loops {
                 list = list.child(self.render_loop_card(project, item, window, cx));
             }
@@ -395,12 +404,6 @@ impl Threadbear {
                     .track_scroll(&self.coordinators.loops_scroll)
                     .child(list),
             );
-        } else if !asks.is_empty() {
-            let mut list = v_flex().w_full().gap(px(8.));
-            for (index, ask) in asks.into_iter().enumerate() {
-                list = list.child(self.render_legacy_ask_card(index, ask.action, cx));
-            }
-            zone = zone.child(list);
         }
 
         zone.into_any_element()
@@ -511,6 +514,7 @@ impl Threadbear {
         mut zone: Div,
         project: &Project,
         open_loops: &[Loop],
+        waiting: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
@@ -520,14 +524,11 @@ impl Threadbear {
             .as_ref()
             .filter(|draft| draft.project_id == project.id)
             .map(|draft| draft.loop_id.clone());
-        let mut hidden_waiting = open_loops.iter().filter(|l| l.waiting_on_user()).count();
         let mut hidden_signoff = open_loops.iter().filter(|l| l.needs_signoff()).count();
         let mut hidden_checking = open_loops.iter().filter(|l| l.checking()).count();
         if let Some(reply_id) = active_reply_id {
             if let Some(item) = open_loops.iter().find(|l| l.id == reply_id) {
-                if item.waiting_on_user() {
-                    hidden_waiting = hidden_waiting.saturating_sub(1);
-                } else if item.needs_signoff() {
+                if item.needs_signoff() {
                     hidden_signoff = hidden_signoff.saturating_sub(1);
                 } else if item.checking() {
                     hidden_checking = hidden_checking.saturating_sub(1);
@@ -539,10 +540,10 @@ impl Threadbear {
         if hidden_signoff > 0 {
             parts.push(format!("{hidden_signoff} to sign off"));
         }
-        if hidden_waiting > 0 {
+        if waiting > 0 {
             parts.push(format!(
-                "{hidden_waiting} decision{}",
-                if hidden_waiting == 1 { "" } else { "s" }
+                "{waiting} decision{}",
+                if waiting == 1 { "" } else { "s" }
             ));
         }
         if hidden_checking > 0 {
@@ -575,7 +576,9 @@ impl Threadbear {
         zone
     }
 
-    fn render_legacy_ask_card(
+    /// One decision from the coordinator's Needs you card, mirrored read only:
+    /// clicking it takes you to the card, where it's answered.
+    fn render_waiting_row(
         &self,
         index: usize,
         action: String,
@@ -586,8 +589,11 @@ impl Threadbear {
                 .id(SharedString::from(format!("coordinator-question-{index}")))
                 .role(Role::Button)
                 .w_full()
+                .items_center()
+                .gap(px(8.))
+                .px(px(11.))
+                .py(px(8.))
                 .rounded(px(9.))
-                .overflow_hidden()
                 .bg(amber_card_bg(cx))
                 .border_1()
                 .border_color(amber_card_border(cx))
@@ -596,36 +602,25 @@ impl Threadbear {
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                     this.jump_to_coordinator_loop(None, window, cx);
                 })),
-            "Show this question on the coordinator's card",
+            "Answer this on the Needs you card",
         )
-        .child(div().w(px(3.)).flex_none().bg(style::needs_you_text(cx)))
+        .child(status_dot(style::needs_you_text(cx)))
         .child(
-            v_flex()
+            div()
                 .flex_1()
                 .min_w_0()
-                .px(px(11.))
-                .py(px(9.))
-                .gap(px(4.))
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .child(status_dot(style::needs_you_text(cx)))
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(style::needs_you_text(cx))
-                                .child("Waiting on you"),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .line_height(px(18.))
-                        .text_color(cx.theme().foreground)
-                        .child(action),
-                ),
+                .text_size(px(12.5))
+                .line_height(px(17.))
+                .text_color(cx.theme().foreground)
+                .child(action),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_size(px(11.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(style::needs_you_text(cx))
+                .child("Answer below"),
         )
         .into_any_element()
     }
@@ -645,29 +640,15 @@ impl Threadbear {
             return self.render_checking_loop_row(project, item, busy, cx);
         }
 
-        let is_signoff = item.needs_signoff();
-        let rel_time = format_loop_time(&item.updated_at);
-        let (bar_color, bg_color, border_color, status_color, status_text) = if is_signoff {
-            (
-                style::tick_green(cx),
-                green_card_bg(cx),
-                green_card_border(cx),
-                style::added_text(cx),
-                "Your question · Answered".to_owned(),
-            )
-        } else {
-            let label = match rel_time {
-                Some(ref t) => format!("Waiting on you · {t}"),
-                None => "Waiting on you".to_owned(),
-            };
-            (
-                style::needs_you_text(cx),
-                amber_card_bg(cx),
-                amber_card_border(cx),
-                style::needs_you_text(cx),
-                label,
-            )
-        };
+        // Waiting-on-you loops never get here (render_open_loops mirrors the
+        // Needs you card instead), so what's left is an answered question.
+        let (bar_color, bg_color, border_color, status_color, status_text) = (
+            style::tick_green(cx),
+            green_card_bg(cx),
+            green_card_border(cx),
+            style::added_text(cx),
+            "Your question · Answered",
+        );
 
         let mut body = v_flex()
             .flex_1()
@@ -709,20 +690,14 @@ impl Threadbear {
 
         body = body.child(self.render_loop_actions(project, item, busy, cx));
 
-        if let Some((input, picked)) = self
+        if let Some(input) = self
             .coordinators
             .replying_loop
             .as_ref()
             .filter(|draft| draft.project_id == project.id && draft.loop_id == item.id)
-            .map(|draft| (draft.input.clone(), draft.picked.clone()))
+            .map(|draft| draft.input.clone())
         {
-            body = body.child(self.render_loop_reply_input(
-                &item.id,
-                input,
-                picked.as_deref(),
-                busy,
-                cx,
-            ));
+            body = body.child(self.render_loop_reply_input(&item.id, input, busy, cx));
         }
 
         h_flex()
@@ -823,7 +798,6 @@ impl Threadbear {
     ) -> AnyElement {
         let project_id = project.id.clone();
         let loop_id = item.id.clone();
-        let is_signoff = item.needs_signoff();
         let source_seq = item.source_seq;
         let jump_button = crate::highlights::tipped(
             h_flex()
@@ -842,11 +816,7 @@ impl Threadbear {
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.jump_to_coordinator_loop(source_seq, window, cx)
                 })),
-            if is_signoff {
-                "Jump to this answer in the conversation"
-            } else {
-                "Jump to this decision in the conversation"
-            },
+            "Jump to this answer in the conversation",
         )
         .child("Jump")
         .child(
@@ -855,156 +825,48 @@ impl Threadbear {
                 .text_color(style::faint_text(cx)),
         );
 
-        let mut actions = h_flex()
+        let close_project = project_id.clone();
+        let close_id = loop_id.clone();
+        let close_title = item.title.clone();
+        let follow_project = project_id;
+        let follow_id = loop_id.clone();
+        h_flex()
             .w_full()
             .flex_wrap()
             .items_center()
             .gap(px(6.))
-            .pt(px(2.));
-        if is_signoff {
-            let close_project = project_id.clone();
-            let close_id = loop_id.clone();
-            let close_title = item.title.clone();
-            let follow_project = project_id;
-            let follow_id = loop_id.clone();
-            actions = actions
-                .child(loop_button(
-                    SharedString::from(format!("loop-close-{loop_id}")),
-                    ButtonSpec {
-                        icon: Some("checkmark"),
-                        label: "Got it, close",
-                        tip: "Mark this question answered and close it",
-                        tone: ButtonTone::green(cx),
-                        busy,
-                    },
-                    cx,
-                    cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.close_coordinator_loop(
-                            &close_project,
-                            &close_id,
-                            close_title.clone(),
-                            cx,
-                        )
-                    }),
-                ))
-                .child(loop_button(
-                    SharedString::from(format!("loop-followup-{loop_id}")),
-                    ButtonSpec {
-                        icon: None,
-                        label: "Follow up",
-                        tip: "Ask a follow-up on this question",
-                        tone: ButtonTone::neutral(cx),
-                        busy,
-                    },
-                    cx,
-                    cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.start_reply_coordinator_loop(
-                            &follow_project,
-                            &follow_id,
-                            false,
-                            "Ask a follow-up…",
-                            window,
-                            cx,
-                        )
-                    }),
-                ))
-                .child(div().flex_1())
-                .child(jump_button);
-            return actions.into_any_element();
-        }
-
-        // An option picks, it doesn't send: the box opens under the card for
-        // a note, and its Send sends both (pick_coordinator_loop_option).
-        let picked = self
-            .coordinators
-            .replying_loop
-            .as_ref()
-            .filter(|d| d.project_id == project.id && d.loop_id == item.id)
-            .and_then(|d| d.picked.clone());
-        for (opt_index, option) in item.options.iter().enumerate() {
-            let opt_project = project_id.clone();
-            let opt_id = loop_id.clone();
-            let opt_text = option.clone();
-            let is_picked = picked.as_deref() == Some(option.as_str());
-            let tip = if is_picked {
-                format!("Unpick \"{option}\"")
-            } else {
-                format!("Pick \"{option}\", then add anything else and send")
-            };
-            let tone = if is_picked || (picked.is_none() && opt_index == 0) {
-                ButtonTone::amber(cx)
-            } else {
-                ButtonTone::neutral(cx)
-            };
-            actions = actions.child(loop_button(
-                SharedString::from(format!("loop-option-{loop_id}-{opt_index}")),
+            .pt(px(2.))
+            .child(loop_button(
+                SharedString::from(format!("loop-close-{loop_id}")),
                 ButtonSpec {
-                    icon: is_picked.then_some("checkmark"),
-                    label: option,
-                    tip: &tip,
-                    tone,
+                    icon: Some("checkmark"),
+                    label: "Got it, close",
+                    tip: "Mark this question answered and close it",
+                    tone: ButtonTone::green(cx),
                     busy,
                 },
                 cx,
-                cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.pick_coordinator_loop_option(
-                        &opt_project,
-                        &opt_id,
-                        opt_text.clone(),
-                        window,
-                        cx,
-                    )
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.close_coordinator_loop(&close_project, &close_id, close_title.clone(), cx)
                 }),
-            ));
-        }
-
-        let reply_project = project_id.clone();
-        let reply_id = loop_id.clone();
-        let reply_tone = if item.options.is_empty() {
-            ButtonTone::amber(cx)
-        } else {
-            ButtonTone::quiet(cx)
-        };
-        let dismiss_project = project_id;
-        let dismiss_id = loop_id.clone();
-        let dismiss_title = item.title.clone();
-        actions
+            ))
             .child(loop_button(
-                SharedString::from(format!("loop-reply-{loop_id}")),
+                SharedString::from(format!("loop-followup-{loop_id}")),
                 ButtonSpec {
                     icon: None,
-                    label: "Reply",
-                    tip: "Write your reply to this decision",
-                    tone: reply_tone,
+                    label: "Follow up",
+                    tip: "Ask a follow-up on this question",
+                    tone: ButtonTone::neutral(cx),
                     busy,
                 },
                 cx,
                 cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.start_reply_coordinator_loop(
-                        &reply_project,
-                        &reply_id,
-                        true,
-                        "Write your reply…",
+                        &follow_project,
+                        &follow_id,
+                        false,
+                        "Ask a follow-up…",
                         window,
-                        cx,
-                    )
-                }),
-            ))
-            .child(loop_button(
-                SharedString::from(format!("loop-dismiss-{loop_id}")),
-                ButtonSpec {
-                    icon: None,
-                    label: "Dismiss",
-                    tip: "Close this decision without replying",
-                    tone: ButtonTone::ghost(cx),
-                    busy,
-                },
-                cx,
-                cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.close_coordinator_loop(
-                        &dismiss_project,
-                        &dismiss_id,
-                        dismiss_title.clone(),
                         cx,
                     )
                 }),
@@ -1018,14 +880,9 @@ impl Threadbear {
         &self,
         loop_id: &str,
         input: Entity<gpui_kit::component::input::InputState>,
-        picked: Option<&str>,
         busy: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let send_tip = match picked {
-            Some(pick) => format!("Send \"{pick}\" and close this loop"),
-            None => "Send this reply to the coordinator".to_owned(),
-        };
         h_flex()
             .w_full()
             .items_center()
@@ -1051,7 +908,7 @@ impl Threadbear {
                 ButtonSpec {
                     icon: None,
                     label: "Send",
-                    tip: &send_tip,
+                    tip: "Send this reply to the coordinator",
                     tone: ButtonTone::amber(cx),
                     busy,
                 },
@@ -1674,11 +1531,6 @@ impl Threadbear {
             json!({"field":e.field.title(),"draft":e.input.read(cx).value().to_string(),"reviewCurrent":current.filter(|text| !e.saving && *text != e.baseline)})
         });
         let agent_memory_open = project.is_some_and(|p| self.agent_memory_open(&p.id));
-        let replying_loop = self
-            .coordinators
-            .replying_loop
-            .as_ref()
-            .map(|d| json!({"loopId": d.loop_id, "picked": d.picked}));
         let undo_loop = self.coordinators.undo_loop.as_ref().map(|u| {
             json!({
                 "projectId": u.project_id,
@@ -1719,10 +1571,18 @@ impl Threadbear {
             "state": current.map(|c| if c.state == State::Paused { "paused" } else { "active" }),
             "tasks": current.map(|c| c.tasks.iter().map(|t| json!({"title": t.title, "state": t.status_label()})).collect::<Vec<_>>()),
             "loops": loops,
-            "openLoopsCount": current.map(|c| c.open_loops().len()),
+            // What Open loops draws: the Needs you card's asks plus the
+            // questions it's checking or has answered.
+            "openLoopsCount": current.map(|c| {
+                let asks = self
+                    .threads
+                    .get(&c.thread_id)
+                    .and_then(|t| t.asks.as_ref())
+                    .map_or(0, Vec::len);
+                asks + c.open_loops().iter().filter(|l| !l.waiting_on_user()).count()
+            }),
             "agentMemoryOpen": agent_memory_open,
             "undoLoop": undo_loop,
-            "replyingLoop": replying_loop,
             "documentShown": document_shown,
             "editing": editing,
             "document": project.map(|p| json!({"goals": p.goals, "state": p.state, "notes": p.notes})),
@@ -1957,22 +1817,6 @@ impl ButtonTone {
             fg: cx.theme().foreground,
         }
     }
-
-    fn quiet(cx: &App) -> Self {
-        Self {
-            bg: style::primary_opacity(cx, 0.05),
-            border: style::hairline(cx),
-            fg: style::secondary_text(cx),
-        }
-    }
-
-    fn ghost(cx: &App) -> Self {
-        Self {
-            bg: hsla(0., 0., 0., 0.),
-            border: style::hairline(cx),
-            fg: style::secondary_text(cx),
-        }
-    }
 }
 
 struct ButtonSpec<'a> {
@@ -2027,16 +1871,6 @@ fn loop_button(
     )
     .child(spec.label.to_owned())
     .into_any_element()
-}
-
-fn format_loop_time(iso: &str) -> Option<String> {
-    let ms = parse_ms(iso)?;
-    let rel = ago(ms, crate::now_ms());
-    Some(if rel == "now" {
-        "just now".to_owned()
-    } else {
-        format!("{rel} ago")
-    })
 }
 
 fn truncate_label(text: &str, max_chars: usize) -> String {
