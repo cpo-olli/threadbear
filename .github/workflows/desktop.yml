@@ -29,6 +29,7 @@ on:
       - runner/src/rpc-auth.ts
       - runner/src/reviews.ts
       - runner/src/samples.ts
+      - runner/src/well-formed-json.ts
       - web/src/sections.ts
       - web/src/format.ts
       - mock-runner/**
@@ -44,6 +45,7 @@ on:
       - runner/src/rpc-auth.ts
       - runner/src/reviews.ts
       - runner/src/samples.ts
+      - runner/src/well-formed-json.ts
       - web/src/sections.ts
       - web/src/format.ts
       - mock-runner/**
