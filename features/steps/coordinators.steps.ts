@@ -81,7 +81,15 @@ When('the coordinator checks and accepts the helper result', async function (thi
   await this.app.do({ cmd: 'mock', method: 'coordinatorVerify', params: {} });
 });
 
+async function scrollDocumentToBottom(world: ThreadbearWorld): Promise<void> {
+  await world.until('the shared project document', (d) => Boolean(coordinator(d)?.documentShown));
+  const size = /([\d.]+)x([\d.]+)/.exec(await world.app.do({ cmd: 'window' }));
+  if (!size) throw new Error('The window did not give its size');
+  await world.app.do({ cmd: 'point', x: Number(size[1]) - 100, y: Number(size[2]) / 2, scrollY: -2000 });
+}
+
 When('I edit the project notes and add {string}', async function (this: ThreadbearWorld, text: string) {
+  await scrollDocumentToBottom(this);
   await this.app.do({ cmd: 'click', tip: 'Edit the notes (or double-click it)' });
   await this.app.do({ cmd: 'type', here: true, text: `\n${text}` });
 });
@@ -103,9 +111,7 @@ Then('the project editor still contains {string}', async function (this: Threadb
 });
 
 When('I acknowledge the current project text', async function (this: ThreadbearWorld) {
-  const size = /([\d.]+)x([\d.]+)/.exec(await this.app.do({ cmd: 'window' }));
-  if (!size) throw new Error('The window did not give its size');
-  await this.app.do({ cmd: 'point', x: Number(size[1]) - 100, y: Number(size[2]) / 2, scrollY: -2000 });
+  await scrollDocumentToBottom(this);
   await this.app.do({ cmd: 'click', tip: 'Keep my draft and compare its next save against this saved version' });
 });
 
