@@ -703,7 +703,7 @@ thread to another login when the one it's on runs out of room.
   hours after, on an access token it can't renew), or for an hour after a
   turn on it was refused, unless a new sign-in (another `loginExpiresAt`)
   or a working turn is seen first. The hour is so a one-off refusal
-  doesn't keep a good login out until its end date. `loginEndsAt` is that `loginExpiresAt`. Pools and
+  doesn't keep a good login out until its end date. A turn refused with "Your organization has disabled Claude subscription access for Claude Code" (the org's admin turned Claude Code off: nothing in the profile or `auth status` shows it) holds a day instead. Refusals still held are kept in the data dir's `sign-in-refusals.json` across restarts, and the dev runner's login (`runner/src/test-login.ts`) skips them. `loginEndsAt` is that `loginExpiresAt`. Pools and
   new threads skip a signed-out login whatever its room. A pool thread
   whose turn on a Claude login is refused moves like one at its limit
   (only Claude: a Codex refusal isn't remembered, so moving on it could

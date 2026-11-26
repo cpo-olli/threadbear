@@ -228,6 +228,8 @@ the owning runner.
   `run/error-exits.json`, when the runner last restarted itself after an
   unexpected error (times only, so it can stop restarting after three in
   ten minutes),
+  `sign-in-refusals.json`, the Claude logins a turn was lately refused on and
+  when (ids and times), so pools still skip them after a restart,
   `shared-pools.json`, the last pools your Convex backend had, which every
   runner shares, so one starts with them while the backend can't be reached,
   `profiles/`, the last ten CPU profiles of the runner, made only when

@@ -242,8 +242,9 @@ rest, and `tb <command> --help` explains one.
   tree's runner in the foreground on a temp data dir (refuses the real
   one) and prints the `<home>/tb` for `tb` and the `dev-app.sh start
   --home` line for the app. A new data dir's `runner.json` defaults threads
-  to `<home>/work`, the first Claude login that isn't hidden, noted or
-  plan-ended, else claude-main (`runner/src/test-login.ts`; `TB_E2E_ACCOUNT`
+  to `<home>/work`, the first Claude login that isn't hidden, noted,
+  plan-ended or lately refused (the real runner's `sign-in-refusals.json`),
+  else claude-main (`runner/src/test-login.ts`; `TB_E2E_ACCOUNT`
   picks one), and claude-haiku-5-5 (`defaults.model`, which
   the runner applies to a `threads.create` with no model), from `tb` or a
   debug app's composer alike. Run it in the background and use the

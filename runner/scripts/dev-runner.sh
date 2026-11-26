@@ -25,7 +25,7 @@
 # prints the desktop/scripts/dev-app.sh command for a debug app against it. On a
 # new data dir, threads default to the folder <home>/work (under $TMPDIR
 # when <home> isn't), the first Claude login that works (src/test-login.ts:
-# not plan-ended, hidden or noted, else claude-main; TB_E2E_ACCOUNT picks
+# not plan-ended, hidden, noted or lately refused, else claude-main; TB_E2E_ACCOUNT picks
 # another) and model claude-haiku-5-5, and Codex threads to gpt-6-luna at low effort
 # (runner.json's defaults; keepAccount keeps new threads on that login rather
 # than the one with the most room), not your real folders or the

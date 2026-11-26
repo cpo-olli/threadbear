@@ -75,7 +75,7 @@ import { LimitRecheck } from './limit-recheck.ts';
 import { threadEnv } from './restart.ts';
 import { worktreeInstructions } from './worktrees.ts';
 import { type AccountRegistry, type LearnedAccountInfo } from './accounts.ts';
-import type { SignInState } from './sign-in-state.ts';
+import { ACCESS_OFF_HOLD_MS, ACCESS_OFF_TEXT, type SignInState } from './sign-in-state.ts';
 import { decidingWindows, MIN_ROOM_PERCENT, pickAccount as pickByRoom, type UsageReading } from './usage.ts';
 import { FUNDED_DETAIL } from './adapters/acp/grok-billing.ts';
 import { RUNNER_VERSION, expandHome, paths, peekRunnerJson, type Config } from './config.ts';
@@ -3390,7 +3390,8 @@ export class Runner {
     // A refused login counts as signed out, and a pool thread moves off it
     // (afterTurn); a turn that went through says it's signed in.
     const signedOut = outcome === 'failed' && r.errorKind === 'auth' ? turn.turnId : undefined;
-    if (signedOut) this.signIn?.noteRefused(rec.accountId);
+    // An org that turned Claude Code off holds the login out a day (sign-in-state.ts).
+    if (signedOut) this.signIn?.noteRefused(rec.accountId, ACCESS_OFF_TEXT.test(r.error ?? '') ? ACCESS_OFF_HOLD_MS : undefined);
     else if (outcome === 'completed') this.signIn?.noteWorked(rec.accountId);
     // A turn the CLI opened by itself during a wait (a background job
     // ended) that got through ends the wait: the agent has carried on.

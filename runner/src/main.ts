@@ -55,7 +55,7 @@ import { hidIdleMs, isAtMac, screenLocked } from './presence.ts';
 import { ThreadStore } from './store.ts';
 import { AccountRegistry } from './accounts.ts';
 import { ClaudeAdapter, cliEnv } from './adapters/claude/adapter.ts';
-import { SignInState } from './sign-in-state.ts';
+import { REFUSALS_FILE, SignInState } from './sign-in-state.ts';
 import { ProcessRegistry, killGroup } from './proc.ts';
 import { Runner } from './runner.ts';
 import { startOwnThread } from './own-threads.ts';
@@ -314,7 +314,7 @@ async function main(): Promise<void> {
   const accounts = new AccountRegistry(cfg, usage);
   // Which Claude logins are signed out or ending soon, from the CLI's own
   // `auth status` (sign-in-state.ts); the registry puts it on every account.
-  const signIn = new SignInState({ claudePath: cfg.claudePath, accounts: () => accounts.list(), env: (a) => cliEnv(a), clock: realClock, log });
+  const signIn = new SignInState({ claudePath: cfg.claudePath, accounts: () => accounts.list(), env: (a) => cliEnv(a), clock: realClock, log, file: path.join(cfg.home, REFUSALS_FILE) });
   accounts.signIn = signIn;
   signIn.start();
   // Year-long token… asked from another Mac (docs/protocol.md, accounts.yearToken).
