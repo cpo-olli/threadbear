@@ -1949,6 +1949,29 @@ async function dispatch(client, method, p) {
       if (p.runnerId !== BRUCE) throw rpcError(-32000, `No logins known for ${p.runnerId}`);
       return { accounts: publicAccounts().filter((a) => a.id === 'claude-main' || a.id === 'codex-main'), pools: [], defaults: { ...defaults, poolId: undefined, accountId: 'claude-main', cwd: '/Users/alex/code/misc' } };
     }
+    // Use a reset (protocol `accounts.useReset`): a moment's wait so the
+    // spinner shows, then the login with its room back, one reset fewer and
+    // no hint, as the runner's reading after it has it. Nothing left is
+    // Codex's noCredit.
+    case 'accounts.useReset': {
+      const a = accounts.find((x) => x.id === p.accountId);
+      if (!a) throw rpcError(-32010, `No login ${p.accountId} on this runner.`);
+      if (a.provider !== 'codex') throw rpcError(-32602, 'Only Codex logins have usage resets.');
+      await new Promise((r) => setTimeout(r, 600));
+      const left = a.usage?.resets?.available ?? 0;
+      if (left < 1) return { outcome: 'noCredit' };
+      a.usage = {
+        ...a.usage,
+        readAt: new Date().toISOString(),
+        blocked: false,
+        windows: (a.usage.windows ?? []).map((w) => (w.kind === 'five_hour' || w.kind === 'weekly' ? { ...w, remainingPercent: 100 } : w)),
+        resets: { ...a.usage.resets, available: left - 1, readAt: new Date().toISOString() },
+      };
+      delete a.usage.blocked;
+      delete a.resetHint;
+      broadcast('accounts.updated', { accounts: publicAccounts() });
+      return { outcome: 'reset', account: publicAccounts().find((x) => x.id === a.id) };
+    }
     case 'accounts.yearToken': {
       // Year-long token… for mac-mini's login (docs/protocol.md): starting,
       // then its page at the next look; a code with the page's state is

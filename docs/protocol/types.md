@@ -68,6 +68,19 @@ type Account = {
                         // isn't coming). Pools and the default account skip
                         // it; clients say "Plan ended", and offer no sign-in
                         // or reset for it
+  resetHint?: ResetHint // a usage reset worth using now (Pools, "Telling Mike
+                        // about resets"). Worked out by the runner alone, so
+                        // every client draws the same; absent when there's
+                        // nothing to say
+}
+
+type ResetHint = {
+  why: "out" | "expiring" // out: blocked, or under 1% in its 5-hour or weekly
+                        // window. expiring: the soonest reset expires within 3
+                        // days and the week is under 70% left. An unknown why
+                        // is drawn as out
+  available: number     // resets left, at least 1
+  nextExpiresAt?: string // when the soonest expires
 }
 
 // "ultra" is Codex's multi-agent level. Claude never offers it.
@@ -99,9 +112,11 @@ type AccountUsage = {
                         // there's no live reading since
   blocked?: boolean     // the provider says this login is at its limit
   notice?: string       // Token Stats' own note ("64,390 credits · 2 limit resets available")
-  resets?: { available: number, nextExpiresAt?: string } // Codex: the usage
-                        // resets it has left, from its last read (Pools,
-                        // "Usage resets"); left out once the soonest has expired
+  resets?: { available: number, nextExpiresAt?: string, readAt?: string }
+                        // Codex: the usage resets it has left, from the newest
+                        // read of them on any runner (Pools, "Usage resets");
+                        // readAt is when that read was. Left out once the
+                        // soonest has expired
 }
 
 type CliStatus = {

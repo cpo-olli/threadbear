@@ -36,6 +36,24 @@ Then('the {string} menu has no row {string}', async function (this: ThreadbearWo
   assert.fail(`the ${menu} menu still has "${row}":\n${lines.join('\n')}`);
 });
 
+// A login's line in a login list, with what follows its usage (a usage
+// reset worth using: "[2 resets left: Use a reset]"). Waits, as the list
+// follows the runner's accounts.updated.
+for (const [step, want] of [
+  ['the {string} menu has a line ending {string}', true],
+  ['the {string} menu has no line ending {string}', false],
+] as const) {
+  Then(step, async function (this: ThreadbearWorld, menu: string, end: string) {
+    let lines: string[] = [];
+    for (let tries = 0; tries < 40; tries += 1) {
+      lines = await menuLines(this, menu);
+      if (lines.some((l) => l.endsWith(end)) === want) return;
+      await sleep(150);
+    }
+    assert.fail(`the ${menu} menu ${want ? 'has no' : 'still has a'} line ending "${end}":\n${lines.join('\n')}`);
+  });
+}
+
 // The model chip clicked, as a person does, which opens its popover.
 When('I open the model picker', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'composer-menu', menu: 'model', show: true });

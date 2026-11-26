@@ -754,6 +754,28 @@ thread to another login when the one it's on runs out of room.
   (`account/rateLimitResetCredit/consume`, one idempotency key per click),
   then reads the login's limits again. That reading lifts the block like
   any other, so a thread waiting for room carries on by itself.
+  A subscription is one limit wherever it's signed in, so the count travels
+  with the shared readings (backend API 104): each runner keeps the newest
+  read of a login's resets by its `readAt`, its own or another runner's, so
+  a reset used on one machine shows as one fewer on every machine.
+- **Telling Mike about resets** (since 26 Nov 2026). On 26 Nov Mike's gmail
+  Codex login sat at 0% on every machine for days with 2 resets unused,
+  and only the limit box of a stopped thread would have said so. So the
+  runner works out `resetHint` on each login (`runner/src/reset-hint.ts`,
+  the one place the rule lives) and every client draws it where Mike looks
+  anyway: the Usage panel's row with Use a reset, the Usage button's dot
+  and tooltip, the login's line in the composer's login lists, and `tb
+  accounts`. A login gets one when it has a reset left (one that hasn't
+  expired) and isn't signed out or plan ended, and either it's out of room
+  (`why: "out"`: blocked, or under 1% in its 5-hour or weekly window) or the
+  soonest reset expires within 3 days while its week is under 70% left
+  (`why: "expiring"`: a reset used then still buys back at least 30% of a
+  week, and unused it's lost). Room unknown is neither. No notification and
+  no thread: Mike finds them annoying, and the hint stays until he uses the
+  reset, the login's room comes back, or the reset expires. Threadbear
+  still never spends one by itself. The hint changes on its own at the
+  moment a reset comes within 3 days of expiring and when it expires, so the
+  usage store wakes then and clients get `accounts.updated`.
 - **Rechecking a login that's out** (since 17 Nov 2026). Readings only
   come from turns, and pools skip a login that reads as out, so a login
   reset outside Threadbear (a reset used in Codex) read 0% until its old

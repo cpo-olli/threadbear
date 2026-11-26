@@ -15,6 +15,7 @@ import type { Account, EffortLevel, ImageRef, PermissionMode, PersistedEvent, Pr
 import type { ToolApprovalAnswer } from './adapters/types.ts';
 import { cardInput, tooLongForCard } from './tools.ts';
 import { resetTime, usageLine } from './usage.ts';
+import { resetHintWords } from './reset-hint.ts';
 import { signInWords } from './sign-in-state.ts';
 import { findPool, poolLine } from './pools.ts';
 import { AGENT_MESSAGE_PREFIX, EFFORT_LEVELS, ErrorCode, MOVE_MESSAGE_PREFIX, RpcError, sentByAgent } from './protocol.ts';
@@ -2386,7 +2387,7 @@ export function buildThreadbearTools(
       handle(async () => {
         const h = control.hello();
         const rows = h.accounts.map((a) => {
-          const bits = [providerName(a.provider), a.note ?? '', signInWords(a, now(), resetTime), a.planEnded ? '' : usageLine(a.usage, now()), a.id === h.defaults.accountId ? 'default for new threads' : ''].filter(Boolean);
+          const bits = [providerName(a.provider), a.note ?? '', signInWords(a, now(), resetTime), a.planEnded ? '' : usageLine(a.usage, now()), a.resetHint ? resetHintWords(a.resetHint, (iso) => resetTime(iso, now())) : '', a.id === h.defaults.accountId ? 'default for new threads' : ''].filter(Boolean);
           const head = `${a.id}  ${a.title}  [${bits.join('; ')}]`;
           const models = a.models?.length ? `\n    models: ${a.models.map((m) => (m.model === a.defaultModel || m.id === a.defaultModel ? `${m.id} (default)` : m.id)).join(', ')}` : '';
           return head + models;

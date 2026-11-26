@@ -1181,7 +1181,11 @@ pub fn icon_tooltip_with_sign_ins<Tz: TimeZone>(
     zone: &Tz,
 ) -> String {
     let mut tip = icon_tooltip(groups, now, zone);
-    for line in sign_in_lines(accounts, now, zone) {
+    // Then a login with a usage reset worth using (reset_hint.rs).
+    for line in sign_in_lines(accounts, now, zone)
+        .into_iter()
+        .chain(crate::reset_hint::icon_lines(accounts, now, zone))
+    {
         tip.push('\n');
         tip.push_str(&line);
     }
@@ -1749,6 +1753,34 @@ pub struct LoginRow {
     pub five_hour: Option<Chip>,
     /// No reading: why, in place of "Nothing known yet".
     pub unknown: Option<Unknown>,
+    /// A usage reset worth using now (reset_hint.rs): its line and Use a
+    /// reset, shown open or shut, as a sign-in that's ending is.
+    pub reset: Option<ResetLine>,
+}
+
+/// A login's reset hint on its Usage row: "2 resets left, the next expires
+/// 9 Dec", Use a reset's tip, and whether it's about to expire (orange)
+/// rather than the login being out.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResetLine {
+    pub words: String,
+    pub tip: String,
+    pub expiring: bool,
+}
+
+/// The row's reset line, from the runner's hint.
+pub fn reset_line<Tz: TimeZone>(
+    account: &Account,
+    accounts: &[Account],
+    now: i64,
+    zone: &Tz,
+) -> Option<ResetLine> {
+    let hint = crate::reset_hint::hint(account, now)?;
+    Some(ResetLine {
+        words: crate::reset_hint::row_words(hint, now, zone),
+        tip: crate::reset_hint::use_tip(account, accounts, hint, now, zone),
+        expiring: crate::reset_hint::expiring(hint),
+    })
 }
 
 /// A small window's room as a chip: "5-hour 91%", coloured as its meter's
@@ -1943,6 +1975,12 @@ pub fn sign_in_needed(accounts: &[Account], now: i64) -> bool {
         .any(|a| (a.signed_out && !a.plan_ended) || sign_in_ends(a, now).is_some())
 }
 
+/// The Usage button's dot: a sign-in that needs Mike, or a usage reset worth
+/// using (reset_hint.rs). Its tooltip says which.
+pub fn usage_dot(accounts: &[Account], now: i64) -> bool {
+    sign_in_needed(accounts, now) || crate::reset_hint::any(accounts, now)
+}
+
 /// "Sign-in ends Tue 6 pm", "Sign-in ends 3:40 pm" today.
 pub fn sign_in_ends_words<Tz: TimeZone>(at: i64, now: i64, zone: &Tz) -> String {
     if at <= now {
@@ -2066,8 +2104,9 @@ pub fn cards_named<Tz: TimeZone>(
                         logins: section
                             .accounts
                             .iter()
-                            .map(|a| {
-                                login_row(
+                            .map(|a| LoginRow {
+                                reset: reset_line(a, accounts, now, zone),
+                                ..login_row(
                                     a,
                                     &name(&section.provider),
                                     own.get(&a.id).map(String::as_str),
@@ -2157,6 +2196,7 @@ fn login_row<Tz: TimeZone>(
             .then(|| unknown_reason(&account.provider, provider_name)),
         meters,
         more,
+        reset: None,
     }
 }
 

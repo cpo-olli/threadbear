@@ -232,7 +232,10 @@ type Kind = (typeof KINDS)[number];
 // for one of that runner's logins: its answer is a state and the claude.ai
 // page, never a token, and its code (useless without the verifier only
 // that runner's setup-token holds) goes with the args once it's finished.
-export const CALLS = new Set(['files.list', 'moves.describe', 'moves.preview', 'accounts.yearToken']);
+// accounts.useReset (API 104) is the Mac's Use a reset for a login only that
+// runner has: its answer is an outcome and the login, and it spends a reset
+// only on Mike's click (the runner checks it came from the Mac).
+export const CALLS = new Set(['files.list', 'moves.describe', 'moves.preview', 'accounts.yearToken', 'accounts.useReset']);
 // A moves.preview's thread description: only these fields, each a short
 // string (or worktree and schedules), so nothing else sits in the row.
 const MOVE_INFO_STRINGS = ['title', 'cwd', 'home', 'provider', 'accountId', 'email', 'model', 'effort', 'permissionMode', 'origin', 'repoTop', 'subdir', 'sessionId'];
@@ -340,6 +343,10 @@ export function commandArgs(kind: Kind, raw: unknown): Record<string, unknown> {
         out = { method: a.method, params: { info: moveInfoArg(p.info), ...(typeof p.cwd === 'string' ? { cwd: p.cwd } : {}), ...(typeof p.accountId === 'string' ? { accountId: p.accountId } : {}) } };
       } else if (a.method === 'moves.describe') {
         out = { method: a.method, params: {} };
+      } else if (a.method === 'accounts.useReset') {
+        const p = (a.params && typeof a.params === 'object' ? a.params : {}) as Record<string, unknown>;
+        if (typeof p.accountId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(p.accountId)) throw bad('accounts.useReset needs a login');
+        out = { method: a.method, params: { accountId: p.accountId } };
       } else if (a.method === 'accounts.yearToken') {
         const p = (a.params && typeof a.params === 'object' ? a.params : {}) as Record<string, unknown>;
         if (typeof p.accountId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(p.accountId)) throw bad('accounts.yearToken needs a login');

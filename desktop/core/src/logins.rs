@@ -71,6 +71,24 @@ pub struct Account {
     /// itself never comes to the app.
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub year_token: Option<YearToken>,
+    /// A usage reset worth using now, as the runner works it out
+    /// (docs/protocol/settings.md, "Telling Mike about resets"): the Usage
+    /// row, the Usage button and the login lists draw it (reset_hint.rs).
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub reset_hint: Option<ResetHint>,
+}
+
+/// `Account.resetHint`: why ("out" or "expiring"), how many resets are
+/// left, and when the soonest expires.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ResetHint {
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub why: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub available: u64,
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub next_expires_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -316,6 +334,23 @@ impl RunnerLogins {
     pub fn replace_account(&mut self, account: &Value) {
         for a in accounts_from(&Value::Array(vec![account.clone()])) {
             if let Some(slot) = self.accounts.iter_mut().find(|x| x.id == a.id) {
+                *slot = a;
+            }
+        }
+    }
+
+    /// `replace_account` for an answer that may be another runner's login:
+    /// only where this list has the same login, the same id, provider and
+    /// email, as the same id on another runner can be another login.
+    pub fn replace_same_login(&mut self, account: &Value) {
+        for a in accounts_from(&Value::Array(vec![account.clone()])) {
+            let email = a.email.as_deref().map(str::to_lowercase);
+            if let Some(slot) = self.accounts.iter_mut().find(|x| {
+                x.id == a.id
+                    && x.provider_id() == a.provider_id()
+                    && email.is_some()
+                    && x.email.as_deref().map(str::to_lowercase) == email
+            }) {
                 *slot = a;
             }
         }

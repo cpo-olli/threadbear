@@ -938,6 +938,8 @@ async function main(): Promise<void> {
       // The Mac's Runners panel's Year-long token… (year-token-maker.ts); a
       // box's login is its cloud token, so not there.
       ...(box ? {} : { yearToken: (accountId: string, p: { code?: string; check?: boolean; cancel?: boolean }) => runner.yearToken(accountId, p) }),
+      // The main Mac's Use a reset for a login here that it has no twin of.
+      useReset: (accountId: string) => runner.useReset(accountId),
       // A box's one thread, under its own id, in its clone, on its one login.
       ...(box
         ? {

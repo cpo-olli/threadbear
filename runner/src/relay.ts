@@ -1915,6 +1915,15 @@ export class Relay {
     return done.result;
   }
 
+  /**
+   * accounts.useReset for one of another runner's logins (a `call` the
+   * backend lets only the owner key queue): spent there, with its Codex.
+   */
+  async useReset(runnerId: string, accountId: string): Promise<unknown> {
+    const done = await this.command(runnerId, undefined, 'call', { method: 'accounts.useReset', params: { accountId } }, { done: true, ms: CALL_MS });
+    return done.result;
+  }
+
   /** Another runner's logins for the new-thread pickers, from the backend's accounts rows. */
   async logins(runnerId: string): Promise<{ accounts: unknown[]; pools: unknown[]; usagePools?: unknown[]; defaults: Record<string, unknown> }> {
     const rows = (await this.read('relay:remoteAccounts', { runnerId })) as (Account & { runnerId?: string })[];

@@ -377,6 +377,7 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | `usage.spend` | Usage spend | Today, hour, week, by-hour chart, login colours | gpui-component's chart folder (unverified that it does this chart). | kit | L | `UsagePanel`, `UsageStats` |
 | `usage.pools` | Usage pools | Card per pool, windows, pace, Fable week | Drawn cards. | build | L | `UsagePanel`, `AccountUsageText`, `UsageGroups`, `Pools` |
 | `usage.sign-in` | Usage sign-ins | Signed out or sign-in ending in days on a login's row, with Sign in…, and a dot on the honey pot | Drawn row. GPUI only: added 16 Nov 2026, after the Swift app froze. | build | S | none |
+| `usage.resets` | Usage resets | A login with a usage reset worth using (out of room, or one expiring within 3 days on a week under 70% left): its row's line and Use a reset, a dot and a tooltip line on the honey pot, and "2 resets left" with Use a reset in the login lists | Drawn row and list lines from the runner's `resetHint`. GPUI only: added 26 Nov 2026, after the Swift app froze. | build | S | none |
 | `runners.panel` | Runners panel | Online, commit, threads, CPU, memory, disk, reorder | Drawn, with `foundation.reorder`. | build | M | `RunnersPanel`, `RunnersText`, `RemoteRunners` |
 | `connectors.panel` | Connectors panel | Services, Connect, check again | Drawn. | build | S | `ConnectorsPanel`, `ConnectorsModel`, `ConnectorsText` |
 | `updates.panel` | Updates panel | App, runner, CLIs, From Mike, Bring Them In, Discuss | Drawn. | build | M | `UpdatesPanel`, `UpdatesText` |

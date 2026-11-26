@@ -173,10 +173,13 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 103;
+export const BACKEND_API_VERSION = 104;
 export const INDEX_POOL_API_VERSION = 101;
 export const COORDINATORS_API_VERSION = 102;
 export const NEXT_PICK_API_VERSION = 103;
+// From this one an account can carry `resetHint` and `usage.resets` (with its
+// readAt), and a `call` can be accounts.useReset.
+export const RESET_HINT_API_VERSION = 104;
 // From this one sync:removeThreads takes the runner's id and leaves a row
 // that's another runner's alone (a thread moved away), whatever the key.
 export const REMOVE_OWN_ROWS_API_VERSION = 92;
@@ -713,6 +716,8 @@ export type CommandHost = {
   // The Mac's Runners panel: Year-long token… for a login here (an
   // `accounts.yearToken` call, year-token-maker.ts). Never on a box.
   yearToken?: (accountId: string, p: { code?: string; check?: boolean; cancel?: boolean }) => Promise<unknown>;
+  // `accounts.useReset` from the main Mac (rpc.ts useResetElsewhere).
+  useReset?: (accountId: string) => Promise<unknown>;
   // The phone's Reviews sheet (API 86).
   listReviews?: (threadId: string) => unknown;
   getReview?: (threadId: string, reviewId: string) => unknown;
@@ -1485,8 +1490,11 @@ export function toAccountDoc(a: Account, apiVersion = 0) {
       ...(u.stale ? { stale: true } : {}),
       ...(u.blocked ? { blocked: true } : {}),
       ...(u.notice ? { notice: u.notice } : {}),
+      ...(u.resets && apiVersion >= RESET_HINT_API_VERSION ? { resets: { available: u.resets.available, ...(u.resets.nextExpiresAt ? { nextExpiresAt: u.resets.nextExpiresAt } : {}), ...(u.resets.readAt ? { readAt: u.resets.readAt } : {}) } } : {}),
     };
   }
+  // An older backend's validator would turn the whole row down.
+  if (a.resetHint && apiVersion >= RESET_HINT_API_VERSION) out.resetHint = { why: a.resetHint.why, available: a.resetHint.available, ...(a.resetHint.nextExpiresAt ? { nextExpiresAt: a.resetHint.nextExpiresAt } : {}) };
   return out;
 }
 
@@ -5181,6 +5189,15 @@ export class ConvexSync {
               ...(params.cancel === true ? { cancel: true } : {}),
             }),
           };
+        }
+        // Use a reset from the main Mac, on one of this runner's logins its
+        // own runner has no twin of (rpc.ts useResetElsewhere). Mike's click
+        // there; never a phone's.
+        if (a.method === 'accounts.useReset') {
+          if (!host.useReset) throw new Error("This runner can't use a reset from another Mac.");
+          if (a.from !== 'mac') throw new Error('Only the main Mac uses a reset for a login here.');
+          if (typeof params.accountId !== 'string' || !params.accountId) throw new Error('Which login?');
+          return { result: await host.useReset(params.accountId) };
         }
         if (a.method !== 'files.list') throw new Error(`${String(a.method)} can't be asked of this runner`);
         const list = listFolderFor({ path: params.path });

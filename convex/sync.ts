@@ -6,7 +6,7 @@ import { ConvexError, v } from 'convex/values';
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
-import { messageButton, threadFields, updateFailedValidator, usagePool, views } from './schema';
+import { messageButton, resetHint, threadFields, updateFailedValidator, usagePool, usageResets, views } from './schema';
 import { API_VERSION } from './version';
 import { endpointProblem } from './webPushEndpoint';
 import { clear, command, machines } from './machines';
@@ -2261,6 +2261,8 @@ const accountDoc = v.object({
   loginEndsAt: v.optional(v.string()),
   signedOut: v.optional(v.boolean()),
   yearToken: v.optional(v.object({ madeAt: v.optional(v.string()) })),
+  // API 104: a Codex login's resets and the hint to use one.
+  resetHint: v.optional(resetHint),
   usage: v.optional(
     v.object({
       windows: v.array(v.object({ kind: v.string(), title: v.string(), remainingPercent: v.number(), resetsAt: v.optional(v.string()), detail: v.optional(v.string()) })),
@@ -2269,6 +2271,7 @@ const accountDoc = v.object({
       stale: v.optional(v.boolean()),
       blocked: v.optional(v.boolean()),
       notice: v.optional(v.string()),
+      resets: v.optional(usageResets),
     }),
   ),
 });

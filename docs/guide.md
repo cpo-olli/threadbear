@@ -1731,6 +1731,19 @@ gives out free ones, listed under Usage limit resets in its settings), the
 box also offers Use a reset: it restores that login's 5-hour and weekly
 limits at once, spending the reset that expires soonest, and the thread
 carries on. Threadbear never uses one by itself.
+You don't have to wait for a thread to stop to hear about one, though.
+When a login with a reset left is out of room, or its soonest reset
+expires within 3 days while it has used more than 30% of its week (so
+using it still buys something back), Threadbear says so quietly where you
+already look: the Usage button gets a dot and its tooltip names the login,
+the login's row in Usage says how many resets it has and offers Use a
+reset (even when the row is shut), and the login lists in the message
+box (the login picker, and the Login line in the model menu) say "2
+resets left" beside it with Use a reset. It's one subscription however
+many machines it's signed in on, so the count is the newest from any of
+them, and a reset used on one counts on all. No notification and no new
+thread; the hint goes once you use the reset, the login's room comes
+back, or the reset expires. `tb accounts` and `list_accounts` say it too.
 A Codex login that reads as used up is asked for its limits again every
 10 minutes (free, no turn), so a reset you use in Codex itself shows up
 here within minutes and that login is used again.

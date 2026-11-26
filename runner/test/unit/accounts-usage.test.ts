@@ -664,7 +664,8 @@ test("a Codex login's usage resets: kept from its reading, dropped once one has 
   store.onChange((ids) => told.push(ids));
   const expires = new Date(s.clock.now() + 60 * 60_000).toISOString();
   store.record('codex-2', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0 }], blocked: true, resets: { available: 2, nextExpiresAt: expires } });
-  assert.deepEqual(store.usageFor(codex)?.resets, { available: 2, nextExpiresAt: expires });
+  // Stamped with when it was read, so the newest read wins on every runner.
+  assert.deepEqual(store.usageFor(codex)?.resets, { available: 2, nextExpiresAt: expires, readAt: new Date(s.clock.now()).toISOString() });
   // A reading without a count (an update, not a read) keeps it.
   store.record('codex-2', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0 }] });
   assert.equal(store.usageFor(codex)?.resets?.available, 2);

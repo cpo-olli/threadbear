@@ -110,7 +110,15 @@ export type AccountUsage = {
 
 // A Codex login's free "Full reset" credits, each of which restores its
 // 5-hour and weekly limits at once. nextExpiresAt: the soonest one to expire.
-export type UsageResets = { available: number; nextExpiresAt?: string };
+// readAt: when this count was read, on whichever runner read it, so the
+// newest read wins wherever the login is signed in.
+export type UsageResets = { available: number; nextExpiresAt?: string; readAt?: string };
+
+// A usage reset worth using now (docs/protocol/settings.md, "Telling Mike
+// about resets"), worked out by reset-hint.ts alone. out: the login is out
+// of room. expiring: the soonest reset expires within 3 days and the week
+// is used enough that a reset buys something back.
+export type ResetHint = { why: 'out' | 'expiring'; available: number; nextExpiresAt?: string };
 
 export type Account = {
   id: string;
@@ -142,6 +150,9 @@ export type Account = {
   // not its 28-day sign-in. madeAt, when known, is when; loginEndsAt is
   // then a year on. The token itself never leaves the runner.
   yearToken?: { madeAt?: string };
+  // A usage reset worth using now (reset-hint.ts); absent when there's
+  // nothing to say.
+  resetHint?: ResetHint;
 };
 
 export type CliPolicy = 'auto' | 'notify' | 'off';

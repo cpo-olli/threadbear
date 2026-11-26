@@ -32,6 +32,8 @@ pub(crate) struct ChipData {
     pub(crate) is_new: bool,
     /// Another runner's thread, or a new one for another runner.
     pub(crate) away: Option<AwayRunner>,
+    /// That runner's id, None for this Mac's: where a Use a reset goes.
+    pub(crate) runner: Option<String>,
 }
 
 /// The other runner a box's thread (or new draft) is on (`ComposerControls`).
@@ -83,6 +85,7 @@ impl Composer {
                 logins: RunnerLogins::default(),
                 is_new: self.thread_id.is_none(),
                 away: None,
+                runner: None,
             };
         };
         let t = app.read(cx);
@@ -99,6 +102,7 @@ impl Composer {
                 logins: t.draft_logins(),
                 is_new: true,
                 away,
+                runner: t.new_thread.picks.runner.clone(),
             };
         }
         let summary = self
@@ -106,7 +110,8 @@ impl Composer {
             .as_ref()
             .and_then(|id| t.threads.get(id).map(|t| ThreadSummary::clone(t)))
             .or_else(|| self.pane.upgrade().map(|p| p.read(cx).summary.clone()));
-        let (logins, away) = match summary.as_ref().and_then(|s| s.runner_id.clone()) {
+        let runner = summary.as_ref().and_then(|s| s.runner_id.clone());
+        let (logins, away) = match runner.clone() {
             None => (t.logins.clone(), None),
             // Another runner's thread: its Mac's logins, once they've come.
             Some(runner) => {
@@ -126,6 +131,7 @@ impl Composer {
             logins,
             is_new: false,
             away,
+            runner,
         }
     }
 
@@ -2331,6 +2337,7 @@ impl ModelPickerView {
                 logins: RunnerLogins::default(),
                 is_new: false,
                 away: None,
+                runner: None,
             })
     }
 
@@ -2441,6 +2448,9 @@ impl ModelPickerView {
             );
             (pool_id, rows)
         };
+        let Some(app) = self.composer.upgrade().map(|c| c.read(cx).app.clone()) else {
+            return header.into_any_element();
+        };
         let list = v_flex()
             .px(px(6.))
             .pb(px(6.))
@@ -2452,7 +2462,17 @@ impl ModelPickerView {
                     pool_id.clone(),
                     row.id.clone(),
                 );
-                pool_login_row(row, cx, move |window, cx| {
+                let reset = row.reset.as_ref().zip(row.id.clone()).map(|(offer, id)| {
+                    crate::composer_account::reset_line(
+                        &format!("picker-login-{id}"),
+                        offer,
+                        app.clone(),
+                        data.runner.clone(),
+                        id,
+                        cx,
+                    )
+                });
+                pool_login_row(row, reset, cx, move |window, cx| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |this, _| {
                             this.pool = None;
@@ -2486,6 +2506,7 @@ impl ModelPickerView {
 /// the room left, orange under a quarter and red at its limit.
 fn pool_login_row(
     row: threadbear_core::login_picker::PoolLoginRow,
+    reset: Option<AnyElement>,
     cx: &App,
     action: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
@@ -2545,7 +2566,8 @@ fn pool_login_row(
                             .text_color(style::secondary_label(cx))
                             .child(sub),
                     )
-                }),
+                })
+                .children(reset),
         )
         .when_some(fill, |s, fill| {
             s.child(

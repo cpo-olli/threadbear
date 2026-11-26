@@ -7,6 +7,8 @@ import { loadConfig, runnerUrl, RunnerJsonError } from './config.ts';
 import { connectTb, onDisk, ownerOnly } from './tb-connect.ts';
 import { RunnerClient } from './client.ts';
 import { poolLine, sameEmailWarnings } from './pools.ts';
+import { resetHintWords } from './reset-hint.ts';
+import { resetTime } from './usage.ts';
 import { providerName } from './providers.ts';
 import type { Account, ImageRef, Pool, LibrarianStatus, PersistedEvent, Project, RunnerDefaults, Schedule, ThreadSummary } from './protocol.ts';
 import type { Settings } from './settings.ts';
@@ -124,7 +126,7 @@ const HELP = `tb: talk to the Threadbear runner
                                   stops it, without moving
   tb delete <threadId>
   tb accounts                     the Claude and Codex logins (* new threads start on it)
-  tb accounts --json              every login with its usage (weekly %, resets) as JSON
+  tb accounts --json              every login with its usage (weekly %, resets) and resetHint as JSON
   tb accounts <account> [--json]  that account's models and its default
   tb pools [--json]               the pools, their logins and room (* new threads start on it)
   tb actions <threadId> [--json]  the thread's actions, panels and patches (from its folder)
@@ -744,6 +746,8 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
           signedOut: a.signedOut,
           planEnded: a.planEnded,
           usage: a.usage,
+          // A usage reset worth using now (reset-hint.ts), for agents to mention.
+          resetHint: a.resetHint,
         }));
         console.log(JSON.stringify({ accounts, defaultAccountId: r.defaults.accountId }, null, 2));
         return 0;
@@ -753,6 +757,7 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
         // The provider has its own column, so not "Codex · " again.
         const who = a.email ?? a.title.replace(/^Codex · /, '');
         console.log(`${a.id === r.defaults.accountId ? '*' : ' '} ${a.id.padEnd(12)} ${providerName(a.provider).padEnd(9)}${who}${note}`);
+        if (a.resetHint) console.log(`  ${''.padEnd(12)} ${''.padEnd(9)}${resetHintWords(a.resetHint, (iso) => resetTime(iso, Date.now()))}`);
       }
       // Two config folders signed in to one account (issue 18).
       for (const line of sameEmailWarnings(r.accounts)) console.log(`\n${line}`);

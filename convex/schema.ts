@@ -43,6 +43,11 @@ export const messageButton = v.object({
 });
 
 export const usagePool = v.object({ id: v.string(), title: v.string(), accountIds: v.array(v.string()) });
+// API 104: a Codex login's usage resets (with when they were read, so the
+// newest read wins on every runner) and the hint to use one
+// (docs/protocol/settings.md, "Telling Mike about resets").
+export const usageResets = v.object({ available: v.number(), nextExpiresAt: v.optional(v.string()), readAt: v.optional(v.string()) });
+export const resetHint = v.object({ why: v.string(), available: v.number(), nextExpiresAt: v.optional(v.string()) });
 
 export const threadFields = {
   threadId: v.string(),
@@ -1307,6 +1312,7 @@ export const appSchema = defineSchema({
     loginEndsAt: v.optional(v.string()),
     signedOut: v.optional(v.boolean()),
     yearToken: v.optional(v.object({ madeAt: v.optional(v.string()) })),
+    resetHint: v.optional(resetHint),
     usage: v.optional(
       v.object({
         windows: v.array(v.object({ kind: v.string(), title: v.string(), remainingPercent: v.number(), resetsAt: v.optional(v.string()), detail: v.optional(v.string()) })),
@@ -1315,6 +1321,7 @@ export const appSchema = defineSchema({
         stale: v.optional(v.boolean()),
         blocked: v.optional(v.boolean()),
         notice: v.optional(v.string()),
+        resets: v.optional(usageResets),
       }),
     ),
   })

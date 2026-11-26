@@ -693,9 +693,10 @@ impl Threadbear {
         );
         button.face = Some(pot);
         button.tip = tip;
-        // A login signed out, or whose sign-in ends within days: its row in
-        // the panel says which, with Sign in… (usage.rs).
-        button.dot = threadbear_core::usage::sign_in_needed(&self.logins.accounts, crate::now_ms());
+        // A login signed out, or whose sign-in ends within days, or with a
+        // usage reset worth using: its row in the panel says which, with
+        // Sign in… or Use a reset (usage.rs).
+        button.dot = threadbear_core::usage::usage_dot(&self.logins.accounts, crate::now_ms());
         let usage = rail_button(
             button,
             |this, _, cx| this.toggle_under_threads(shell::USAGE, cx),

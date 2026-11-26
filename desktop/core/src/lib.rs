@@ -66,6 +66,7 @@ pub mod remote;
 pub mod remote_tokens;
 pub mod reply_buttons;
 pub mod reply_links;
+pub mod reset_hint;
 pub mod review;
 pub mod review_canvas;
 pub mod rich_block;

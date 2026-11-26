@@ -805,6 +805,10 @@ function setupFull(opts: { elsewhereThread?: (threadId: string) => ThreadSummary
         applied.push(`yearToken ${accountId} ${JSON.stringify(p)}`);
         return { state: 'waiting', url: 'https://claude.com/cai/oauth/authorize?state=x' };
       },
+      useReset: async (accountId) => {
+        applied.push(`useReset ${accountId}`);
+        return { outcome: 'reset' };
+      },
       threadCommands: (id) => {
         applied.push(`commands ${id}`);
         return h.runner.threadCommands(id);
@@ -4427,6 +4431,25 @@ test("a runner's message row goes with its wakeReason only from API 98", async (
 // Year-long token… from the Mac's Runners panel (year-token-maker.ts): only
 // a command the main Mac queued (from: "mac") reaches the maker; the phone's
 // can't, and the answer goes back as the call's result.
+// Use a reset for a login only this runner has (rpc.ts useResetElsewhere):
+// only the main Mac's click spends it, never a phone's command.
+test("accounts.useReset calls: the main Mac's spend a reset here, nobody else's", async () => {
+  const { sync, push, applied, calls } = setupFull();
+  sync.start();
+  await sync.flushNow();
+  push([{ commandId: 'r1', kind: 'call', args: { method: 'accounts.useReset', params: { accountId: 'codex-1' }, from: 'mac' }, createdAt: 1 }]);
+  await tick(10);
+  push([{ commandId: 'r2', kind: 'call', args: { method: 'accounts.useReset', params: { accountId: 'codex-1' } }, createdAt: 2 }]);
+  await tick(10);
+  assert.deepEqual(applied.filter((a) => a.startsWith('useReset')), ['useReset codex-1']);
+  const r1 = calls.find((c) => c.fn === 'sync:finishCommand' && c.args.commandId === 'r1')!;
+  assert.equal(JSON.parse(String(r1.args.result)).outcome, 'reset');
+  const r2 = calls.find((c) => c.fn === 'sync:finishCommand' && c.args.commandId === 'r2')!;
+  assert.equal(r2.args.ok, false);
+  assert.match(String(r2.args.note), /Only the main Mac/);
+  await sync.stop();
+});
+
 test("accounts.yearToken calls: the main Mac's reach the maker, nobody else's", async () => {
   const { sync, push, applied, calls } = setupFull();
   sync.start();

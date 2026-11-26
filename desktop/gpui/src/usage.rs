@@ -355,7 +355,8 @@ impl Threadbear {
         // Its settings (whether to show a model's own week, and the spare
         // week nudges) are in Settings › General › Usage since 18 Nov: Mike
         // didn't like them dumped at the foot of the panel.
-        let (open, finding) = (&self.usage.open, &self.usage.finding_work);
+        let (open, finding, resetting) =
+            (&self.usage.open, &self.usage.finding_work, &self.resetting);
         for card in rules::cards_named(
             &self.logins.pools,
             accounts,
@@ -366,7 +367,7 @@ impl Threadbear {
             |p| self.logins.provider_title(p),
         ) {
             column = column.child(pool_card(
-                &card, accounts, open, finding, content, dark, now, &p, cx,
+                &card, accounts, open, finding, resetting, content, dark, now, &p, cx,
             ));
         }
         if let Some(footer) = rules::footer(accounts, now, &zone) {
@@ -442,7 +443,7 @@ impl Threadbear {
                 "percent": (icon.level * 100.).round() as i64,
                 "login": icon.login,
                 "tip": icon.tip,
-                "dot": rules::sign_in_needed(accounts, now),
+                "dot": rules::usage_dot(accounts, now),
             },
             "tiles": stats.map(|s| rules::tiles(s, accounts, now, &zone).iter().map(|t| json!({ "title": t.title, "value": t.value, "detail": t.detail })).collect::<Vec<_>>()).unwrap_or_default(),
             "chart": stats.map(|s| {
@@ -468,6 +469,7 @@ impl Threadbear {
                     "fiveHour": l.five_hour.as_ref().map(|c| &c.text),
                     "why": l.unknown.as_ref().map(|u| &u.text),
                     "signInEnds": l.sign_in_ends,
+                    "reset": l.reset.as_ref().map(|r| json!({ "line": r.words, "tip": r.tip, "expiring": r.expiring, "busy": self.resetting.contains(&l.id) })),
                     "yearToken": l.year_token,
                     "findWork": rules::can_find_work(l),
                     "findingWork": self.usage.finding_work.contains(&l.id),
@@ -1151,6 +1153,7 @@ fn pool_card(
     accounts: &[Account],
     open: &HashSet<String>,
     finding: &HashSet<String>,
+    resetting: &HashSet<String>,
     content: f32,
     dark: bool,
     now: i64,
@@ -1190,6 +1193,7 @@ fn pool_card(
                 accounts,
                 open.contains(&key),
                 finding.contains(&login.id),
+                resetting.contains(&login.id),
                 content,
                 dark,
                 now,
@@ -1268,6 +1272,7 @@ fn login_row(
     accounts: &[Account],
     open: bool,
     finding: bool,
+    resetting: bool,
     content: f32,
     dark: bool,
     now: i64,
@@ -1478,13 +1483,69 @@ fn login_row(
                 .children(sign_in)
                 .children(token)
         });
-    let has_below = open || sign_in.is_some();
+    // A usage reset worth using (reset_hint.rs; Mike, 26 Nov: two sat unused
+    // for days while the login read 0% everywhere), open or shut, with Use
+    // a reset. It spins and takes no clicks until the runner answers; the
+    // row's numbers change with the login the answer brings.
+    let reset = login.reset.as_ref().map(|r| {
+        let words = div()
+            .min_w_0()
+            .text_size(px(11.))
+            .line_height(px(14.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(if r.expiring { p.orange } else { p.fg })
+            .child(r.words.clone());
+        let chip = crate::highlights::tipped(
+            div()
+                .id(id("use-reset"))
+                .flex_none()
+                .px(px(7.))
+                .py(px(2.))
+                .rounded(px(5.))
+                .text_size(px(11.))
+                .line_height(px(14.))
+                .text_color(p.fg)
+                .bg(p.divider),
+            r.tip.clone(),
+        );
+        let chip = if resetting {
+            chip.opacity(0.7)
+                .child(
+                    h_flex()
+                        .gap(px(5.))
+                        .items_center()
+                        .child(
+                            crate::spinner::Spinner::new()
+                                .with_size(px(10.))
+                                .color(p.secondary),
+                        )
+                        .child("Using a reset"),
+                )
+                .into_any_element()
+        } else {
+            let account = login.id.clone();
+            chip.cursor_pointer()
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.use_reset(account.clone(), cx)
+                }))
+                .child("Use a reset")
+                .into_any_element()
+        };
+        h_flex()
+            .gap(px(8.))
+            .items_center()
+            .child(words)
+            .child(div().flex_1())
+            .child(chip)
+    });
+    let has_below = open || sign_in.is_some() || reset.is_some();
     // Under the row, lined up with its name.
     let inset = RING + 18.;
     let mut below = v_flex()
         .gap(px(8.))
         .pl(px(inset))
         .pr(px(8.))
+        .children(reset)
         .children(sign_in);
     if open {
         // The week's chart on its own: the ring says what's left and the
@@ -2353,6 +2414,22 @@ pub(crate) fn automation(
     if let Some(account) = cmd["findWork"].as_str() {
         let account = account.to_owned();
         app.update(cx, |t, cx| t.find_work(account, cx));
+        return Ok(json!("ok"));
+    }
+    // Use a reset on that login's row, as a click does: only where the row
+    // offers one.
+    if let Some(account) = cmd["useReset"].as_str() {
+        let offered = {
+            let t = app.read(cx);
+            t.logins
+                .account(account)
+                .is_some_and(|a| threadbear_core::reset_hint::hint(a, now_ms()).is_some())
+        };
+        if !offered {
+            return Err(format!("{account}'s row offers no reset"));
+        }
+        let account = account.to_owned();
+        app.update(cx, |t, cx| t.use_reset(account, cx));
         return Ok(json!("ok"));
     }
     // Opens or shuts a login's row in every pool it's in, as a click does.
