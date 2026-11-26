@@ -737,9 +737,12 @@ Helper completion puts the task in review and wakes the coordinator. The
 coordinator checks its result against `doneWhen` before `completeTask` marks it
 done; `archiveTask` retains the full finished record in `coordinator-history.jsonl`
 and frees its active-list space. A to-do no longer needed (the user took it to a
-thread of their own, or it's moot) goes with `dropTask` and a `summary` of why:
-into the same history with `droppedAt` and `reason`, never marked done, and
-refused while a helper is working on it. These actions use the scoped coordinator tool,
+thread of their own, or it's moot) goes with `dropTask` and a `summary` of why
+(required): into the same history with `droppedAt` and `reason`, never marked
+done, and refused while a helper is working on it or once it's done. A session
+whose tool list predates `dropTask` drops it with `archiveTask` and a `summary`.
+`read_thread` reaches a coordinator's own hidden helpers by short id too;
+`send_message` refuses any helper (its coordinator uses `resumeHelper`). These actions use the scoped coordinator tool,
 with `taskId`, rather than a manual running-task checkbox. Restart marks
 unfinished execution interrupted and does not auto-resume hidden helpers; the next
 coordinator turn reconciles them rather than blindly replaying work. A known

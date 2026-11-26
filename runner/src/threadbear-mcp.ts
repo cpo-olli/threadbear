@@ -464,7 +464,10 @@ export function buildThreadbearTools(
 
   // Full ids, or any unique prefix of one (the list shows 8 characters),
   // here or on another runner. `other` is set for another runner's thread.
-  const find = async (id: string): Promise<{ id: string; other?: { t: RemoteThread; runner: string } }> => {
+  // ownHelpers: also a coordinator's own hidden helpers, which lists leave
+  // out, for read_thread only (Gemini review: send_message would steer one
+  // around resumeHelper, and end_turn's waitFor and links can't use one).
+  const find = async (id: string, ownHelpers = false): Promise<{ id: string; other?: { t: RemoteThread; runner: string } }> => {
     // A whole id is looked up by itself. Listing every thread for it cost a
     // draining runner 2.8 MB from the primary per call, and parallel calls
     // piled up until the primary closed its link (THREADBEAR-F, 7 Nov).
@@ -493,10 +496,11 @@ export function buildThreadbearTools(
       if (!whole) {
         try {
           hits = (await listForIds()).filter((t) => t.id === id || t.id.startsWith(id));
-          // A coordinator's own hidden helpers, which lists leave out: on 26
-          // Nov read_thread "53b65ddd", a helper's id cut short from the
-          // desk, found nothing.
-          for (const h of new Set(opts.coordinators?.()?.forThread(selfId)?.tasks.flatMap((t) => t.run?.helperThreadId ?? []))) {
+          // On 26 Nov read_thread "53b65ddd", a helper's id cut short from
+          // the desk, found nothing.
+          const desk = ownHelpers ? opts.coordinators?.()?.forThread(selfId) : undefined;
+          // Every helper it started, archived tasks' too (reachedThreads[0] is the coordinator).
+          for (const h of desk ? opts.coordinators!()!.reachedThreads(desk.projectId).slice(1) : []) {
             if (!h.startsWith(id) || hits.some((t) => t.id === h)) continue;
             const t = await (async () => control.get(h))().catch(() => undefined);
             if (t) hits.push(t);
@@ -2203,8 +2207,11 @@ export function buildThreadbearTools(
         else if (p.action === 'answer') service.answer(own.projectId, p.questionId ?? '', p.answer ?? '');
         else if (p.action === 'completeTask') service.completeTask(own.projectId, p.taskId ?? '');
         else if (p.action === 'selectTask') service.selectTask(own.projectId, p.taskId ?? '');
-        else if (p.action === 'archiveTask') service.archiveTask(own.projectId, p.taskId ?? '');
-        else if (p.action === 'dropTask') service.dropTask(own.projectId, p.taskId ?? '', p.summary ?? p.answer);
+        // A session from before dropTask keeps the old action list, so an
+        // unfinished task archived with a summary of why is dropped.
+        else if (p.action === 'dropTask' || (p.action === 'archiveTask' && (p.summary?.trim() || p.answer?.trim()) && service.get(own.projectId).tasks.find((t) => t.id === p.taskId)?.state !== 'done')) {
+          service.dropTask(own.projectId, p.taskId ?? '', p.summary?.trim() || p.answer);
+        } else if (p.action === 'archiveTask') service.archiveTask(own.projectId, p.taskId ?? '');
         else if (p.action === 'openLoop') {
           const opened = service.openLoop(own.projectId, {
             kind: p.loopKind ?? 'user_question',
@@ -2216,7 +2223,7 @@ export function buildThreadbearTools(
           });
           return JSON.stringify(opened);
         } else if (p.action === 'updateLoop') {
-          service.updateLoop(own.projectId, p.loopId ?? service.loopIdFrom(own.projectId, p.questionId, p.taskId) ?? '', {
+          service.updateLoop(own.projectId, p.loopId?.trim() || service.loopIdFrom(own.projectId, p.questionId, p.taskId) || '', {
             ...(p.title !== undefined ? { title: p.title } : {}),
             ...(p.summary !== undefined ? { summary: p.summary } : {}),
             ...(p.loopState !== undefined ? { state: p.loopState } : {}),
@@ -2224,7 +2231,7 @@ export function buildThreadbearTools(
             ...(p.sourceSeq !== undefined ? { sourceSeq: p.sourceSeq } : {}),
           });
         } else if (p.action === 'closeLoop') {
-          service.closeLoop(own.projectId, p.loopId ?? service.loopIdFrom(own.projectId, p.questionId, p.taskId) ?? '');
+          service.closeLoop(own.projectId, p.loopId?.trim() || service.loopIdFrom(own.projectId, p.questionId, p.taskId) || '');
         } else if (p.action === 'startHelper') {
           const started = service.startHelper(own.projectId, {
             ...(p.taskId ? { taskId: p.taskId } : {}),
@@ -2314,7 +2321,7 @@ export function buildThreadbearTools(
       },
       handle(async ({ threadId, id: alias, messages }) => {
         const asked = threadId ?? alias;
-        const hit = asked ? await find(asked) : { id: selfId };
+        const hit = asked ? await find(asked, true) : { id: selfId };
         const id = hit.id;
         const far = hit.other;
         const remote = opts.remote?.();
@@ -2479,6 +2486,8 @@ export function buildThreadbearTools(
         });
         const id = hit.id;
         if (id === selfId) throw new Error("That's this thread. Just carry on here.");
+        // A hidden helper is driven by its coordinator's desk, never steered around it.
+        if (opts.coordinators?.()?.helperOwner(id)) throw new Error("That's a project coordinator's hidden helper. Its coordinator carries it on with coordinator action resumeHelper; nothing was sent.");
         // Another runner's thread counts as full access (modeOf), so a
         // restricted caller is asked first there too.
         const head = await from();

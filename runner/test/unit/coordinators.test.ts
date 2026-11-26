@@ -1672,7 +1672,7 @@ test('coordinator refusals say what to use instead, and the ids it is given work
   const b = c.openLoop(project.id, { kind: 'waiting_on_user', title: 'Book the flight?' }).loopId;
   await coordTool.handler({ action: 'closeLoop', questionId: a, answer: 'Duplicate' });
   assert.equal(c.get(project.id).loops.find((l) => l.id === a)!.state, 'closed');
-  await coordTool.handler({ action: 'closeLoop', taskId: b });
+  await coordTool.handler({ action: 'closeLoop', loopId: '', taskId: b });
   assert.equal(c.get(project.id).loops.find((l) => l.id === b)!.state, 'closed');
   const still = c.openLoop(project.id, { kind: 'user_question', title: 'Rental car?' }).loopId;
   const none = await coordTool.handler({ action: 'closeLoop', answer: 'Not needed' });
@@ -1691,6 +1691,17 @@ test('coordinator refusals say what to use instead, and the ids it is given work
   assert.equal(dropped.reason, 'Mike is doing it in his own thread');
   assert.equal(dropped.task.state, 'todo');
   assert.ok(dropped.droppedAt);
+  assert.equal(dropped.archivedAt, undefined, 'dropped, not archived as finished');
+  // A reason is needed, a done task is archived instead, and a session from
+  // before dropTask drops with archiveTask and a summary.
+  const moot = c.addTask(project.id, 'Book a shuttle', 'Shuttle booked').tasks.at(-1)!;
+  assert.match((await coordTool.handler({ action: 'dropTask', taskId: moot.id, summary: '  ' })).content[0]!.text, /pass summary/);
+  await coordTool.handler({ action: 'archiveTask', taskId: moot.id, summary: 'Taking an Uber instead' });
+  assert.equal(c.get(project.id).tasks.some((t) => t.id === moot.id), false);
+  const finished = c.addTask(project.id, 'Pack', 'Packed').tasks.at(-1)!;
+  c.completeTask(project.id, finished.id);
+  assert.throws(() => c.dropTask(project.id, finished.id, 'Already done'), /archiveTask/);
+  c.archiveTask(project.id, finished.id);
 
   // A cwd outside the folders says how to add it.
   const outside = tmpDir();
@@ -1701,7 +1712,10 @@ test('coordinator refusals say what to use instead, and the ids it is given work
   await tick();
   assert.throws(() => c.startHelper(project.id, { brief: 'Another job' }), new RegExp(`"Check pantry" \\(task ${started.taskId}, helper ${started.helperId}\\).*don't retry`));
   // ...and dropping it waits for its result.
-  assert.throws(() => c.dropTask(project.id, started.taskId), /helper is working/);
+  assert.throws(() => c.dropTask(project.id, started.taskId, 'Moot'), /helper is working/);
+  assert.match((await coordTool.handler({ action: 'resumeHelper', taskId: started.taskId, brief: 'More' })).content[0]!.text, /"Check pantry"/);
+  // selectTask on started work says to resume it.
+  assert.throws(() => c.selectTask(project.id, started.taskId), new RegExp(`already has a helper run \\(running, helper ${started.helperId}\\).*resumeHelper`));
 
   // read_thread finds the helper by the short id the desk shows.
   const read = buildThreadbearTools(h.runner, coordinator.threadId, () => h.clock.now(), undefined, projectControl(projects), undefined, { coordinators: () => c })
@@ -1709,5 +1723,11 @@ test('coordinator refusals say what to use instead, and the ids it is given work
   const r = await read.handler({ threadId: started.helperId.slice(0, 8), messages: 2 });
   assert.notEqual(r.isError, true, r.content[0]!.text);
   assert.match(r.content[0]!.text, new RegExp(started.helperId));
+  assert.notEqual((await read.handler({ threadId: started.helperId })).isError, true, 'the whole id from the wake payload too');
+  // Only read_thread: send_message never steers a helper around the desk.
+  const send = buildThreadbearTools(h.runner, coordinator.threadId, () => h.clock.now(), undefined, projectControl(projects), undefined, { coordinators: () => c })
+    .find((t) => t.name === 'send_message') as unknown as { handler: (p: Record<string, unknown>, extra: unknown) => Promise<{ content: { text: string }[]; isError?: boolean }> };
+  assert.match((await send.handler({ threadId: started.helperId.slice(0, 8), text: 'Hi' }, {})).content[0]!.text, /No thread with id/);
+  assert.match((await send.handler({ threadId: started.helperId, text: 'Hi' }, {})).content[0]!.text, /hidden helper/);
   c.stop();
 });

@@ -45,7 +45,7 @@ Do not call end_turn, ask_secret, user question tools, start another agent or cr
 // it doesn't have: what to use instead, so it doesn't retry the same call
 // another way (26 Nov: `cat plan.md | head` and `tb schedules update` were
 // refused with only "not available", five times in two coordinators).
-const OTHER_THREADS = "To change another thread's schedule, snooze or work, ask that thread with send_message; your own reminders are coordinator action update with wakeAt.";
+const OTHER_THREADS = "To change another thread's schedule, snooze or work, ask that thread with send_message; your own next wake is coordinator action update with wakeAt.";
 export const COORDINATOR_SHELL_REFUSAL = (reads: string): string =>
   `The project coordinator has no shell. Read and search files with ${reads}. ${OTHER_THREADS} Anything else that runs a command goes to a helper (coordinator action startHelper).`;
 export const COORDINATOR_TB_REFUSAL = `This Threadbear tool is not available to a project coordinator; it has ${[...COORDINATOR_THREADBEAR_TOOLS].join(', ')}. ${OTHER_THREADS}`;
