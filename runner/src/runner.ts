@@ -1654,7 +1654,7 @@ export class Runner {
   }
 
   private waitState(st: ThreadState, sum: ThreadSummary): WaitState {
-    return waitStateOf(sum, { now: this.clock.now(), scheduled: this.scheduled(st.rec.id) });
+    return waitStateOf(sum, { now: this.clock.now(), scheduled: this.scheduled(st.rec.id), helpers: this.coordinators?.helpersWorking(st.rec.id) ?? 0 });
   }
 
   // Turn ends and folder moves, for the librarian.

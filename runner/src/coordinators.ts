@@ -232,6 +232,9 @@ export class Coordinators {
   private changed(row: Coordinator): void {
     row.updatedAt = this.now(); this.save();
     this.deps.host.publish({ method: 'coordinators.updated', params: { coordinators: this.list() } });
+    // A helper starting or stopping changes the coordinator's wait state.
+    const st = this.deps.host.threads.get(row.threadId);
+    if (st) this.deps.host.markDirty(st);
   }
   list(): CoordinatorView[] { return this.deps.enabled() ? [...this.rows.values()].map(view) : []; }
   get(projectId: string): CoordinatorView {
@@ -240,6 +243,12 @@ export class Coordinators {
     return view(row);
   }
   forThread(threadId: string): Coordinator | undefined { return [...this.rows.values()].find((r) => r.threadId === threadId); }
+  // How many of this coordinator thread's helpers are still at work, for its
+  // wait state (wait-state.ts): 0 for any other thread.
+  helpersWorking(threadId: string): number {
+    if (!this.deps.enabled()) return 0;
+    return this.forThread(threadId)?.tasks.filter((t) => t.run && ['queued', 'running'].includes(t.run.status)).length ?? 0;
+  }
   helperOwner(threadId: string): Coordinator | undefined {
     const ownerThreadId = this.deps.host.threads.get(threadId)?.rec.coordinatorHelperFor;
     if (ownerThreadId) return this.forThread(ownerThreadId);

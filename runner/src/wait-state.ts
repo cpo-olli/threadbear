@@ -33,7 +33,7 @@ type StateInfo = { section: Section; description: string };
 
 export const WAIT_STATES: Record<WaitState, StateInfo> = {
   working: { section: 'running', description: 'A turn is running or starting.' },
-  job: { section: 'running', description: 'No turn, but a background job (a shell job, sub-agent or workflow) is still going, and the last turn asks nothing of the user that it is not still waiting on.' },
+  job: { section: 'running', description: 'No turn, but a background job (a shell job, sub-agent or workflow) or a coordinator\'s helper is still going, and the last turn asks nothing of the user that it is not still waiting on.' },
   onThreads: { section: 'running', description: "Its own agent put it away to hear back from other threads (end_turn's waitFor) that haven't finished yet." },
   landing: { section: 'running', description: "Its own agent put it away until something it watches for (a landing, CI going green) while its commits aren't on main yet." },
   appRestart: { section: 'running', description: "Its own agent put it away until the user's app restarts onto what it landed (wait_for_app_restart)." },
@@ -62,7 +62,7 @@ export const WAIT_MOVES: Move[] = [
   { from: ['working', 'card'], to: 'needsYou', on: 'the turn ends asking the user for something, or ends without saying' },
   { from: ['working', 'card'], to: 'done', on: 'the turn ends with needs "nothing", or fails or is stopped' },
   { from: ['working'], to: 'review', on: 'the turn ends with a design review waiting' },
-  { from: ['working'], to: 'job', on: 'the turn ends with a background job still going' },
+  { from: ['working'], to: 'job', on: 'the turn ends with a background job or a coordinator\'s helper still going' },
   { from: ['working'], to: 'limit', on: 'the turn hits its login\'s usage limit' },
   { from: ['working', 'job'], to: 'onThreads', on: 'end_turn waits for other threads' },
   { from: ['working', 'job'], to: 'landing', on: 'end_turn hibernates until something it watches for, with commits not on main' },
@@ -121,7 +121,14 @@ export type WaitInputs = {
 
 // The rule, in order: the first that holds is the state. It is the Mac's
 // `section_of` (desktop/core/src/inbox.rs) as of 23 Nov, moved here.
-export function waitStateOf(t: WaitInputs, opts: { now: number; scheduled: boolean }): WaitState {
+// `helpers`: how many of a project coordinator's hidden helpers are still
+// working (runner/src/coordinators.ts). They aren't the CLI's own background
+// work, so they're not in `background`, but the coordinator is waiting on
+// them: a helper finishing wakes it. Without this a coordinator with a
+// schedule booked read as "Moved to Hibernating ... nothing needs you" while
+// its helper built what it had just promised (Omi, 26 Nov 2026). Its asks
+// still go first: a coordinator can ask Mike something while a helper works.
+export function waitStateOf(t: WaitInputs, opts: { now: number; scheduled: boolean; helpers?: number }): WaitState {
   if (t.archivedAt) return 'archived';
   const snoozed = Boolean(t.snoozedUntilRestart) || (t.snoozedUntil !== undefined && Date.parse(t.snoozedUntil) > opts.now);
   if (snoozed) {
@@ -137,7 +144,7 @@ export function waitStateOf(t: WaitInputs, opts: { now: number; scheduled: boole
   if ((t.pendingReviews ?? 0) > 0 && !busy && !background) return 'review';
   if (waitingOnMike(t, busy) || (t.needsYou && !(background && !busy))) return 'needsYou';
   if (turn) return 'working';
-  if (background) return 'job';
+  if (background || (opts.helpers ?? 0) > 0) return 'job';
   if (t.status === 'idle' && t.needs !== 'you' && !t.waitingForRoom && opts.scheduled) return 'scheduled';
   if (t.waitingForRoom) return 'limit';
   return 'done';

@@ -11,7 +11,7 @@ import { makeHarness, tick, tmpDir, FakeAccounts, FakeAdapter, withCodex } from 
 import { Runner } from '../../src/runner.ts';
 import { ThreadStore } from '../../src/store.ts';
 import { CallerGate } from '../../src/rpc-gate.ts';
-import type { Account, ThreadSummary } from '../../src/protocol.ts';
+import type { Account, Schedule, ThreadSummary } from '../../src/protocol.ts';
 import type { Settings } from '../../src/settings.ts';
 import { buildThreadbearTools, type ProjectControl } from '../../src/threadbear-mcp.ts';
 
@@ -157,6 +157,41 @@ test('hidden helpers run one at a time, stay invisible to inbox/search/notificat
   c.completeTask(project.id, started.taskId);
   assert.equal(c.get(project.id).tasks[0].state, 'done');
   assert.throws(() => runMove('completed', 'running'), /cannot/);
+  c.stop();
+});
+
+test('a coordinator with a helper still working reads as busy, not hibernating for its schedule (Omi, 26 Nov)', async () => {
+  const { h, c, project, antigravity } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'antigravity-main', model: 'gemini-4-neon' });
+  await tick();
+  const endsDone = (s: (typeof antigravity.sessions)[number]) => {
+    s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e1', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
+    s.result('completed');
+  };
+  endsDone(antigravity.sessions.at(-1)!);
+  await tick();
+  // A check-in is booked for later today.
+  h.runner.schedulesFor = () => [{ id: 's1', title: 'First-day check', text: 'look', whenText: 'today', threadId: coordinator.threadId, nextRunAt: '2099-01-01T00:00:00Z' } as Schedule];
+  assert.equal(h.runner.get(coordinator.threadId).waitState, 'scheduled');
+
+  const started = c.startHelper(project.id, { title: 'Build triage', doneWhen: 'Deployed', brief: 'Build it' });
+  await tick();
+  assert.equal(h.runner.get(coordinator.threadId).waitState, 'job', 'its helper is still at work');
+  assert.equal(h.runner.list(['inbox', 'snoozed', 'archived']).find((t) => t.id === coordinator.threadId)?.waitState, 'job');
+  const said = () => h.runner.events(coordinator.threadId, { limit: 10_000 }).events.filter((e) => e.type === 'system.note' && e.text.startsWith('Moved to Hibernating')).length;
+  await tick();
+  assert.equal(said(), 0, 'no "nothing needs you" line while the helper works');
+
+  // The helper finishes: the coordinator is woken, reads it and ends its turn.
+  const helperSession = antigravity.sessions.find((s) => s.opts.threadId === started.helperId)!;
+  helperSession.text('m1', 'Deployed.');
+  helperSession.result('completed');
+  await tick();
+  assert.equal(c.helpersWorking(coordinator.threadId), 0);
+  endsDone(antigravity.sessions.filter((s) => s.opts.threadId === coordinator.threadId).at(-1)!);
+  await tick();
+  assert.equal(h.runner.get(coordinator.threadId).waitState, 'scheduled');
+  assert.equal(c.helpersWorking(started.helperId), 0, 'only a coordinator thread counts helpers');
   c.stop();
 });
 
