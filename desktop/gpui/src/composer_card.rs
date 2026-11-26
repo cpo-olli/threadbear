@@ -725,6 +725,9 @@ impl Composer {
         );
         let card = card?;
         self.sync_card(&card, cx);
+        if self.done_card_empty(&card, cx) {
+            return None;
+        }
         let body = if card.is_done() {
             self.render_done_card(&card, settle.filter(|_| !cx.reduce_motion()), window, cx)
         } else {
@@ -771,6 +774,24 @@ impl Composer {
                 .child(div().w_full().h(px(0.5)).bg(style::hairline(cx)))
                 .into_any_element(),
         )
+    }
+
+    /// A coordinator is never archived, so its done card has no Done
+    /// heading (26 Nov: Mike saw a lone "Done" on one), and with no
+    /// follow-ups or loose ends it has nothing to show at all. Waiting on
+    /// its own work, it still says what for.
+    fn done_heading_dropped(&self, cx: &App) -> bool {
+        self.pane
+            .upgrade()
+            .is_some_and(|pane| pane.read(cx).summary.is_coordinator())
+            && self.waiting_on_work(cx).is_none()
+    }
+
+    fn done_card_empty(&self, card: &AsksCard, cx: &App) -> bool {
+        card.is_done()
+            && card.next.is_empty()
+            && card.loose_ends.as_ref().is_none_or(|ends| ends.is_empty())
+            && self.done_heading_dropped(cx)
     }
 
     fn render_done_archive(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -827,18 +848,20 @@ impl Composer {
         // from, or the app restarting onto what it landed): what for, with a
         // spinner, as it hasn't finished (19 Nov: one waiting to land read
         // Done and was archived with nothing landed).
-        let heading = self.done_heading(tick, cx);
-        column = column.child(
-            h_flex()
-                .w_full()
-                .h(px(metrics::PAGED_HEADING))
-                .justify_between()
-                .gap(px(8.))
-                .child(heading)
-                .when_some(self.render_done_archive(cx), |row, button| {
-                    row.child(button)
-                }),
-        );
+        if !self.done_heading_dropped(cx) {
+            let heading = self.done_heading(tick, cx);
+            column = column.child(
+                h_flex()
+                    .w_full()
+                    .h(px(metrics::PAGED_HEADING))
+                    .justify_between()
+                    .gap(px(8.))
+                    .child(heading)
+                    .when_some(self.render_done_archive(cx), |row, button| {
+                        row.child(button)
+                    }),
+            );
+        }
         // What's still open (doneText): a booked check-in alone goes under
         // "Coming back", as it doesn't stop an archive.
         if let Some(ends) = &card.loose_ends {
@@ -2415,12 +2438,17 @@ impl Composer {
                     .read(cx)
                     .ask_link_words(&link.title, &target)
             });
+        if self.done_card_empty(&card, cx) {
+            return None;
+        }
         if card.is_done() {
-            lines.push(
-                self.waiting_on_work(cx)
-                    .map(|(words, _)| words)
-                    .unwrap_or_else(|| "Done".to_owned()),
-            );
+            if !self.done_heading_dropped(cx) {
+                lines.push(
+                    self.waiting_on_work(cx)
+                        .map(|(words, _)| words)
+                        .unwrap_or_else(|| "Done".to_owned()),
+                );
+            }
             for (i, next) in card.next.iter().enumerate() {
                 let tick = if self.card.next_picks.contains(&(i as i64)) {
                     "[x]"

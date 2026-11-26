@@ -54,7 +54,7 @@ Feature: Project coordinators
     Then the Add coordinator dialog is closed
     And the coordinator's "Conversation" tab is open
     And the transcript shows a reply starting "The project home is taking shape."
-    And the coordinator's Done card has no Archive button
+    And the coordinator shows no Done card
     And the coordinator is listed once in its own sidebar section
 
   @coordinators.home @coordinators @swift-pending
@@ -62,7 +62,7 @@ Feature: Project coordinators
     When I open the project "Threadbear"
     Then the coordinator's "Conversation" tab is open
     And the transcript shows a reply starting "The project home is taking shape."
-    And the coordinator's Done card has no Archive button
+    And the coordinator shows no Done card
     And the coordinator is listed once in its own sidebar section
     And the coordinator's document contains "Two helpers are working"
     When I open the coordinator's "To-dos" tab

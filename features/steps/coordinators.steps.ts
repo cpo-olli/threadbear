@@ -70,8 +70,10 @@ When("I open the coordinator's {string} tab", async function (this: ThreadbearWo
   await this.app.do({ cmd: 'click', tip: `Show the project's ${tab.toLowerCase()}` });
 });
 
-Then("the coordinator's Done card has no Archive button", async function (this: ThreadbearWorld) {
-  await this.until('the coordinator Done card', (d) => d.composer.card?.[0] === 'Done');
+// A coordinator is never archived, so a finished turn with no follow-ups
+// leaves the box with no card at all (26 Nov).
+Then('the coordinator shows no Done card', async function (this: ThreadbearWorld) {
+  await this.until('the coordinator box without a card', (d) => !d.composer.card?.length);
   const labels = JSON.parse(await this.app.do({ cmd: 'labels' })) as { label: string }[];
   assert.equal(labels.some((control) => control.label === 'Archive this thread'), false);
 });
