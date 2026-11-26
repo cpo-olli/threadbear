@@ -230,10 +230,14 @@ struct ThreadView: View {
                             // Its own state per question: a tapped button doesn't carry over to the next.
                             .id(pending.id)
                             .transition(Juice.cardGoes)
-                    } else if thread.isBusy || thread.working != nil {
+                    } else if thread.isBusy || (thread.working != nil && !asksShowing(thread)) {
                         WorkingLine(text: thread.working)
                             .id("working:\(thread.status == .running)")
                     } else if let asks = thread.asks, !asks.isEmpty, showsAsks(thread) {
+                        // A finished turn's card shows while its sub-agents
+                        // still work, with their line above it, as on the Mac.
+                        // The working line alone hid it on 26 Nov.
+                        if let working = thread.working { WorkingLine(text: working) }
                         AsksCard(asks: asks, picks: $picks, busy: sendingCard) {
                             sendCard(thread, lastSeq: messages.last?.seq)
                         }
@@ -667,6 +671,11 @@ struct ThreadView: View {
         nothingOnItsWay && (answeredAsks == nil || answeredAsks != thread.asksSeq)
     }
 
+    /// An idle thread's card of asks is up (its sub-agents may still be working).
+    private func asksShowing(_ thread: PhoneThread) -> Bool {
+        !(thread.asks ?? []).isEmpty && showsAsks(thread)
+    }
+
     /// A finished turn that needs nothing from Mike: the done card's place.
     private func isDone(_ thread: PhoneThread, messages: [PhoneMessage]) -> Bool {
         thread.status == .idle && !thread.needsYou && thread.archivedAt == nil && thread.working == nil
@@ -679,8 +688,9 @@ struct ThreadView: View {
     /// Which card is showing, so it's only that changing that animates.
     private func cardShowing(_ thread: PhoneThread, messages: [PhoneMessage]) -> String {
         if let pending = thread.pendingApproval { return pending.id }
-        if thread.isBusy || thread.working != nil { return "working" }
-        if !(thread.asks ?? []).isEmpty, showsAsks(thread) { return "asks" }
+        if thread.isBusy { return "working" }
+        if asksShowing(thread) { return "asks" }
+        if thread.working != nil { return "working" }
         return isDone(thread, messages: messages) ? "done" : "none"
     }
 
