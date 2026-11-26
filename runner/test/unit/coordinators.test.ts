@@ -223,6 +223,61 @@ test('a helper whose CLI dies reaches its coordinator, which stops waiting on it
   c.stop();
 });
 
+test('a helper that carries on after the network came back still reaches its coordinator', async () => {
+  const { h, c, project, antigravity } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'antigravity-main', model: 'gemini-4-neon' });
+  await tick();
+  antigravity.sessions.at(-1)!.result('completed');
+  await tick();
+  const started = c.startHelper(project.id, { title: 'Build triage', doneWhen: 'Deployed', brief: 'Build it' });
+  await tick();
+  const helperSession = antigravity.sessions.find((s) => s.opts.threadId === started.helperId)!;
+  helperSession.result('failed', undefined, 'fetch failed', { errorKind: 'network' });
+  await tick();
+  assert.equal(c.helpersWorking(coordinator.threadId), 1, 'still its run while it waits for the network');
+  // The API answers again: the runner carries on with a turn of its own.
+  h.clock.advance(5_000);
+  await tick();
+  await tick();
+  const carryOn = h.runner.events(started.helperId, { limit: 10_000 }).events.filter((e) => e.type === 'turn.started').length;
+  assert.equal(carryOn, 2, 'a carry-on turn started');
+  const live = antigravity.sessions.filter((s) => s.opts.threadId === started.helperId).at(-1)!;
+  live.text('m2', 'Deployed after all.');
+  live.result('completed');
+  await tick();
+  assert.equal(c.get(project.id).tasks[0].run?.status, 'completed');
+  assert.equal(c.helpersWorking(coordinator.threadId), 0);
+  const coordSession = antigravity.sessions.filter((s) => s.opts.threadId === coordinator.threadId).at(-1)!;
+  assert.ok(coordSession.sent.some((m) => m.text.includes('A helper turn finished') && m.text.includes('Deployed after all')));
+  c.stop();
+});
+
+test('a helper that ends while a restart refuses sends is saved interrupted, and the next runner wakes its coordinator', async () => {
+  const { h, c, project, antigravity, home } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'antigravity-main', model: 'gemini-4-neon' });
+  await tick();
+  antigravity.sessions.at(-1)!.result('completed');
+  await tick();
+  const started = c.startHelper(project.id, { title: 'Build triage', doneWhen: 'Deployed', brief: 'Build it' });
+  await tick();
+  h.runner.refuseNewTurns('The runner is restarting; send again in a moment.');
+  const helperSession = antigravity.sessions.find((s) => s.opts.threadId === started.helperId)!;
+  helperSession.text('m1', 'Merged, not deployed yet.');
+  helperSession.sink.exited(new Error('killed'));
+  await tick();
+  const run = c.get(project.id).tasks[0].run!;
+  assert.equal(run.status, 'interrupted');
+  assert.match(run.summary ?? '', /Merged, not deployed yet/);
+  assert.equal(c.helpersWorking(coordinator.threadId), 0);
+  c.stop();
+  const fresh = recoverFresh(h, home);
+  await tick();
+  const woke = fresh.antigravity.sessions.filter((s) => s.opts.threadId === coordinator.threadId).at(-1);
+  assert.ok(woke?.sent.some((m) => m.text.includes('interrupted helper work')), 'the next runner wakes the coordinator');
+  assert.match(fresh.c.get(project.id).tasks[0].run?.summary ?? '', /Merged, not deployed yet/, 'its report is kept');
+  fresh.c.stop();
+});
+
 test('a stale turn id cannot finish a resumed helper run', async () => {
   const { c, project, antigravity } = setup();
   c.create({ projectId: project.id, accountId: 'antigravity-main', model: 'gemini-4-neon' });

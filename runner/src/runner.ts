@@ -2475,6 +2475,7 @@ export class Runner {
     const messageSeq = reviewMessage?.seq ?? scheduledMessage?.seq ?? this.emit(st, userMessage(msg), msg.turnId).seq;
     try {
       this.emit(st, { type: 'turn.started', turnId: msg.turnId }, msg.turnId);
+      this.noteHelperStart(st, msg.turnId);
     } catch (e) {
       this.markDirty(st);
       throw e;
@@ -3257,6 +3258,7 @@ export class Runner {
     }
     const turnId = crypto.randomUUID();
     this.emit(st, wokeBy.length ? { type: 'turn.started', turnId, wokeBy } : { type: 'turn.started', turnId }, turnId);
+    this.noteHelperStart(st, turnId);
     rt.idleTimer?.cancel();
     rt.idleTimer = undefined;
     rt.turn = { turnId, startedAt: this.clock.now(), interruptRequested: false, auto: true, messages: [], edited: new Set(), access: rec.permissionMode };
@@ -3742,6 +3744,15 @@ export class Runner {
   }
 
   // A turn that ended without a result from the CLI (spawn failure, crash).
+  // A coordinator's helper starting a turn: its coordinator follows that
+  // turn from now on, so the one that ends the run is the one it hears
+  // about. A carry-on after the network came back starts a turn the
+  // coordinator never dispatched, whose end it otherwise threw away as
+  // stale, leaving the run "running" for good (Codex's review, 26 Nov 2026).
+  private noteHelperStart(st: ThreadState, turnId: string): void {
+    if (st.rec.coordinatorHelperFor) this.coordinators?.noteHelperTurn(st.rec.id, turnId);
+  }
+
   failTurn(st: ThreadState, message: string): void {
     const { rec, rt } = st;
     const turn = rt.turn;

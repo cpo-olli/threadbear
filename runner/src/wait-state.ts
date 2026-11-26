@@ -63,7 +63,7 @@ export const WAIT_MOVES: Move[] = [
   { from: ['working', 'card'], to: 'done', on: 'the turn ends with needs "nothing", or fails or is stopped' },
   { from: ['working'], to: 'review', on: 'the turn ends with a design review waiting' },
   { from: ['working'], to: 'job', on: 'the turn ends with a background job or a coordinator\'s helper still going' },
-  { from: ['done', 'scheduled', 'needsYou'], to: 'job', on: 'a coordinator\'s helper starts while it\'s idle, or the user reads it while its helper works' },
+  { from: ['done', 'scheduled', 'needsYou', 'review'], to: 'job', on: 'a coordinator\'s helper starts while it\'s idle, or the user reads it or answers its review while its helper works' },
   { from: ['working'], to: 'limit', on: 'the turn hits its login\'s usage limit' },
   { from: ['working', 'job'], to: 'onThreads', on: 'end_turn waits for other threads' },
   { from: ['working', 'job'], to: 'landing', on: 'end_turn hibernates until something it watches for, with commits not on main' },
