@@ -22,7 +22,7 @@ import { commandRule, ruleMayCover, shellWords } from '../codex/approvals.ts';
 import { toolGuidance, type ToolDefinition } from '../codex/tools.ts';
 import { fileContext, type NormalizerContext } from '../context.ts';
 import { formContent, formQuestions, type FormSchema } from '../elicitation.ts';
-import { acpCoordinatorTool, isHelperQuestionTool } from '../../coordinator-policy.ts';
+import { acpCoordinatorTool, archiveReadTool, isHelperQuestionTool } from '../../coordinator-policy.ts';
 import type { AdapterOutput, AgentAdapter, AgentSession, QuestionAnswer, SessionSink, StartSessionOptions, ToolApprovalAnswer, TurnResult, UserInput } from '../types.ts';
 import { SessionNotFoundError } from '../types.ts';
 import type { AcpAgent } from './agents.ts';
@@ -57,6 +57,9 @@ export type AcpAdapterDeps = {
   // The runner's data dir, where an agent keeps what Threadbear gives it
   // (Grok's hook: grok-guard.ts).
   dataDir?: string;
+  // Extra MCP servers for every session, for an agent that takes them
+  // (AcpAgent.takesMcpServers): Agent Archive, read at each session's start.
+  mcpServers?: () => Record<string, { command: string; args: string[] }>;
 };
 
 // How often a login whose turns don't report its limits is read (an agent
@@ -441,6 +444,9 @@ export class AcpSession implements AgentSession {
       mcpServers = [{ type: 'http', name: 'threadbear', url, headers: [{ name: 'Authorization', value: `Bearer ${this.mcp.token}` }] }];
       this.ownTools = new Set(defs.map((d) => `threadbear__${d.name}`));
     }
+    if (deps.agent.takesMcpServers) {
+      for (const [name, s] of Object.entries(deps.mcpServers?.() ?? {})) mcpServers.push({ name, command: s.command, args: s.args, env: [] });
+    }
 
     let res: SessionResult;
     try {
@@ -807,6 +813,13 @@ export class AcpSession implements AgentSession {
     this.proc.respond(id, optionId ? { outcome: { outcome: 'selected', optionId } } : { outcome: { outcome: 'cancelled' } });
   }
 
+  // One of Agent Archive's read tools, by name, with every frame of the call
+  // saying it was that same tool and none running or writing anything, as
+  // for the threadbear tools below. A call with no history never counts.
+  private archiveRead(mcpName: string | undefined, frames: ReturnType<typeof this.callFrames.get>): boolean {
+    return Boolean(mcpName && archiveReadTool(mcpName) && frames && [...frames.ids].every((i) => i === mcpName) && frames.named.get(mcpName) === frames.acting && frames.kinds.size <= 1 && ![...frames.kinds].some((k) => k === 'execute' || writesFiles(k)));
+  }
+
   private async permission(id: RequestId, p: { toolCall?: AcpToolCall; options?: PermissionOption[] }): Promise<void> {
     const options = Array.isArray(p.options) ? p.options : [];
     const frames = typeof p.toolCall?.toolCallId === 'string' && p.toolCall.toolCallId !== '' ? this.callFrames.get(p.toolCall.toolCallId) : undefined;
@@ -819,7 +832,7 @@ export class AcpSession implements AgentSession {
       const toolName = typeof p.toolCall?.name === 'string' ? p.toolCall.name : undefined;
       const externalEarly = (mcpCall || mcpNameEarly !== undefined) && !(mcpNameEarly !== undefined && this.ownTools.has(mcpNameEarly));
       const rawArgs = isPlainObject(p.toolCall?.rawInput) ? (p.toolCall.rawInput as Record<string, unknown>) : seen.input;
-      const policy = acpCoordinatorTool({ role: coord.role, kind: seen.kind, name: toolName, mcpName: mcpNameEarly, external: externalEarly });
+      const policy = acpCoordinatorTool({ role: coord.role, kind: seen.kind, name: toolName, mcpName: mcpNameEarly, external: externalEarly, readOnlyMcp: this.archiveRead(mcpNameEarly, frames) });
       const checkName = mcpNameEarly ? `mcp__${mcpNameEarly}` : (toolName ?? seen.kind ?? 'tool');
       let refused: string | undefined;
       try {
@@ -838,6 +851,8 @@ export class AcpSession implements AgentSession {
     }
     // Read at the moment it's asked, not when the turn began.
     if (this.mode === 'full') return this.answer(id, options, true, seen.id);
+    // Agent Archive only reads, so its tools go ahead in any mode.
+    if (this.archiveRead(p.toolCall ? this.deps.agent.mcpToolName?.(p.toolCall) : undefined, frames)) return this.answer(id, options, true, seen.id);
     // One of this session's own threadbear tools: its MCP server asks where
     // the tool needs it (tool-gate.ts), so a card here would be a second one.
     // Grok names the tool exactly, and a name it can't find doesn't run.

@@ -62,6 +62,9 @@ export type AcpAgent = {
   // The plugin a process started with these args must report running before
   // the model does anything each turn, or the turn is stopped (AcpSession).
   guardName?(args: string[]): string | undefined;
+  // Gets the runner's extra MCP servers (Agent Archive) as stdio servers in
+  // session/new. Tried on Antigravity 1.4.5 (26 Nov 2026); not yet on Grok.
+  takesMcpServers?: boolean;
   // Whether the agent trusts this folder, read once as a process starts.
   trusts?(cwd: string): boolean;
   // The agent writes into the folder its session opens in (Antigravity's
@@ -417,6 +420,7 @@ const ANTIGRAVITY: AcpAgent = {
   folderNote: (cwd) => `The project you're working in is ${cwd}: run commands there and use full paths under it. Your session's own folder is only a scratch space.`,
   toolInput: antigravityInput,
   readsInFolderGoAhead: ANTIGRAVITY_READ_KEYS,
+  takesMcpServers: true,
   limits: { command: 'usage', read: agyLimits },
   // An MCP tool's request says its server and tool in _meta.mcp (1.4.5).
   mcpToolName(call) {

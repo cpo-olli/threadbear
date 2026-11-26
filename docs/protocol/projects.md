@@ -782,10 +782,15 @@ select/complete/archive tasks, start or resume hidden helpers, manage open loops
 (`openLoop`, `updateLoop`, `closeLoop`), update its charter and interests, set a
 wake time and record answers to helper questions. It may also use `add_button`
 to offer a side job outside the project as a new thread; only the user's press
-starts it, so it can't use one to get round its own boundary. A Claude
-coordinator may also call Agent Archive's read tools (exact names in
-`coordinator-policy.ts`) to look back before asking the user something already
-settled. A coordinator and its helpers cannot start or hand work to any
+starts it, so it can't use one to get round its own boundary. A coordinator may also call
+Agent Archive's read tools (exact names in `coordinator-policy.ts`) to look
+back before asking the user something already settled: on Claude by tool name;
+on Antigravity (which gets the archive as a stdio server in `session/new`) only
+when every frame of the call agrees it is that tool. A Codex coordinator's
+app-server starts with plugins and apps off, every other configured MCP server
+is switched off for its thread, and it refuses to start if
+`mcpServerStatus/list` shows any other server still offering tools, as Codex
+runs MCP tools without asking. A coordinator and its helpers cannot start or hand work to any
 coordinator (update_project refuses the option there, and their thread keys
 refuse every `coordinators.*` write), and neither coordinator nor helper shells
 may use thread-owned RPC to create threads or mutate other work.

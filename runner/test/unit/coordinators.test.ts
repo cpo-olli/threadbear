@@ -566,7 +566,8 @@ test('coordinator and helper restrictions apply to thread-owned RPC, MCP tool li
   assert.equal(acpCoordinatorTool({ role: 'coordinator', kind: 'read', name: 'view_file' }).reason, undefined);
   assert.equal(acpCoordinatorTool({ role: 'coordinator', mcpName: 'threadbear__coordinator' }).reason, undefined);
   // Agent Archive only reads, so a coordinator can look back before asking; other servers stay out.
-  assert.ok(acpCoordinatorTool({ role: 'coordinator', external: true, mcpName: 'agent-archive__search_archive' }).reason, 'ACP sessions have no archive, so nothing claiming to be it is let through');
+  assert.ok(acpCoordinatorTool({ role: 'coordinator', external: true, mcpName: 'agent-archive__search_archive' }).reason, 'by name alone it is refused: the ACP adapter must vouch for every frame (readOnlyMcp)');
+  assert.equal(acpCoordinatorTool({ role: 'coordinator', external: true, mcpName: 'agent-archive__search_archive', readOnlyMcp: true }).reason, undefined);
   assert.ok(coordinatorTool('mcp__agent-archive__evil__write_file', {}, false).reason, 'a server named agent-archive__evil is not the archive');
   assert.ok(coordinatorTool('mcp__agent-archive__write', {}, false).reason, 'only the known read tools');
   assert.deepEqual(coordinatorTool('mcp__agent-archive__get_archive_context', {}, false), {});

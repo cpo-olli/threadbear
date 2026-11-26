@@ -33,6 +33,7 @@ import { CodexTools, dynamicToolSpecs, toolGuidance, type ToolDefinition } from 
 import { CodexNormalizer, limitsFromAccount, limitsFromRateLimits } from './normalize.ts';
 import { placePictures } from '../../pictures.ts';
 import { parseCommand, type SlashCommand } from '../../slash-commands.ts';
+import { ARCHIVE_READ_TOOL_NAMES } from '../../coordinator-policy.ts';
 import type {
   CodexNormalizerLike,
   ConsumeAccountRateLimitResetCreditResponse,
@@ -453,6 +454,44 @@ export function threadConfig(threadId: string, key?: string): Record<string, unk
   };
 }
 
+// A Codex coordinator stays read-only. Codex runs MCP tools without asking,
+// and config.toml's servers and plugins can make changes (node_repl,
+// connectors, cua-driver), so its process starts with plugins and apps off,
+// every configured server but Agent Archive is switched off for its thread,
+// and the session refuses to start if any other server still offers tools.
+// Agent Archive is kept only when Threadbear supplies it (its own command
+// and args) and config.toml's entry of that name adds nothing that changes
+// how it runs (an env like NODE_OPTIONS could load other code into it), and
+// then only with its read tools (Codex's review, 26 Nov 2026).
+export const COORDINATOR_CODEX_ARGS = ['--disable', 'plugins', '--disable', 'apps'];
+const COORDINATOR_MCP_KEEP = 'agent-archive';
+const PLAIN_ARCHIVE_KEYS = new Set(['command', 'args', 'enabled', 'startup_timeout_sec', 'tool_timeout_sec']);
+
+function plainArchiveEntry(entry: unknown): boolean {
+  if (entry === undefined) return true;
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+  // config/read adds environment_id "local" to every entry (0.172).
+  return Object.entries(entry).every(([k, v]) => PLAIN_ARCHIVE_KEYS.has(k) || (k === 'environment_id' && v === 'local') || v === null || (Array.isArray(v) && v.length === 0) || (typeof v === 'object' && v !== null && Object.keys(v).length === 0));
+}
+
+// configured: config/read's mcp_servers. supplied: Threadbear's own archive
+// server is in this session's config.
+export function coordinatorMcpOff(configured: Record<string, unknown>, supplied: boolean): Record<string, unknown> {
+  const keep = supplied && plainArchiveEntry(configured[COORDINATOR_MCP_KEEP]);
+  const names = new Set([...Object.keys(configured), ...(supplied ? [COORDINATOR_MCP_KEEP] : [])]);
+  return Object.fromEntries([...names].flatMap((n): [string, unknown][] => (n === COORDINATOR_MCP_KEEP && keep ? [[`mcp_servers.${n}.enabled_tools`, [...ARCHIVE_READ_TOOL_NAMES]]] : [[`mcp_servers.${n}.enabled`, false]])));
+}
+
+type McpStatus = { name?: unknown; runtimeStatus?: unknown; tools?: unknown };
+export function coordinatorMcpLeaks(statuses: readonly McpStatus[], keepArchive: boolean): string[] {
+  return statuses.flatMap((s) => {
+    const name = typeof s.name === 'string' ? s.name : '(unnamed)';
+    const tools = s.tools && typeof s.tools === 'object' ? Object.keys(s.tools) : [];
+    if (name === COORDINATOR_MCP_KEEP && keepArchive) return tools.every((t) => ARCHIVE_READ_TOOL_NAMES.includes(t)) ? [] : [name];
+    return s.runtimeStatus === 'disabled' && tools.length === 0 ? [] : [name];
+  });
+}
+
 // Servers as config overrides, beside config.toml's own [mcp_servers].
 export function mcpServerConfig(servers: Record<string, { command: string; args: string[] }> = {}): Record<string, unknown> {
   return Object.fromEntries(Object.entries(servers).flatMap(([name, s]) => [[`mcp_servers.${name}.command`, s.command], [`mcp_servers.${name}.args`, s.args]]));
@@ -614,7 +653,7 @@ export class CodexSession implements AgentSession {
     });
     this.proc = new AppServerProcess({
       binary: deps.codexBinary(),
-      args: deps.codexArgs,
+      args: opts.coordinator?.role === 'coordinator' ? [...(deps.codexArgs ?? []), ...COORDINATOR_CODEX_ARGS] : deps.codexArgs,
       account: opts.account,
       env: opts.env,
       cwd: opts.cwd,
@@ -681,13 +720,18 @@ export class CodexSession implements AgentSession {
       await this.proc.close();
       return;
     }
+    const coordinator = opts.coordinator?.role === 'coordinator';
+    const supplied = mcpServerConfig(this.deps.mcpServers?.());
+    const lockdown = coordinator ? coordinatorMcpOff(await this.configuredMcpServers(opts.cwd), 'mcp_servers.agent-archive.command' in supplied) : {};
+    const keepArchive = coordinator && 'mcp_servers.agent-archive.enabled_tools' in lockdown;
+    if (this.state !== 'starting') return;
     const common = {
       cwd: opts.cwd,
       ...(this.model ? { model: this.model } : {}),
       ...threadPolicy(opts.coordinator?.role === 'coordinator' ? 'ask' : this.mode),
       // The thread's projects, as developer instructions: config.toml's
       // own key, set per thread like the rest of threadConfig.
-      config: { ...home, ...threadConfig(opts.threadId, opts.env?.THREADBEAR_THREAD_KEY), ...mcpServerConfig(this.deps.mcpServers?.()), ...(opts.instructions ? { developer_instructions: opts.instructions } : {}) },
+      config: { ...home, ...threadConfig(opts.threadId, opts.env?.THREADBEAR_THREAD_KEY), ...supplied, ...lockdown, ...(opts.instructions ? { developer_instructions: opts.instructions } : {}) },
     };
     let res: ThreadStartResponse;
     if (opts.resume) {
@@ -711,6 +755,11 @@ export class CodexSession implements AgentSession {
     const thread = res?.thread;
     if (!thread || typeof thread.id !== 'string') throw new Error('Codex started a thread without an id');
     this.threadId = thread.id;
+    if (coordinator) {
+      const leaks = coordinatorMcpLeaks(await this.mcpStatuses(thread.id), keepArchive);
+      if (leaks.length) throw new Error(`This project coordinator didn't start: on Codex it would still have tools from ${leaks.join(', ')}, which can make changes outside its read-only boundary.`);
+      if (this.state !== 'starting') return;
+    }
     this.sentCwd = opts.cwd;
     this.normalizer.setThread?.(thread.id, typeof res.model === 'string' ? res.model : undefined);
     if (typeof res.model === 'string') this.liveModel = res.model;
@@ -725,6 +774,27 @@ export class CodexSession implements AgentSession {
     for (const [m, p] of early) this.enqueue(() => this.route(m, p));
     this.readAccount();
     this.enqueue(() => this.next());
+  }
+
+  // The effective config's MCP servers for this folder, project layers
+  // included. A coordinator fails closed if Codex can't say.
+  private async configuredMcpServers(cwd: string): Promise<Record<string, unknown>> {
+    const r = await this.proc.request<{ config?: { mcp_servers?: unknown } }>('config/read', { cwd });
+    const servers = r?.config?.mcp_servers;
+    return servers && typeof servers === 'object' && !Array.isArray(servers) ? (servers as Record<string, unknown>) : {};
+  }
+
+  private async mcpStatuses(threadId: string): Promise<McpStatus[]> {
+    const out: McpStatus[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 50; page++) {
+      const r = await this.proc.request<{ data?: McpStatus[]; nextCursor?: string | null }>('mcpServerStatus/list', { threadId, detail: 'toolsAndAuthOnly', ...(cursor ? { cursor } : {}) });
+      if (!Array.isArray(r?.data)) throw new Error("Codex didn't list this coordinator's MCP servers.");
+      out.push(...r.data);
+      if (!r.nextCursor) return out;
+      cursor = r.nextCursor;
+    }
+    throw new Error("Codex listed too many MCP servers for this coordinator.");
   }
 
   // thread/resume, with the retries the plan asks for: unarchive once, and

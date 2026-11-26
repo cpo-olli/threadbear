@@ -492,6 +492,7 @@ async function main(): Promise<void> {
         toolsFor: codexStyleTools,
         extraGuidance: () => richGuidance(),
         dataDir: cfg.home,
+        mcpServers: archiveServers,
       }),
     ]),
   );

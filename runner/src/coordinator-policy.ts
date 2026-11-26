@@ -20,11 +20,18 @@ export const HELPER_THREADBEAR_TOOLS = PROJECT_READS;
 // Agent Archive's tools (agent-archive.ts), which only search and read past
 // threads, so a coordinator can look back before asking the user something
 // already settled. Exact names, not a prefix: a server called
-// "agent-archive__x" must not ride on it. Claude only: Threadbear gives the
-// archive to Claude and Codex sessions, and ACP sessions don't get it.
+// "agent-archive__x" must not ride on it. Claude names them
+// mcp__agent-archive__<tool>; an ACP agent's request agent-archive__<tool>
+// (AcpAgent.mcpToolName), which the ACP adapter also checks every frame of
+// the call agrees on. Codex coordinators keep only this server (codex
+// adapter, coordinatorMcpOff).
 const ARCHIVE_READ_TOOLS = new Set(['get_archive_context', 'search_archive', 'list_recent_threads', 'list_user_messages', 'read_archive_thread', 'find_computer_history', 'read_computer_history_summary']);
+export const ARCHIVE_READ_TOOL_NAMES: readonly string[] = [...ARCHIVE_READ_TOOLS];
+export function archiveReadTool(serverAndTool: string): boolean {
+  return serverAndTool.startsWith('agent-archive__') && ARCHIVE_READ_TOOLS.has(serverAndTool.slice('agent-archive__'.length));
+}
 export function readOnlyMcpTool(name: string): boolean {
-  return name.startsWith('mcp__agent-archive__') && ARCHIVE_READ_TOOLS.has(name.slice('mcp__agent-archive__'.length));
+  return name.startsWith('mcp__') && archiveReadTool(name.slice('mcp__'.length));
 }
 
 export const HELPER_REPORT = 'Report this question or blocked operation to the coordinator in your result and stop this job. The coordinator will answer from its instructions or ask the user, then resume you. Do not open a user card or try another way to get approval.';
@@ -59,7 +66,9 @@ export function coordinatorTool(name: string, _input: Record<string, unknown>, h
 }
 
 // ACP permission policy for coordinator and helper sessions.
-export function acpCoordinatorTool(p: { role: 'coordinator' | 'helper'; kind?: string; name?: string; mcpName?: string; external?: boolean }): { reason?: string } {
+// readOnlyMcp: the ACP adapter found the call is one of Agent Archive's read
+// tools, every frame agreeing (archiveReadTool).
+export function acpCoordinatorTool(p: { role: 'coordinator' | 'helper'; kind?: string; name?: string; mcpName?: string; external?: boolean; readOnlyMcp?: boolean }): { reason?: string } {
   const tb = p.mcpName ? threadbearToolName(p.mcpName) : undefined;
   if (p.role === 'helper') {
     if (tb !== undefined) return HELPER_THREADBEAR_TOOLS.has(tb) ? {} : { reason: HELPER_REPORT };
@@ -69,6 +78,7 @@ export function acpCoordinatorTool(p: { role: 'coordinator' | 'helper'; kind?: s
   if (tb !== undefined) {
     return COORDINATOR_THREADBEAR_TOOLS.has(tb) ? {} : { reason: 'This Threadbear tool is not available to a project coordinator.' };
   }
+  if (p.readOnlyMcp) return {};
   if (p.external) {
     return { reason: 'The project coordinator can read and orchestrate. Delegate external tool calls to a helper with the coordinator tool (startHelper).' };
   }
