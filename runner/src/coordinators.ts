@@ -238,18 +238,21 @@ export class Coordinators {
             taskMove(task, 'blocked');
             task.run.summary = 'The runner stopped partway through this helper’s turn without stopping cleanly (a crash or a power cut).';
             task.run.restart = 'stop';
-          } else if (task.run?.status === 'interrupted' && !task.run.restart && task.state === 'blocked' && OLD_RESTART_SUMMARIES.includes(task.run.summary ?? '')) {
-            // Cut off by a runner from before the restart marks.
+          } else if (task.run?.status === 'interrupted' && !task.run.restart && task.state === 'blocked' && OLD_RESTART_SUMMARIES.includes(task.run.summary ?? '') && deps.clock.now() - Date.parse(task.run.updatedAt) <= STOPPED_CARRY_ON_MAX_AGE_MS) {
+            // Cut off by a runner from before the restart marks, lately: an
+            // older one the coordinator has had its wake for is left alone.
             task.run.restart = 'update';
             legacy = true;
           }
         }
         // That runner also saved a restart wake for it, which the carry-on
         // replaces (one it can't carry on gets its own): unsent, it goes.
-        if (legacy && row.reports?.some((r) => r.id.startsWith('restart:') && !r.sentAs)) {
-          row.reports = row.reports.filter((r) => !(r.id.startsWith('restart:') && !r.sentAs));
-          if (!row.reports.length) delete row.reports;
+        if (legacy) {
           owed = false;
+          if (row.reports?.some((r) => r.id.startsWith('restart:') && !r.sentAs)) {
+            row.reports = row.reports.filter((r) => !(r.id.startsWith('restart:') && !r.sentAs));
+            if (!row.reports.length) delete row.reports;
+          }
         }
         if (owed) this.restartReport(row);
         this.rows.set(row.projectId, row);
@@ -459,7 +462,9 @@ export class Coordinators {
   // review, 26 Nov 2026).
   helpersWorking(threadId: string): number {
     if (!this.deps.enabled()) return 0;
-    return this.forThread(threadId)?.tasks.filter((t) => t.run && (['queued', 'running'].includes(t.run.status) || (t.run.status === 'interrupted' && (t.run.restart === 'update' || t.run.restart === 'stop')))).length ?? 0;
+    const row = this.forThread(threadId);
+    const toCarryOn = (t: Coordinator['tasks'][number]) => row?.state === 'active' && t.state !== 'done' && t.run?.status === 'interrupted' && (t.run.restart === 'update' || t.run.restart === 'stop');
+    return row?.tasks.filter((t) => t.run && (['queued', 'running'].includes(t.run.status) || toCarryOn(t))).length ?? 0;
   }
   // Whether a helper thread's run is one its active coordinator still has going.
   helperRunActive(helperThreadId: string): boolean {

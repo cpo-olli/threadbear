@@ -541,7 +541,8 @@ export type Runtime = {
   // run isn't over, so its coordinator hears when the turn that wake opens
   // ends, or this turn's result once nothing more is coming
   // (settleHelperPending).
-  helperPending?: { outcome: 'completed' | 'failed'; text: string; turnId: string };
+  // Not evicted for room meanwhile (makeRoomForCli): that would end it.
+  helperPending?: { outcome: 'completed'; text: string; turnId: string };
   activeAt: number; // last turn start or end, for picking which CLI to release
   approvals: Map<string, PendingApproval>;
   // Calls the card reviewer is deciding on (runner/card-review.ts), which
@@ -2808,7 +2809,7 @@ export class Runner {
     const live = [...this.threads.values()].filter((t) => t !== starting && runningSession(t.rt));
     if (live.length < this.cfg.maxLive) return;
     const idle = live
-      .filter((t) => !t.rt.turn && t.rt.approvals.size === 0 && t.rec.queue.length === 0 && t.rt.tasks.length === 0)
+      .filter((t) => !t.rt.turn && t.rt.approvals.size === 0 && t.rec.queue.length === 0 && t.rt.tasks.length === 0 && !t.rt.helperPending)
       .sort((a, b) => a.rt.activeAt - b.rt.activeAt);
     for (const t of idle.slice(0, live.length - this.cfg.maxLive + 1)) {
       this.log.info('releasing the longest-idle CLI to stay under the cap', { threadId: t.rec.id, maxLive: this.cfg.maxLive });
@@ -3495,8 +3496,8 @@ export class Runner {
         // waiting on it, and finishing the run now refused every tool call
         // of the turn that read its result, whose words never reached the
         // coordinator (the Convex AI guidance coordinator, 26 Nov 2026).
-        if (this.wakes(st) && runningSession(rt) && !this.stopping && (rt.tasks.length > 0 || rt.wakeTimer)) {
-          rt.helperPending = { outcome: outcome === 'completed' ? 'completed' : 'failed', text: turn.lastText || r.error || '', turnId: turn.turnId };
+        if (outcome === 'completed' && this.wakes(st) && runningSession(rt) && !this.stopping && (rt.tasks.length > 0 || rt.wakeTimer)) {
+          rt.helperPending = { outcome, text: turn.lastText || r.error || '', turnId: turn.turnId };
         } else {
           this.coordinators?.onHelperTurn(rec.id, outcome, turn.lastText || r.error || '', turn.turnId);
         }
