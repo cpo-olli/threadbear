@@ -130,11 +130,11 @@ pasted (`Desktop only for now.` for all three) is left out of this table.
 | Needs you or done | `turn.needs` | Yes | Yes | Yes |
 | Needs-you card | `turn.asks` | Yes | Yes | Yes |
 | Done card's follow-ups | `turn.next` | Yes | Yes | Yes |
+| Done card's pick-one follow-up mode | `turn.nextPick` | Yes | Yes | Yes |
+| Done card's recommended follow-up | `turn.nextSuggested` | Yes | Yes | Yes |
 | Another lab's review ledger | `turn.review` | Yes | Yes | Yes |
 | Done card's loose ends | `turn.looseEnds` | Yes | Yes | Yes |
 | What it cost | `turn.costUsd` | Yes | No: Not drawn yet. | Yes |
-| Done card's pick-one follow-up mode | `turn.nextPick` | Yes | No: Not drawn yet. | Yes |
-| Done card's recommended follow-up | `turn.nextSuggested` | Yes | No: Not drawn yet. | Yes |
 | Completed, stopped or failed | `turn.outcome` | No: Not drawn yet. | Yes | No: Not drawn yet. |
 | Fix for a known failure (usage limit, context, sign-in, network) | `turn.errorKind` | No: Not drawn yet. | Yes | No: Not drawn yet. |
 | A failed turn's error | `turn.error` | No: Not drawn yet. | No: Not drawn yet. | No: Not drawn yet. |
