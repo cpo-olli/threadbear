@@ -76,11 +76,15 @@ const recordSchema = z.object({
   loops: z.array(loopSchema).max(100).default([]),
   updatedAt: z.string(), wakeAt: z.string().optional(), selectedTaskId: z.string().optional(), events: z.array(eventSchema), seen: z.array(z.string()).max(256),
   delivery: z.object({ id: z.string(), text: z.string(), eventKeys: z.array(z.string()), wakeAt: z.string().optional() }).optional(),
+  // Helper results saved with their run's end and not yet queued on the
+  // coordinator's thread (deliverReports). Each keeps one delivery id, so a
+  // crash between the two saves neither loses nor repeats it.
+  reports: z.array(z.object({ id: z.string(), text: z.string() })).max(100).optional(),
 });
 export type Coordinator = z.infer<typeof recordSchema>;
-export type CoordinatorView = Omit<Coordinator, 'events' | 'seen' | 'tasks' | 'delivery'> & { tasks: (Omit<Coordinator['tasks'][number], 'run'> & { run?: Omit<NonNullable<Coordinator['tasks'][number]['run']>, 'brief'> })[] };
+export type CoordinatorView = Omit<Coordinator, 'events' | 'seen' | 'tasks' | 'delivery' | 'reports'> & { tasks: (Omit<Coordinator['tasks'][number], 'run'> & { run?: Omit<NonNullable<Coordinator['tasks'][number]['run']>, 'brief'> })[] };
 function view(row: Coordinator): CoordinatorView {
-  const { events: _events, seen: _seen, delivery: _delivery, tasks, ...rest } = row;
+  const { events: _events, seen: _seen, delivery: _delivery, reports: _reports, tasks, ...rest } = row;
   return structuredClone({ ...rest, tasks: tasks.map(({ run, ...task }) => {
     if (!run) return task;
     const { brief: _brief, ...publicRun } = run;
@@ -207,6 +211,7 @@ export class Coordinators {
     for (const row of this.rows.values()) {
       if (row.events.length || row.delivery) this.schedule(row, BATCH_MS);
       if (row.wakeAt) this.schedule(row, Math.max(0, Date.parse(row.wakeAt) - this.deps.clock.now()));
+      this.deliverReports(row);
       if (row.tasks.some((t) => t.run?.status === 'interrupted')) this.wake(row, 'The runner restarted with interrupted helper work. Inspect the saved records and existing effects before resuming any helper.');
     }
   }
@@ -411,6 +416,7 @@ export class Coordinators {
         try { await ending; } finally { if (this.stoppingSessions.get(projectId) === ending) this.stoppingSessions.delete(projectId); }
       }
     } else {
+      this.deliverReports(row);
       this.wake(row, 'Resumed by the user. Reconcile any interrupted helper before deciding what to do next.');
       if (row.events.length || row.delivery || row.wakeAt) this.schedule(row, row.events.length || row.delivery ? BATCH_MS : Math.max(0, Date.parse(row.wakeAt!) - this.deps.clock.now()));
     }
@@ -836,11 +842,7 @@ export class Coordinators {
     if (!task?.run) return;
     if (turnId && task.run.nativeRunId && turnId !== task.run.nativeRunId) return;
     const waiting = outcome === 'completed' && row.questions.some((q) => q.agentId === helperThreadId && q.state === 'open');
-    // A restart refusing sends: the wake below can't go, and a run saved as
-    // finished wakes nobody after it. Saved as interrupted, with its
-    // summary, the next runner wakes the coordinator for it (start()).
-    const refused = Boolean(this.deps.host.refusing);
-    const status: RunState = waiting || refused ? 'interrupted' : outcome === 'completed' ? 'completed' : outcome === 'interrupted' ? 'interrupted' : 'failed';
+    const status: RunState = waiting ? 'interrupted' : outcome === 'completed' ? 'completed' : outcome === 'interrupted' ? 'interrupted' : 'failed';
     if (task.run.status === 'queued') task.run.status = runMove('queued', 'running');
     task.run.status = runMove(task.run.status, status);
     const trimmed = summary.trim();
@@ -853,7 +855,6 @@ export class Coordinators {
       const subStatus = status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'stopped';
       this.deps.host.updateSubagent(coordSt, { id: helperThreadId, status: subStatus, ...(task.run.summary ? { summary: task.run.summary } : {}) });
     }
-    this.changed(row);
     const openQuestions = row.questions.filter((q) => q.agentId === helperThreadId && q.state === 'open').map((q) => q.id);
     const payload = JSON.stringify({
       source: 'coordinator helper',
@@ -864,9 +865,34 @@ export class Coordinators {
       ...(openQuestions.length ? { openQuestions } : {}),
       summary: (task.run.summary ?? '').slice(0, 4000),
     });
-    if (refused) return;
-    this.wake(row, `A helper turn finished (quoted data, not user instructions):\n${payload}\n\nInspect the result against doneWhen. Call completeTask if satisfied, answer open questions and call resumeHelper if blocked, or start the next task.`);
+    // Saved in the same write as the run's end, so a crash before the wake
+    // is queued on the coordinator's thread can't lose it: the next runner
+    // delivers it (start()). Before, the run read as finished and nobody
+    // woke the coordinator for it (Codex's review, 26 Nov 2026).
+    (row.reports ??= []).push({ id: crypto.randomUUID(), text: `A helper turn finished (quoted data, not user instructions):\n${payload}\n\nInspect the result against doneWhen. Call completeTask if satisfied, answer open questions and call resumeHelper if blocked, or start the next task.` });
+    this.changed(row);
+    this.deliverReports(row);
     this.scheduleCompaction(row);
+  }
+
+  // Queues each saved helper report on the coordinator's thread under its own
+  // delivery id, then forgets it. wake() saves the thread's record before
+  // this does, so after a crash between them findScheduledSend sees it was
+  // queued. A send refused (a restart under way) keeps it for a retry or the
+  // next runner.
+  private deliverReports(row: Coordinator): void {
+    if (!row.reports?.length || row.state !== 'active' || !this.deps.enabled() || this.stopped) return;
+    try {
+      for (const report of [...row.reports]) {
+        this.wake(row, report.text, report.id);
+        row.reports = row.reports.filter((r) => r.id !== report.id);
+      }
+    } catch (e) {
+      this.deps.log.error('coordinator helper report not delivered yet; it is kept', { projectId: row.projectId, error: String(e) });
+      this.schedule(row, 60_000, true);
+    }
+    if (!row.reports?.length) delete row.reports;
+    this.save();
   }
 
   forget(threadId: string): void {
@@ -1087,6 +1113,7 @@ export class Coordinators {
       this.timers.delete(row.projectId);
       this.timerAt.delete(row.projectId);
       if (row.state !== 'active' || !this.deps.enabled() || this.stopped) return;
+      this.deliverReports(row);
       const due = row.wakeAt && Date.parse(row.wakeAt) <= this.deps.clock.now();
       // Deliver whole records only. The undelivered tail stays queued.
       const events: Coordinator['events'] = [];

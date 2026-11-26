@@ -266,7 +266,7 @@ test('a helper that carries on after the network came back still reaches its coo
   c.stop();
 });
 
-test('a helper that ends while a restart refuses sends is saved interrupted, and the next runner wakes its coordinator', async () => {
+test('a helper that ends while a restart refuses sends keeps its report, and the next runner delivers it', async () => {
   const { h, c, project, antigravity, home } = setup();
   const { coordinator } = c.create({ projectId: project.id, accountId: 'antigravity-main', model: 'gemini-4-neon' });
   await tick();
@@ -280,15 +280,78 @@ test('a helper that ends while a restart refuses sends is saved interrupted, and
   helperSession.sink.exited(new Error('killed'));
   await tick();
   const run = c.get(project.id).tasks[0].run!;
-  assert.equal(run.status, 'interrupted');
-  assert.match(run.summary ?? '', /Merged, not deployed yet/);
+  assert.equal(run.status, 'failed', 'its real outcome');
   assert.equal(c.helpersWorking(coordinator.threadId), 0);
+  assert.equal(c.forThread(coordinator.threadId)!.reports?.length, 1, 'kept for later');
   c.stop();
   const fresh = recoverFresh(h, home);
   await tick();
   const woke = fresh.antigravity.sessions.filter((s) => s.opts.threadId === coordinator.threadId).at(-1);
-  assert.ok(woke?.sent.some((m) => m.text.includes('interrupted helper work')), 'the next runner wakes the coordinator');
-  assert.match(fresh.c.get(project.id).tasks[0].run?.summary ?? '', /Merged, not deployed yet/, 'its report is kept');
+  assert.ok(woke?.sent.some((m) => m.text.includes('A helper turn finished') && m.text.includes('Merged, not deployed yet')), 'the next runner delivers the report');
+  assert.equal(fresh.c.forThread(coordinator.threadId)!.reports, undefined);
+  fresh.c.stop();
+});
+
+test('a crash before the helper report is queued on the coordinator loses nothing: the next runner delivers it once', async () => {
+  const { h, c, project, claude, home } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  // Its own turn is still going, so the wake queues behind it.
+  const started = c.startHelper(project.id, { title: 'Build triage', doneWhen: 'Deployed', brief: 'Build it' });
+  await tick();
+  // The process dies as the wake is saved on the coordinator's thread: its
+  // record never reaches the disk.
+  const save = h.runner.store.save.bind(h.runner.store);
+  let crashed = false;
+  h.runner.store.save = (record) => {
+    if (record.id === coordinator.threadId && record.queue.some((q) => q.text.includes('A helper turn finished'))) { crashed = true; throw Error('Crash before thread save'); }
+    save(record);
+  };
+  const helperSession = claude.sessions.find((s) => s.opts.threadId === started.helperId)!;
+  helperSession.text('m1', 'Deployed to prod.');
+  helperSession.result('completed');
+  await tick();
+  assert.ok(crashed, 'the crash happened');
+  assert.equal(c.get(project.id).tasks[0].run?.status, 'completed');
+  c.stop();
+  h.runner.store.save = save;
+  const fresh = recoverFresh(h, home);
+  await tick();
+  const delivered = () => fresh.host.events(coordinator.threadId, { limit: 10_000 }).events.filter((e) => e.type === 'user.message' && e.text.includes('Deployed to prod.')).length
+    + fresh.host.threads.get(coordinator.threadId)!.rec.queue.filter((q) => q.text.includes('Deployed to prod.')).length;
+  assert.equal(delivered(), 1, 'delivered once by the next runner');
+  assert.equal(fresh.c.forThread(coordinator.threadId)!.reports, undefined);
+  fresh.c.stop();
+});
+
+test('a crash after the helper report is queued but before it is forgotten does not deliver it twice', async () => {
+  const { h, c, project, claude, home } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  // Its own turn is still going, so the wake queues behind it.
+  const started = c.startHelper(project.id, { title: 'Build triage', doneWhen: 'Deployed', brief: 'Build it' });
+  await tick();
+  // The thread's record with the wake is saved, then the process dies.
+  const save = h.runner.store.save.bind(h.runner.store);
+  let crashed = false;
+  h.runner.store.save = (record) => {
+    save(record);
+    if (record.id === coordinator.threadId && record.queue.some((q) => q.text.includes('A helper turn finished'))) { crashed = true; throw Error('Crash after thread save'); }
+  };
+  const helperSession = claude.sessions.find((s) => s.opts.threadId === started.helperId)!;
+  helperSession.text('m1', 'Deployed to prod.');
+  helperSession.result('completed');
+  await tick();
+  assert.ok(crashed, 'the crash happened');
+  assert.equal(c.forThread(coordinator.threadId)!.reports?.length, 1, 'still on the books when the process died');
+  c.stop();
+  h.runner.store.save = save;
+  const fresh = recoverFresh(h, home);
+  await tick();
+  const delivered = fresh.host.events(coordinator.threadId, { limit: 10_000 }).events.filter((e) => e.type === 'user.message' && e.text.includes('Deployed to prod.')).length
+    + fresh.host.threads.get(coordinator.threadId)!.rec.queue.filter((q) => q.text.includes('Deployed to prod.')).length;
+  assert.equal(delivered, 1);
+  assert.equal(fresh.c.forThread(coordinator.threadId)!.reports, undefined);
   fresh.c.stop();
 });
 
