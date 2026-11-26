@@ -288,7 +288,10 @@ export const inboxGuessPart = {
   // guess (always a show), never archives. Not one he's starred, already
   // looked at the done card of, or brought back out of the archive once
   // (keptOut, which "Should have shown me" sets too), nor a reminder he set
-  // himself (isReminder): those are his.
+  // himself (isReminder), nor one he asked for as its own thread
+  // (detached): those are his. A detached reply is often the answer he
+  // wanted, and the model treats a report from another thread as a skip
+  // (26 Nov 2026, the perpetual spinach lookup).
   quietArchive(this: Runner, st: ThreadState, seq: number, guesses: Guess[]): void {
     const { rec, rt } = st;
     if (!experimentOn(this.cfg.home, QUIET_INBOX_MINE)) return;
@@ -296,7 +299,7 @@ export const inboxGuessPart = {
     // default model, labelled so (models/index.ts), which doesn't count.
     const strong = guesses.find((g) => g.strong && (g.by === OPUS || g.by.startsWith(`${OPUS} on `)));
     if (!strong?.skip || guesses.some((g) => g.by === 'rule')) return;
-    if (rec.starredAt || rec.keptOut || rec.reviewOf || rec.coordinatorHelperFor || rec.lastSeenSeq >= seq || isReminder(rec) || this.coordinators?.forThread(rec.id)) return;
+    if (rec.detached || rec.starredAt || rec.keptOut || rec.reviewOf || rec.coordinatorHelperFor || rec.lastSeenSeq >= seq || isReminder(rec) || this.coordinators?.forThread(rec.id)) return;
     // A design review waiting on his answer is his to see (Codex's review).
     if (rec.reviews?.some((r) => r.status === 'pending')) return;
     // The models took a moment: anything since decides instead, as in

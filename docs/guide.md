@@ -895,10 +895,11 @@ that finishes with nothing for you is archived too when a model judges you
 didn't need to read the reply, with a note in the thread giving its reason.
 Not one with follow-ups, anything left open or a design review waiting for
 you, one you've starred, one you
-had open as it finished, or one you've brought back out of the archive
-before. To check what it hid, a daily thread lists the ones it archived
-the day before, each with the model's reason: tell it which you should have
-seen, and it brings them back and writes the misses down. Or right-click an
+had open as it finished, one you've brought back out of the archive
+before, or one you asked for as its own thread. To check what it hid, a
+daily thread lists the ones it archived the day before, each with the model's
+reason: tell it which you should have seen, and it brings them back and
+writes the misses down. Or right-click an
 archived thread and pick Should Have Shown Me, which brings it straight
 back to your inbox and tells the model it got that one wrong.
 

@@ -484,6 +484,28 @@ test("one he's already looked at, starred, or once brought back is his to put aw
   assert.deepEqual(quietLines(h), []);
 });
 
+test("a thread he asked for as its own stays, even when Opus says skip", async () => {
+  const h = setup({ quiet: true, strong: '{"guess":"skip","why":"A report from another thread that went normally."}' });
+  const parent = mine(h, 'The morning brief');
+  // create_thread's nested: false. helperNobodyTouched leaves it for this
+  // path; Quiet inbox for his own threads must not hide the answer.
+  const own = h.runner.create({
+    text: 'Where can I get perpetual spinach?',
+    accountId: 'claude-main',
+    startedBy: { kind: 'thread', label: 'Agent', threadId: parent },
+    detached: true,
+  }).thread.id;
+  finish(h, own, { needs: 'nothing' }, 'It is leaf beet. Buy the Fothergill packet at Bunnings.');
+  await until(() => h.lines().some((l) => l.threadId === own && l.kind === 'guess'), 'the guess written down');
+  await settle();
+  assert.equal(h.runner.get(own).archivedAt, undefined, 'a detached thread stays');
+  assert.equal(quietLines(h).some((l) => l.threadId === own), false);
+  // His own thread still goes, so the experiment is what would have archived it.
+  const his = mine(h, 'Land the panel');
+  finish(h, his);
+  await until(() => Boolean(h.runner.get(his).archivedAt), 'his own thread archived');
+});
+
 test('a reminder he set himself (an X bookmark) stays in the inbox, though its guess is still written down', async () => {
   const h = setup({ quiet: true, strong: '{"guess":"skip","why":"A routine note on a post."}' });
   const bookmark = h.runner.create({ text: 'I bookmarked this X post. Write me a short note on it.', accountId: 'claude-main', startedBy: { kind: 'tool', label: 'X bookmarks', icon: 'bookmark' } }).thread.id;

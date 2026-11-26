@@ -781,10 +781,13 @@ and no rule's guess is among them. Opus itself: when only Haiku answered,
 or a pool with no Claude login had another agent answer on its own default
 (its `by` then says `<provider> default on <login>`), nothing happens. Nor
 for a thread that's starred, `keptOut` (brought back out of the archive by
-hand once), another lab's review, has a design review waiting on Mike, a
-reminder he set himself (started by the tool `X bookmarks`: a bookmarked
-post is something he means to look into), or whose done card he has
-already seen (`lastSeenSeq >= seq`: he had it open as it finished). The checks `settleQuietly` makes are made again, as the
+hand once), `detached` (he asked for it as its own thread; the model treats
+a report from another thread as a skip, which is how the 26 Nov perpetual
+spinach lookup could have been hidden again), another lab's review, has a
+design review waiting on Mike, a reminder he set himself (started by the
+tool `X bookmarks`: a bookmarked post is something he means to look into),
+or whose done card he has already seen (`lastSeenSeq >= seq`: he had it
+open as it finished). The checks `settleQuietly` makes are made again, as the
 models took a moment: no turn, edit or queued message, still `finished`,
 the done card still the last, the thread still in the inbox, and no thread
 it started gone back to work. Then a `system.note` ("Archived by Quiet inbox on <when>: it finished
