@@ -275,10 +275,6 @@ export function buildThreadbearTools(
     gateway?: () => string | undefined;
     gatewayHealth?: () => Promise<ConnectorService[] | undefined>;
     remote?: () => RemoteControl | undefined;
-    // Experiment reviewCanvas: show_options offers marks on its pictures
-    // (experiments/reviewCanvas.md). Read once, here, as it changes the
-    // tool's shape; the runner drops marks itself with it off.
-    reviewCanvas?: () => boolean;
     // The once-a-turn note asking for a card in plain words (needs.ts,
     // plainCardNudge). Off only in tests about the rest of end_turn, which
     // would otherwise each have to answer it first.
@@ -795,8 +791,7 @@ export function buildThreadbearTools(
   };
 
   // The agent's marks on a picture (docs/protocol/events.md, "Marks: the
-  // canvas"), only with the reviewCanvas experiment on.
-  const canvas = opts.reviewCanvas?.() ?? false;
+  // canvas").
   // Taught once, on the option's; a shot's are the same without the words.
   const said = (t: z.ZodTypeAny, words: string, teach: boolean) => (teach ? t.describe(words) : t);
   const marks = (teach: boolean) => z.array(z.object({
@@ -820,9 +815,9 @@ export function buildThreadbearTools(
           shots: z.array(z.object({
             path: z.string().min(1),
             title: z.string().max(200).optional().describe('What it shows: "Mid-drag". The same across options.'),
-            ...(canvas ? { marks: marks(false) } : {}),
+            marks: marks(false),
           })).max(8).optional().describe('More images, videos or pages of this option, after path.'),
-          ...(canvas ? { marks: marks(true) } : {}),
+          marks: marks(true),
           url: z.string().max(2000).optional().describe('Where it runs live, http(s).'),
           note: z.string().max(4000).optional(),
           reference: z.boolean().optional().describe('Context to compare against, not to pick.'),
@@ -830,7 +825,7 @@ export function buildThreadbearTools(
       },
       handle(async (input) => {
         if (!control.createReview) throw new Error('This runner does not support image reviews yet.');
-        // marks, when offered, are checked by the runner (reviews.ts agentMarks).
+        // Marks are checked by the runner (reviews.ts agentMarks).
         const { review } = await control.createReview(selfId, input as Parameters<Runner['createReview']>[1]);
         return `Review ${review.id}: ${review.title} (${review.options.length} options). The user can compare them and send their picks and a reply. You can finish this turn; their reply will arrive as a later message. To open it from an end_turn ask, link to review:${review.id}.${REVIEW_NOTE}${oversizeShotsNote(review)}`;
       }),
@@ -2697,14 +2692,14 @@ export function serverInstructions(selfId: string, o: { one: boolean; bulletRepl
   );
 }
 
-export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, remote?: () => RemoteControl | undefined, reviewCanvas?: () => boolean, livePages?: () => boolean, coordinators?: () => Coordinators | undefined): McpSdkServerConfigWithInstance {
+export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, remote?: () => RemoteControl | undefined, livePages?: () => boolean, coordinators?: () => Coordinators | undefined): McpSdkServerConfigWithInstance {
   const one = oneReply();
   const isHelper = Boolean(coordinators?.()?.helperOwner(selfId));
   const server = createSdkMcpServer({
     name: SERVER_NAME,
     version: RUNNER_VERSION,
     instructions: isHelper ? COORDINATOR_WORKER_PROMPT : serverInstructions(selfId, { one, bulletReplies: bulletReplies(), pocket: Boolean(pocket?.()), projects: Boolean(projects), livePages: livePages?.() ?? false }),
-    tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, remote, reviewCanvas, coordinators }),
+    tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, remote, coordinators }),
   });
   server.tools = [...ALWAYS_ASK_TOOLS].map((name) => ({ name: name.split('__').at(-1)!, permission_policy: 'always_ask' as const }));
   return server;

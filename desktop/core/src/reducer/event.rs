@@ -414,7 +414,7 @@ pub struct ReviewDraft {
     /// window went in as its file path).
     pub images: Vec<ImageRef>,
     pub none: bool,
-    /// Mike's own marks on the pictures (the `reviewCanvas` experiment),
+    /// Mike's own marks on the pictures,
     /// each placed in `reply` by a `[Mark N]`.
     pub marks: Vec<UserMark>,
 }
@@ -485,8 +485,7 @@ pub struct ReviewShot {
     pub title: Option<String>,
     pub image: ImageRef,
     pub media: Option<ImageRef>,
-    /// The agent's notes and arrows on the picture (the `reviewCanvas`
-    /// experiment, docs/protocol/events.md "Marks: the canvas").
+    /// The agent's notes and arrows on the picture (docs/protocol/events.md "Marks: the canvas").
     pub marks: Vec<AgentMark>,
 }
 

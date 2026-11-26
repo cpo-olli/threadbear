@@ -523,8 +523,6 @@ function mockExperiments() {
     // The Recipes view, with TB_MOCK_RECIPES (addRecipesDemo).
     ...(process.env.TB_MOCK_RECIPES ? ['recipes'] : []),
     ...(process.env.TB_MOCK_COORDINATORS ? ['coordinators'] : []),
-    // Reviews as a board you drag and zoom, with TB_MOCK_REVIEW_CANVAS (addCanvasMarks).
-    ...(process.env.TB_MOCK_REVIEW_CANVAS ? ['reviewCanvas'] : []),
     // Agent Archive in the sidebar's search, with TB_MOCK_ARCHIVE (ARCHIVE_SESSIONS).
     ...(process.env.TB_MOCK_ARCHIVE ? ['archive'] : []),
   ];
@@ -3343,7 +3341,7 @@ function wentBack() {
   return { clis };
 }
 
-// The review canvas (TB_MOCK_REVIEW_CANVAS, the reviewCanvas experiment): the
+// Sample notes for the review board (TB_MOCK_REVIEW_NOTES): the
 // agent's notes on the demo review's first picture, as show_options keeps
 // them, on the option's one shot.
 function addCanvasMarks(review) {
@@ -4807,7 +4805,7 @@ function loadFixtures() {
         event.threadId = summary.id;
         if (event.images) event.images = fixPaths(event.images);
         if (event.type === 'review.updated') event.review.options = event.review.options.map((option) => ({ ...option, image: fixPaths([option.image])[0] }));
-        if (event.type === 'review.updated' && process.env.TB_MOCK_REVIEW_CANVAS) addCanvasMarks(event.review);
+        if (event.type === 'review.updated' && process.env.TB_MOCK_REVIEW_NOTES) addCanvasMarks(event.review);
         return event;
       });
       summary.lastSeq = events.at(-1)?.seq ?? 0;

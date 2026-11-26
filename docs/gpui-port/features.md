@@ -401,15 +401,15 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 
 | ID | Feature | What it does | How in GPUI | Route | Size | Swift |
 |---|---|---|---|---|---|---|
-| `review.window` | Window and stage | Own window, big shot, strip | Own GPUI window, drawn. | build | L | `ReviewWindow` |
-| `review.nav` | Navigation | Arrows through shots, up/down options, all side by side | Key handling, drawn. | build | M | `ReviewWindow` |
+| `review.window` | Review window | Own window with options on a board | Own GPUI window, drawn. | build | L | `ReviewWindow` |
+| `review.nav` | Navigation | Tour through pages, up/down options, see everything | Board tour and key handling, drawn. | build | M | `ReviewWindow` |
 | `review.zoom` | Zoom and pan | Scroll or pinch to pointer, ⌘0, double-click, Esc | Scroll and keys drawn by us; pinch needs per-OS input on macOS, Windows and Linux (unverified through GPUI's gesture hook). | shim | L | `ReviewWindow` (`ReviewImageScroll`) |
-| `review.minimap` | Minimap | Jump to part | Drawn. | build | S | `ReviewWindow` (`ReviewMinimap`) |
-| `review.holdspace` | Hold Space compare | Flick to today's version | Key handling, drawn. | build | S | `ReviewWindow` |
-| `review.media` | Video and HTML shots | Loop, muted among many | On a Mac, clips loop in AVKit's player (`media_view.rs`), with controls and sound on the stage and muted among many. Pages, and clips on Windows and Linux, are a still with a button for now. | hard | L | `ReviewWindow` (`ReviewVideo`) |
+| `review.minimap` | Legacy stage minimap | Jump to part in the frozen Swift viewer | Replaced by the draggable, zoomable board. | none | S | `ReviewWindow` (`ReviewMinimap`) |
+| `review.holdspace` | Legacy stage comparison | Flick to today's version in the frozen Swift viewer | Reference pictures sit on the board with the options. | none | S | `ReviewWindow` |
+| `review.media` | Videos, sounds and pages | Play where they sit on the board | On a Mac, Play or double-click starts one at a time on the board. Windows and Linux open clips and sounds externally; pages use the web runtime when available. | hard | L | `ReviewWindow` (`ReviewVideo`) |
 | `review.picks` | Picks and notes | Tick, None, Send, drafts | Drawn, with `Textarea`. | build | M | `ReviewSession`, `ReviewWindow` |
 | `review.openlive` | Open live | Tries a running option | Through the open gate. | build | S | `ReviewWindow` |
-| `review.canvas` | The review as a board | The `reviewCanvas` experiment: options laid out on a board to drag and zoom, the agent's handwritten notes on the pictures with a switch to hide them, a tour flying through them, and tools to circle, highlight or pin a part that drop numbered chips in the reply | GPUI-only, new in this app (the Swift app is frozen without it). `threadbear-core`'s `review_canvas` lays it out; `gpui/src/review_window/canvas.rs` draws it. | build | L | none (GPUI-only) |
+| `review.canvas` | The review as a board | Options laid out on a board to drag and zoom, the agent's handwritten notes on the pictures with a switch to hide them, a tour flying through them, and tools to circle, highlight or pin a part that drop numbered chips in the reply | GPUI-only, new in this app (the Swift app is frozen without it). `threadbear-core`'s `review_canvas` lays it out; `gpui/src/review_window/canvas.rs` draws it. | build | L | none (GPUI-only) |
 
 ## 17. Navigation, shortcuts, main menu
 

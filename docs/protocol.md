@@ -38,7 +38,7 @@ It was all this one file once. Work made on that comes across by itself in `tb l
 | this page | Ordering and reconnects, Older and newer clients |
 | [connection.md](protocol/connection.md) | Auth, Requests (app to runner), Warm start, Models and effort across providers, Notifications (runner to app) |
 | [types.md](protocol/types.md) | Types |
-| [events.md](protocol/events.md) | Events, Design reviews, Marks: the canvas (the `reviewCanvas` experiment), Reviews on the phone, Reply buttons |
+| [events.md](protocol/events.md) | Events, Design reviews, Marks: the canvas, Reviews on the phone, Reply buttons |
 | [needs-you.md](protocol/needs-you.md) | Needs you, The reply phase, Wait state |
 | [updates.md](protocol/updates.md) | Runner updates, Mike's releases, Your changes to the old app, Restarts, App restarts, Handovers, Stopped background work, Stuck background jobs, Background wait loops, A thread's CLI, Frozen CLIs, A dialog on a Mac's screen |
 | [settings.md](protocol/settings.md) | ACP agents, Settings and models, Standing instructions, Shared memory, Explain, Hibernate in words, Usage history, Sandboxed threads (taken out), Pools |

@@ -144,7 +144,7 @@ is the same answer. The saved draft names those copies, and the window
 takes them in place of its own. Pictures alone are an answer. The agent's
 message carries them as its `images`.
 
-#### Marks: the canvas (the `reviewCanvas` experiment)
+#### Marks: the canvas
 
 Mike, 22 Nov 2026: after an audit of how other apps show options with
 several pictures, he asked for the review as a canvas you drag and zoom
@@ -175,9 +175,9 @@ type ReviewShot = { title?: string, image: ImageRef, media?: ImageRef, marks?: A
 Limits: at most 6 marks a shot and 30 a review; `box` is four numbers in
 0..1 with x0 <= x1 and y0 <= y1; a note is at most 80 characters. An
 option's own `marks` need its `path`; with only `shots`, they go on a shot.
-`ink` is stored only when given. With the experiment off, `show_options`
-doesn't offer marks and the runner drops any it's given, unread. A moved
-or recovered review keeps the marks that pass, notes cut to 80 characters.
+`ink` is stored only when given. `show_options` always offers marks, and
+the runner validates them. A moved or recovered review keeps the marks
+that pass, notes cut to 80 characters.
 
 Mike's marks ride on the draft. Each is numbered from 1 in the order he
 made it, and `reply` places each with a `[Mark N]` marker where he was

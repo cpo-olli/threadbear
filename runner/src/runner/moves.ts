@@ -306,7 +306,7 @@ function dropMovedReplyImages(rec: Record<string, any>): boolean {
   rec.queue = rec.queue.map((q: any) => {
     if (!q || typeof q !== 'object' || q.reviewId === undefined) return q;
     const hasResponseImages = q.reviewResponse && typeof q.reviewResponse === 'object' && 'images' in q.reviewResponse;
-    // A mark's cut-out (reviewCanvas) is one of the reply's pictures too.
+    // A mark's cut-out is one of the reply's pictures too.
     const markImages = q.reviewResponse && typeof q.reviewResponse === 'object' && Array.isArray(q.reviewResponse.marks) && q.reviewResponse.marks.some((m: unknown) => Boolean(m && typeof m === 'object' && 'image' in m));
     if (Array.isArray(q.images) && q.images.length === 0 && !hasResponseImages && !markImages) return q;
     changed = true;

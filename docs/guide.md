@@ -320,34 +320,30 @@ in the sheet while it reloads, ready for you to check and send again.
 
 In the thread, a review's card shows the agent's lead and each option's
 small picture and name. Click one to open the comparison window on that
-option, or the card's button to start on the first. The picture has the
-whole width of the window, with back and next beside it. Under it is a tab
-for each option, with its tick, and under the tabs the name of the option on
-show and the agent's reasons for it, at the size you read replies in the
-thread, so you read about each one while you're looking at it. An option
-can have several pictures (its overview, how it looks mid-drag, a detail),
-shown in a strip under the picture. Next and back (or the left and right
-arrow keys) step through every picture of every option, up and down jump to
-the option before or after, and after the last one they're all side by
-side, with the agent's lead under them. Click a tab or one of the strip's
-small pictures to go straight to it, the first tab to see them all, and
-Open live at the end of the tabs to try one the agent has running (a web
-page only). A review from a thread on another Mac opens on that Mac. An
-agent can show a video, a sound or an HTML page in place of a picture: videos play
-quietly on a loop, side by side when they're all showing, with controls
-for sound when one is big; a sound (MP3, M4A, AAC or WAV, say music beds to
-compare) shows its waveform, with a play bar under it when it's big; a page
-shows as it does in the side pane, with its scripts off. When
-the agent includes today's version to compare against, hold Space (or click
-its button at the end of the tabs) to flick to it and back. To look closer at a
-picture, scroll or pinch over it to zoom in where the pointer is (a long page
-starts small enough to see whole). Then scroll or drag to move around, or use
-the small picture in the corner to jump to a part. Pinching out, ⌘0, Esc or a
-double-click goes back to the whole thing, and ⌘+ and ⌘- zoom too. Tick as
-many as you like, or None of them if none will do, write what you think in
-the box at the bottom right, and Send takes it all back to the thread.
-Pasting with the keyboard outside the reply box puts the words in it and moves
-the cursor there, so you can dictate just after ticking an option.
+option, or the card's button to start at the beginning. A review from a
+thread on another Mac opens on that Mac.
+
+On the desktop, the window is a board you drag around and zoom into. Each
+option's pages form a column under its name, on a faint glow with its big
+letter behind. Ticking an option turns its glow green and rings its pictures.
+The agent can draw circles, underlines, highlights and arrows on any page,
+with handwritten notes beside it: yellow points something out, green shows
+what solves it, and rose shows a cost. The notes switch hides them when
+you want the pictures clean.
+
+Next and Back take a tour through every picture, then show everything.
+The mouse wheel or a pinch zooms at the pointer; drag the background to
+move around. A clip, sound or page plays where it sits: press Play (Show
+page for a page), or double-click it. One plays at a time. Pages have their
+scripts off. Sounds show a waveform with a play bar.
+
+Your own tools circle, highlight or pin a part of any picture. Each adds
+a numbered chip to the reply, so you can say "[Mark 1] is too tight"; the
+agent gets a cut-out of that part with your answer. You can also paste
+pictures into the reply. Tick as many options as you like, or None of them,
+write what you think, and Send takes it back to the thread. Pasting with
+the keyboard outside the reply box puts the words in it and moves the
+cursor there, so you can dictate just after ticking an option.
 
 Short tables in replies stay as wide as their words need. Wide tables fit or
 scroll inside the reply, and list items have space between their lines.
