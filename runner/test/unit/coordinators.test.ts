@@ -15,6 +15,7 @@ import type { Account, Schedule, ThreadSummary } from '../../src/protocol.ts';
 import type { Settings } from '../../src/settings.ts';
 import { buildThreadbearTools, type ProjectControl } from '../../src/threadbear-mcp.ts';
 import { CARRY_ON_HELPER_RESTART } from '../../src/runner/carry-on.ts';
+import { SessionNotFoundError } from '../../src/adapters/types.ts';
 
 const ANTIGRAVITY_ACCOUNT: Account = {
   id: 'antigravity-main',
@@ -46,7 +47,7 @@ function setup(home = tmpDir(), enabled = () => true) {
   return { h, projects, c, project, home, claude, codex, antigravity };
 }
 
-function recoverFresh(h: ReturnType<typeof setup>['h'], home: string, before?: (host: Runner) => void) {
+function recoverFresh(h: ReturnType<typeof setup>['h'], home: string, before?: (host: Runner) => void, enabled: () => boolean = () => true) {
   const clock = new FakeClock(h.clock.now());
   const projects = new Projects({ home, clock, log: nullLogger });
   const adapter = new FakeAdapter();
@@ -54,7 +55,7 @@ function recoverFresh(h: ReturnType<typeof setup>['h'], home: string, before?: (
   const antigravity = new FakeAdapter('antigravity', { wakesAfterTasks: false });
   const host = new Runner({ config: h.cfg, store: new ThreadStore(home), adapters: { claude: adapter, codex, antigravity }, accounts: new FakeAccounts(allAccounts()), clock, log: nullLogger, projects, defer: (fn) => fn(), backgroundJobs: false, reachable: async () => true, panelsRoot: home });
   projects.start(host);
-  const replacement = new Coordinators({ home, host, projects, clock, enabled: () => true, log: nullLogger });
+  const replacement = new Coordinators({ home, host, projects, clock, enabled, log: nullLogger });
   host.coordinators = replacement;
   host.start();
   before?.(host);
@@ -834,7 +835,7 @@ async function workingHelper() {
   return { ...s, coordinator, started, helperSession, saidBefore: said() };
 }
 const userMessages = (host: Runner, threadId: string) => host.events(threadId, { limit: 10_000 }).events.filter((e) => e.type === 'user.message').length;
-const editRegistry = (home: string, edit: (rows: { state: string; tasks: { run?: Record<string, unknown> }[] }[]) => void) => {
+const editRegistry = (home: string, edit: (rows: { state: string; tasks: { run?: Record<string, unknown> }[]; reports?: unknown[] }[]) => void) => {
   const file = path.join(home, 'coordinators.json');
   const rows = JSON.parse(fs.readFileSync(file, 'utf8'));
   edit(rows);
@@ -1084,13 +1085,47 @@ test('a handover that is the restart after an uncaught error counts as a crash f
   again.c.stop();
 });
 
+test('helpers a crash cut off while coordinators were off are carried on when they are turned back on', async () => {
+  const { c, h, project, home, coordinator, started } = await workingHelper();
+  c.stop();
+  let on = false;
+  const fresh = recoverFresh(h, home, undefined, () => on);
+  const live = fresh.c;
+  await tick();
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 0, 'not while off');
+  on = true;
+  fresh.host.publish({ method: 'settings.updated', params: { settings: {} as Settings } });
+  await tick();
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 1, 'carried on once turned on');
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === coordinator.threadId).length, 0);
+  assert.equal(live.get(project.id).tasks[0].run?.status, 'running');
+  live.stop();
+});
+
+test('a carried-on helper whose session is gone fails to its coordinator rather than starting fresh without its brief', async () => {
+  const { c, h, project, home, coordinator, started } = await workingHelper();
+  await c.handover();
+  const fresh = recoverFresh(h, home);
+  await tick();
+  const resumed = fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId);
+  assert.equal(resumed.length, 1);
+  resumed[0]!.sink.exited(new SessionNotFoundError('gone'));
+  await tick();
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 1, 'no fresh session');
+  assert.equal(fresh.c.get(project.id).tasks[0].run?.status, 'failed');
+  assert.ok(fresh.adapter.sessions.filter((s) => s.opts.threadId === coordinator.threadId).flatMap((s) => s.sent).some((m) => m.text.includes('A helper turn finished') && m.text.includes('"status":"failed"')));
+  fresh.c.stop();
+});
+
 test('a helper an older runner’s update cut off is carried on once by the first runner with restart marks', async () => {
   const { c, h, home, coordinator, started } = await workingHelper();
   await c.handover();
-  const legacy = (rows: { state: string; tasks: { run?: Record<string, unknown> }[] }[]) => {
+  // As that runner saved it: the old summary, and a restart wake owed.
+  const legacy = (rows: { state: string; tasks: { run?: Record<string, unknown> }[]; reports?: unknown[] }[]) => {
     const run = rows[0]!.tasks[0]!.run!;
     delete run.restart;
     run.summary = 'The runner updated. Reconcile the saved work before resuming.';
+    rows[0]!.reports = [{ id: 'restart:old', at: new Date(h.clock.now()).toISOString(), text: 'The runner restarted with interrupted helper work. Inspect the saved records and existing effects before resuming any helper.' }];
   };
   editRegistry(home, legacy);
   const fresh = recoverFresh(h, home);

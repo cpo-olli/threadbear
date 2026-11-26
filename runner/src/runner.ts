@@ -3950,7 +3950,12 @@ export class Runner {
       // wrote the transcript but before its init reached the runner, so
       // sessionUsed never got set. Resume it instead, once (4 Nov 2026).
       const inUse = Boolean(err && !rt.resumed && /Session ID \S+ is already in use/i.test(err.message));
-      if (((notFound && rt.resumed) || inUse) && !rt.retriedFresh) {
+      // Not a coordinator's helper: a fresh session would have only the
+      // message resuming it (a restart's carry-on, a resumeHelper), not its
+      // brief. Its turn fails instead and its coordinator hears, to start a
+      // new helper from the checkpoint (Codex's review, 26 Nov 2026).
+      const freshOk = !(notFound && rec.coordinatorHelperFor);
+      if (((notFound && rt.resumed) || inUse) && freshOk && !rt.retriedFresh) {
         this.cli(st, { kind: 'retryFresh' });
         if (inUse) {
           rec.sessionUsed = true;

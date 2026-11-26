@@ -768,7 +768,9 @@ runner went down without stopping cleanly (a crash or a power cut, not an
 update or a SIGTERM) during a turn it had carried on after the last such crash, it has carried this run on 10 times, or the send is refused. A
 paused coordinator's helpers aren't carried on, and Pause or Resume drops the
 marks, so Resume's wake leaves them to the coordinator; with coordinators off
-nothing happens. That wake is the restart report, saved in the same write
+nothing happens until they're turned back on. A helper whose session can't be
+resumed (its transcript gone) fails its turn to the coordinator rather than
+starting a fresh session without its brief. That wake is the restart report, saved in the same write
 that drops the run's mark and delivered like a helper's report (kept until a
 coordinator turn that has it finishes), so a refused send or a crash doesn't
 lose it. A known helper may be

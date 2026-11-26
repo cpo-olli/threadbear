@@ -228,7 +228,8 @@ export class Coordinators {
       for (const row of saved) {
         if (this.rows.has(row.projectId) || [...this.rows.values()].some((r) => r.threadId === row.threadId)) throw Error('Duplicate coordinator identity');
         // An earlier build's flag for a restart wake still owed: a report.
-        const owed = Boolean(row.wakeInterrupted);
+        let owed = Boolean(row.wakeInterrupted);
+        let legacy = false;
         delete row.wakeInterrupted;
         for (const task of row.tasks) {
           if (task.run && ['queued', 'running'].includes(task.run.status)) {
@@ -240,7 +241,15 @@ export class Coordinators {
           } else if (task.run?.status === 'interrupted' && !task.run.restart && task.state === 'blocked' && OLD_RESTART_SUMMARIES.includes(task.run.summary ?? '')) {
             // Cut off by a runner from before the restart marks.
             task.run.restart = 'update';
+            legacy = true;
           }
+        }
+        // That runner also saved a restart wake for it, which the carry-on
+        // replaces (one it can't carry on gets its own): unsent, it goes.
+        if (legacy && row.reports?.some((r) => r.id.startsWith('restart:') && !r.sentAs)) {
+          row.reports = row.reports.filter((r) => !(r.id.startsWith('restart:') && !r.sentAs));
+          if (!row.reports.length) delete row.reports;
+          owed = false;
         }
         if (owed) this.restartReport(row);
         this.rows.set(row.projectId, row);
@@ -283,12 +292,13 @@ export class Coordinators {
   // up (main.ts, beside carryOnStopped): starting a Codex helper before
   // then threw on the tools' sync (Codex's review, 26 Nov 2026).
   carryOnAfterRestart(): void {
-    for (const row of this.rows.values()) {
-      try {
-        this.afterRestart(row);
-      } catch (e) {
-        this.deps.log.error('could not carry on coordinator helpers after a restart', { projectId: row.projectId, error: String(e) });
-      }
+    for (const row of this.rows.values()) this.carryOnOne(row);
+  }
+  private carryOnOne(row: Coordinator): void {
+    try {
+      this.afterRestart(row);
+    } catch (e) {
+      this.deps.log.error('could not carry on coordinator helpers after a restart', { projectId: row.projectId, error: String(e) });
     }
   }
   // Helper runs the last runner's stop cut off carry on by themselves, with
@@ -1467,7 +1477,8 @@ export class Coordinators {
     if (n.method === 'settings.updated') {
       const was = this.wasEnabled;
       this.wasEnabled = this.deps.enabled();
-      if (!was && this.wasEnabled && !this.stopped) for (const row of this.rows.values()) this.activate(row);
+      // Helpers a restart cut off while they were off are carried on now.
+      if (!was && this.wasEnabled && !this.stopped) for (const row of this.rows.values()) { this.activate(row); this.carryOnOne(row); }
       return;
     }
     if (!this.deps.enabled() || this.stopped || n.method !== 'thread.event') return;
