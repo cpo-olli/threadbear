@@ -717,18 +717,35 @@ export function NewThread({ token }: { token: string }) {
     if (made) go(threadPath(made));
   }, [made]);
   const now = Date.now();
-  const online = runnersShown(runners ?? [], now).filter((r) => isOnline(r, now));
+  // A draining runner refuses new threads, so it isn't offered.
+  const online = runnersShown(runners ?? [], now).filter((r) => isOnline(r, now) && !r.draining);
+  // A picked runner that's since gone to sleep: back to the main one, as the select shows.
+  const sentRunner = online.some((r) => r.runnerId === runnerId) ? runnerId : '';
   // The models the runner it lands on has logins for (phone:create's pick when none is named).
-  const target = runnerId || defaultRunner(runners ?? [], (r) => isOnline(r, now))?.runnerId;
-  const models = modelsOn(accounts ?? [], target);
+  const fallback = defaultRunner(runners ?? [], (r) => isOnline(r, now))?.runnerId;
+  const modelsFor = (id: string) => modelsOn(accounts ?? [], id || fallback);
+  const models = modelsFor(sentRunner);
   const model = models.find((m) => m.id === modelId);
   // A model this runner has no login for, or an effort the model doesn't offer: back to the default.
   const sentModel = model ? modelId : '';
   const sentEffort = models.length && keeps(effort, model) ? effort : '';
+  // A pick that the new runner or model can't take is dropped, not kept
+  // hidden to come back when Mike switches back.
+  const pickRunner = (id: string) => {
+    const next = modelsFor(id);
+    const m = next.find((x) => x.id === modelId);
+    setRunnerId(id);
+    if (!m) setModelId('');
+    if (!next.length || !keeps(effort, m)) setEffort('');
+  };
+  const pickModel = (id: string) => {
+    setModelId(id);
+    if (!keeps(effort, models.find((x) => x.id === id))) setEffort('');
+  };
   const submit = async () => {
     const body = text.trim();
     if (!body) return;
-    await cmd.run(() => create({ token, text: body, ...(runnerId ? { runnerId } : {}), ...(sentModel ? { model: sentModel } : {}), ...(sentEffort ? { effort: sentEffort } : {}) }), undefined);
+    await cmd.run(() => create({ token, text: body, ...(sentRunner ? { runnerId: sentRunner } : {}), ...(sentModel ? { model: sentModel } : {}), ...(sentEffort ? { effort: sentEffort } : {}) }), undefined);
   };
   return (
     <div className="page">
@@ -767,7 +784,7 @@ export function NewThread({ token }: { token: string }) {
             />
             <div className="tools-row">
               {online.length > 1 ? (
-                <select value={runnerId} disabled={cmd.busy} onChange={(e) => setRunnerId(e.target.value)} aria-label="Runner" title="Which runner it starts on">
+                <select value={sentRunner} disabled={cmd.busy} onChange={(e) => pickRunner(e.target.value)} aria-label="Runner" title="Which runner it starts on">
                   <option value="">Main runner</option>
                   {online.map((r) => (
                     <option key={r.runnerId} value={r.runnerId}>
@@ -778,7 +795,7 @@ export function NewThread({ token }: { token: string }) {
               ) : null}
               {models.length ? (
                 <>
-                  <select value={sentModel} disabled={cmd.busy} onChange={(e) => setModelId(e.target.value)} aria-label="Model" title="Which model it uses">
+                  <select value={sentModel} disabled={cmd.busy} onChange={(e) => pickModel(e.target.value)} aria-label="Model" title="Which model it uses">
                     <option value="">Default model</option>
                     {models.map((m) => (
                       <option key={m.id} value={m.id}>

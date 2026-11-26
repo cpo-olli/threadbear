@@ -24,7 +24,9 @@ export function defaultRunner<R extends RunnerPick>(runners: R[], online: (r: R)
 // The models on offer on one runner: its own logins' (a row with no runner
 // is anyone's), Claude's first, each once. With no runner known, every one.
 export function models(accounts: AccountModels[], runnerId?: string): ModelChoice[] {
-  const mine = runnerId ? accounts.filter((a) => !a.runnerId || a.runnerId === runnerId) : accounts;
+  // phone:accounts is v.any(), so a row that isn't an object is passed over.
+  const rows = accounts.filter((a) => a && typeof a === 'object');
+  const mine = runnerId ? rows.filter((a) => !a.runnerId || a.runnerId === runnerId) : rows;
   const rank = (p?: string) => {
     const i = ORDER.indexOf(p ?? 'claude');
     return i < 0 ? ORDER.length : i;
@@ -34,9 +36,10 @@ export function models(accounts: AccountModels[], runnerId?: string): ModelChoic
   const out: ModelChoice[] = [];
   for (const { a } of sorted) {
     for (const m of Array.isArray(a.models) ? a.models : []) {
-      if (!m || typeof m.id !== 'string' || seen.has(m.id)) continue;
+      // '' is the page's Default, so a row with no id can't stand for a model.
+      if (!m || typeof m !== 'object' || typeof m.id !== 'string' || !m.id || seen.has(m.id)) continue;
       seen.add(m.id);
-      out.push({ ...m, provider: a.provider ?? 'claude' });
+      out.push({ ...m, title: typeof m.title === 'string' && m.title ? m.title : m.id, provider: a.provider ?? 'claude' });
     }
   }
   return out;
@@ -49,7 +52,7 @@ export function models(accounts: AccountModels[], runnerId?: string): ModelChoic
 // have no effort, so none.
 export function efforts(model?: ModelChoice): string[] {
   if (!model) return CLAUDE_LEVELS;
-  const levels = (model.effortLevels ?? []).filter((l) => ALL.includes(l));
+  const levels = Array.isArray(model.effortLevels) ? model.effortLevels.filter((l) => ALL.includes(l)) : [];
   if (levels.length) return levels;
   return (model.provider ?? 'claude') === 'claude' ? CLAUDE_LEVELS : [];
 }

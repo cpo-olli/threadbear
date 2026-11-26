@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultRunner, effortTitle, efforts, keeps, models } from './new-thread-choices.ts';
+import { defaultRunner, effortTitle, efforts, keeps, models, type AccountModels } from './new-thread-choices.ts';
 
 const opus = { id: 'opus', title: 'Opus', effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] };
 const gpt = { id: 'gpt', title: 'GPT', effortLevels: ['low', 'medium', 'high', 'ultra'] };
@@ -51,4 +51,11 @@ test('defaultRunner: first placed online, else the main one', () => {
   // A sleeping main Mac isn't where it lands: no guess, so every runner's models.
   assert.equal(defaultRunner(rs, () => false), undefined);
   assert.equal(defaultRunner([{ runnerId: 'm', main: true, draining: true }], () => true), undefined);
+});
+
+test('models: malformed rows are passed over, not a crash', () => {
+  const rows = [null, 'x', { runnerId: 'a', provider: 'claude', models: [null, { id: '', title: 'Blank' }, { id: 'ok', title: '' }, { id: 'odd', title: 'Odd', effortLevels: 'high' }] }] as unknown as AccountModels[];
+  const list = models(rows, 'a');
+  assert.deepEqual(list.map((m) => [m.id, m.title]), [['ok', 'ok'], ['odd', 'Odd']]);
+  assert.deepEqual(efforts(list[1]), ['low', 'medium', 'high', 'xhigh', 'max']);
 });
