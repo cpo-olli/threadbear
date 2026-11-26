@@ -477,6 +477,58 @@ test('a report whose send threw after its turn started, and whose turn then fail
   c.stop();
 });
 
+test('a report whose send threw and whose turn someone then stopped is not restarted by itself', async () => {
+  const { h, c, coordinator, finish, claude } = await withHelper();
+  const save = h.runner.store.save.bind(h.runner.store);
+  let threw = 0;
+  h.runner.store.save = (record) => {
+    save(record);
+    if (record.id === coordinator.threadId && h.runner.threads.get(coordinator.threadId)!.rt.turn) { threw++; throw Error('disk hiccup'); }
+  };
+  await finish('Deployed to prod.');
+  h.runner.store.save = save;
+  assert.ok(threw > 0);
+  h.runner.interrupt(coordinator.threadId, { byMike: true });
+  await tick();
+  claude.sessions.filter((s) => s.opts.threadId === coordinator.threadId).at(-1)!.result('interrupted');
+  await tick();
+  h.clock.advance(5 * 61_000);
+  await tick();
+  assert.equal(told([claude], coordinator.threadId, 'Sent again'), 0);
+  c.stop();
+});
+
+test('the restart wake survives a crash before its thread is saved, and goes once', async () => {
+  const { h, c, home, coordinator } = await withHelper();
+  await c.handover();
+  // The next runner dies saving the coordinator thread as it wakes it.
+  const clock = new FakeClock(h.clock.now());
+  const projects = new Projects({ home, clock, log: nullLogger });
+  const adapter = new FakeAdapter();
+  const store = new ThreadStore(home);
+  const storeSave = store.save.bind(store);
+  let crashed = false;
+  store.save = (record) => {
+    if (record.id === coordinator.threadId && (record.queue.some((q) => q.text.includes('interrupted helper work')) || record.status !== 'idle')) { crashed = true; throw Error('Crash before thread save'); }
+    storeSave(record);
+  };
+  const host = new Runner({ config: h.cfg, store, adapters: { claude: adapter, codex: new FakeAdapter('codex', { wakesAfterTasks: false, archives: true }), antigravity: new FakeAdapter('antigravity', { wakesAfterTasks: false }) }, accounts: new FakeAccounts(allAccounts()), clock, log: nullLogger, projects, defer: (fn) => fn(), backgroundJobs: false, reachable: async () => true, panelsRoot: home });
+  projects.start(host);
+  const dying = new Coordinators({ home, host, projects, clock, enabled: () => true, log: nullLogger });
+  host.coordinators = dying;
+  host.start();
+  dying.start();
+  await tick();
+  assert.ok(crashed, 'the crash happened');
+  assert.ok(dying.forThread(coordinator.threadId)!.wakeInterrupted, 'the flag stays until the wake is saved');
+  dying.stop();
+  const fresh = recoverFresh(h, home);
+  await tick();
+  assert.equal(told([adapter, fresh.adapter], coordinator.threadId, 'interrupted helper work'), 1, 'once across both runners');
+  assert.equal(fresh.c.forThread(coordinator.threadId)!.wakeInterrupted, undefined);
+  fresh.c.stop();
+});
+
 test('a report turn the runner carries on (a later turn finishes) is not sent again', async () => {
   const { h, c, coordinator, coord, finish, claude } = await withHelper();
   await finish('Deployed to prod.');

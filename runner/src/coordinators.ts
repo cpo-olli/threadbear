@@ -84,7 +84,9 @@ const recordSchema = z.object({
   // Set with helper runs a restart or handover interrupted, cleared once the
   // coordinator is woken for them (start()): saved, so a crash or a handover
   // before that wake doesn't lose it.
-  wakeInterrupted: z.boolean().optional(),
+  // The wake's delivery id: queued under it, so a crash before the
+  // coordinator thread's save neither loses nor repeats it.
+  wakeInterrupted: z.string().optional(),
 });
 export type Coordinator = z.infer<typeof recordSchema>;
 export type CoordinatorView = Omit<Coordinator, 'events' | 'seen' | 'tasks' | 'delivery' | 'reports'> & { tasks: (Omit<Coordinator['tasks'][number], 'run'> & { run?: Omit<NonNullable<Coordinator['tasks'][number]['run']>, 'brief'> })[] };
@@ -190,6 +192,9 @@ export class Coordinators {
   private readonly compactTimers = new Map<string, TimerHandle>();
   private readonly reportTimers = new Map<string, TimerHandle>();
   private wasEnabled = false;
+  // Reports found cut off by a restart or pause, to send again once the
+  // thread is free (settleReports).
+  private readonly cutOff = new Set<string>();
   private readonly stoppingSessions = new Map<string, Promise<void>>();
   private unlisten?: () => void;
   private stopped = false;
@@ -209,7 +214,7 @@ export class Coordinators {
           task.run.status = runMove(task.run.status, 'interrupted');
           taskMove(task, 'blocked');
           task.run.summary = 'The runner restarted. Reconcile the existing work before resuming; do not replay side effects.';
-          row.wakeInterrupted = true;
+          row.wakeInterrupted ??= crypto.randomUUID();
         }
         this.rows.set(row.projectId, row);
       }
@@ -222,23 +227,31 @@ export class Coordinators {
   start(): void {
     this.wasEnabled = this.deps.enabled();
     this.unlisten = this.deps.host.onNotification((n) => this.observe(n));
-    for (const row of this.rows.values()) {
-      if (row.events.length || row.delivery) this.schedule(row, BATCH_MS);
-      if (row.wakeAt) this.schedule(row, Math.max(0, Date.parse(row.wakeAt) - this.deps.clock.now()));
-      try {
-        this.reconcileReports(row);
-        this.deliverReports(row, true);
-        this.wakeForInterrupted(row);
-      } catch (e) {
-        this.deps.log.error('could not wake a coordinator after a restart', { projectId: row.projectId, error: String(e) });
-      }
-    }
+    for (const row of this.rows.values()) this.activate(row);
   }
   private wakeForInterrupted(row: Coordinator): void {
     if (!row.wakeInterrupted || row.state !== 'active' || !this.deps.enabled() || this.stopped) return;
-    this.wake(row, 'The runner restarted with interrupted helper work. Inspect the saved records and existing effects before resuming any helper.');
+    // wake() saves the thread's record with it before the flag goes.
+    this.wake(row, 'The runner restarted with interrupted helper work. Inspect the saved records and existing effects before resuming any helper.', `interrupted:${row.wakeInterrupted}`);
     delete row.wakeInterrupted;
     this.save();
+  }
+  // Everything a coordinator that may run does on a new runner, or when
+  // coordinators are turned back on: its timers, its reports, its held
+  // queue and the restart wake. One coordinator failing doesn't stop the rest.
+  private activate(row: Coordinator): void {
+    if (row.state !== 'active' || !this.deps.enabled() || this.stopped) return;
+    try {
+      if (row.events.length || row.delivery) this.schedule(row, BATCH_MS);
+      if (row.wakeAt) this.schedule(row, Math.max(0, Date.parse(row.wakeAt) - this.deps.clock.now()));
+      this.reconcileReports(row);
+      this.deliverReports(row, true);
+      this.wakeForInterrupted(row);
+      const st = this.deps.host.threads.get(row.threadId);
+      if (st && this.deps.host.bucket(st.rec) === 'inbox') this.deps.host.kickQueue(st);
+    } catch (e) {
+      this.deps.log.error('could not start a coordinator', { projectId: row.projectId, error: String(e) });
+    }
   }
   stop(): void {
     this.stopped = true;
@@ -256,7 +269,7 @@ export class Coordinators {
       for (const task of row.tasks) if (task.run && ['queued', 'running'].includes(task.run.status)) {
         task.run.status = runMove(task.run.status, 'interrupted'); taskMove(task, 'blocked');
         task.run.summary = 'The runner updated. Reconcile the saved work before resuming.';
-        row.wakeInterrupted = true;
+        row.wakeInterrupted ??= crypto.randomUUID();
         if (coordSt && task.run.helperThreadId) this.deps.host.updateSubagent(coordSt, { id: task.run.helperThreadId, status: 'stopped', summary: task.run.summary });
       }
       this.changed(row);
@@ -443,12 +456,11 @@ export class Coordinators {
         try { await ending; } finally { if (this.stoppingSessions.get(projectId) === ending) this.stoppingSessions.delete(projectId); }
       }
     } else {
-      // Reports a pause cut off, or left queued, go now (the queue was held
-      // while paused: Runner.kickQueue).
+      // Reports a pause cut off go again; queued ones (held while paused:
+      // Runner.kickQueue) start behind the wake's own send, in order.
       this.reconcileReports(row);
       this.deliverReports(row, true);
-      const st = this.deps.host.threads.get(row.threadId);
-      if (st) this.deps.host.kickQueue(st);
+      delete row.wakeInterrupted;
       this.wake(row, 'Resumed by the user. Reconcile any interrupted helper before deciding what to do next.');
       if (row.events.length || row.delivery || row.wakeAt) this.schedule(row, row.events.length || row.delivery ? BATCH_MS : Math.max(0, Date.parse(row.wakeAt!) - this.deps.clock.now()));
     }
@@ -922,16 +934,22 @@ export class Coordinators {
   private deliverReports(row: Coordinator, force = false): void {
     if (!row.reports?.length || row.state !== 'active' || !this.deps.enabled() || this.stopped) return;
     const st = this.deps.host.threads.get(row.threadId);
-    for (const report of [...row.reports]) {
+    // An attempt may already have gone (a save that threw after the send):
+    // adopt it, so it's settled by the same rules as any other.
+    let adopted = false;
+    for (const report of row.reports) {
+      if (report.sentAs) continue;
+      const turnId = this.reportTurn(row, report);
+      const end = this.turnEnd(row.threadId, turnId, report.at).end;
+      const live = st?.rt.turn?.turnId === turnId || st?.rec.queue.some((q) => q.turnId === turnId);
+      if (end === 'completed' || end === 'failed' || end === 'interrupted' || live) { report.sentAs = turnId; adopted = true; }
+    }
+    if (adopted) { this.save(); this.settleReports(row, force); }
+    for (const report of [...row.reports ?? []]) {
       if (report.sentAs) continue;
       if (!force && (report.attempt ?? 0) > MAX_REPORT_RETRIES) continue;
-      // This attempt may already have gone (a save that threw after the
-      // send): look before sending or adopting it.
-      const turnId = this.reportTurn(row, report);
-      const end = this.turnEnd(row.threadId, turnId, report.at);
-      if (end.end === 'completed') { this.dropReport(row, report); continue; }
-      if (end.end === 'open' && st?.rt.turn?.turnId === turnId) { report.sentAs = turnId; this.save(); continue; }
-      if (end.end !== 'none' && !st?.rec.queue.some((q) => q.turnId === turnId)) this.unsend(report);
+      // Started where nothing will run it (its record never saved): a new attempt.
+      if (this.turnEnd(row.threadId, this.reportTurn(row, report), report.at).end === 'open') this.unsend(report);
       try {
         const attempt = report.attempt ?? 0;
         report.sentAs = this.wake(row, attempt ? `${RESENT_NOTE}\n\n${report.text}` : report.text, attempt ? `${report.id}:${attempt}` : report.id);
@@ -949,7 +967,7 @@ export class Coordinators {
     this.save();
   }
   private retryReports(row: Coordinator): void {
-    if (this.reportTimers.has(row.projectId) || this.stopped) return;
+    if (this.reportTimers.has(row.projectId) || this.stopped || row.state !== 'active' || !this.deps.enabled()) return;
     this.reportTimers.set(row.projectId, this.deps.clock.setTimeout(() => {
       this.reportTimers.delete(row.projectId);
       if (this.rows.get(row.projectId) !== row) return;
@@ -973,16 +991,21 @@ export class Coordinators {
   // timer; a stop (Mike's, an edit, a switch) waits for the next turn or
   // the next runner rather than starting one by itself.
   private settleReports(row: Coordinator, restart = false): boolean {
+    if (row.state !== 'active' || !this.deps.enabled() || this.stopped) return false;
     const st = this.deps.host.threads.get(row.threadId);
     let retry = false;
     for (const report of [...row.reports ?? []]) {
       if (!report.sentAs) continue;
       const end = this.turnEnd(row.threadId, report.sentAs, report.at);
-      if (end.end === 'completed') { this.dropReport(row, report); continue; }
+      if (end.end === 'completed') { this.dropReport(row, report); this.cutOff.delete(report.id); continue; }
       if (end.end !== 'failed' && end.end !== 'interrupted') continue;
-      if (end.seq !== undefined && this.completedAfter(row.threadId, end.seq)) { this.dropReport(row, report); continue; }
+      if (end.seq !== undefined && this.completedAfter(row.threadId, end.seq)) { this.dropReport(row, report); this.cutOff.delete(report.id); continue; }
+      // Found cut off by a restart or a pause: sent again even when it has
+      // to wait first, rather than read as someone's stop later.
+      if (restart) this.cutOff.add(report.id);
       if (st && (st.rt.turn || st.rec.waitingForNetwork || st.rec.waitingForRoom || st.rec.queue.length)) { retry = true; continue; }
-      if (end.end === 'interrupted' && !restart) continue;
+      if (end.end === 'interrupted' && !this.cutOff.has(report.id)) continue;
+      this.cutOff.delete(report.id);
       this.unsend(report);
       this.save();
     }
@@ -992,7 +1015,7 @@ export class Coordinators {
   // On a new runner: settle reports that went, and make sure ones that
   // didn't are sent (deliverReports looks at each attempt's turn first).
   private reconcileReports(row: Coordinator): void {
-    if (!row.reports?.length) return;
+    if (!row.reports?.length || row.state !== 'active' || !this.deps.enabled() || this.stopped) return;
     const st = this.deps.host.threads.get(row.threadId);
     const live = new Set([...(st?.rec.queue.map((q) => q.turnId) ?? []), ...(st?.rt.turn ? [st.rt.turn.turnId] : [])]);
     for (const report of [...row.reports]) {
@@ -1228,13 +1251,7 @@ export class Coordinators {
     if (n.method === 'settings.updated') {
       const was = this.wasEnabled;
       this.wasEnabled = this.deps.enabled();
-      if (!was && this.wasEnabled && !this.stopped) {
-        for (const row of this.rows.values()) {
-          this.deliverReports(row, true);
-          const st = row.state === 'active' ? this.deps.host.threads.get(row.threadId) : undefined;
-          if (st) this.deps.host.kickQueue(st);
-        }
-      }
+      if (!was && this.wasEnabled && !this.stopped) for (const row of this.rows.values()) this.activate(row);
       return;
     }
     if (!this.deps.enabled() || this.stopped || n.method !== 'thread.event') return;
