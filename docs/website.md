@@ -36,7 +36,9 @@ Built 28 Oct 2026 (thread 66935d23).
   its tile an orange dot while it's low on memory or disk. The sidebar and rail
   read `phone:wakes`, not the schedules. On a phone the rail is a tab bar, with Runners and Usage under
   More. The pencil beside the search starts a thread (`/new`, `phone:create`)
-  on the runner's default folder and login. And a
+  on the runner's default folder, with a model and effort picker (since 26
+  Nov; `web/src/new-thread-choices.ts`, a port of the iPhone's
+  `NewThreadChoices`) listing the models its runner has logins for. And a
   thread whose finished turns fold to "Worked for 4m 12s" and the reply
   (`web/src/turns.ts`, a port of the iPhone's `Turns.fold`), with the
   pending approval, the end_turn card of asks or the done card's

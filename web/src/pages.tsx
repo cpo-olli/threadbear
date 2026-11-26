@@ -16,6 +16,7 @@ import { readTheme, setTheme, type Theme } from './theme';
 import { bytesWords, statsFresh, isOnline, matchesSchedule, runnersShown, runnerState, scheduleSections, sinceWords, tightest, untilWords } from './view-logic';
 import { busy, type Row } from './sidebar';
 import * as Icon from './icons';
+import { defaultRunner, effortTitle, efforts, keeps, models as modelsOn, type AccountModels } from './new-thread-choices';
 
 export function useTheme(): [Theme, (t: Theme) => void] {
   const [theme, set] = useState(readTheme);
@@ -704,6 +705,10 @@ export function NewThread({ token }: { token: string }) {
   const runners = useLiveQuery(api.phone.runners, { token });
   const [text, setText] = useState('');
   const [runnerId, setRunnerId] = useState('');
+  const accounts = useLiveQuery(api.phone.accounts, { token }) as AccountModels[] | undefined;
+  // '' is the runner's own default for both.
+  const [modelId, setModelId] = useState('');
+  const [effort, setEffort] = useState('');
   // The text stays until the runner has made the thread, so a failure keeps it.
   const cmd = useCommand(token);
   // The runner makes the thread, so it has an id once it's taken the command.
@@ -713,10 +718,17 @@ export function NewThread({ token }: { token: string }) {
   }, [made]);
   const now = Date.now();
   const online = runnersShown(runners ?? [], now).filter((r) => isOnline(r, now));
+  // The models the runner it lands on has logins for (phone:create's pick when none is named).
+  const target = runnerId || defaultRunner(runners ?? [], (r) => isOnline(r, now))?.runnerId;
+  const models = modelsOn(accounts ?? [], target);
+  const model = models.find((m) => m.id === modelId);
+  // A model this runner has no login for, or an effort the model doesn't offer: back to the default.
+  const sentModel = model ? modelId : '';
+  const sentEffort = models.length && keeps(effort, model) ? effort : '';
   const submit = async () => {
     const body = text.trim();
     if (!body) return;
-    await cmd.run(() => create({ token, text: body, ...(runnerId ? { runnerId } : {}) }), undefined);
+    await cmd.run(() => create({ token, text: body, ...(runnerId ? { runnerId } : {}), ...(sentModel ? { model: sentModel } : {}), ...(sentEffort ? { effort: sentEffort } : {}) }), undefined);
   };
   return (
     <div className="page">
@@ -763,6 +775,26 @@ export function NewThread({ token }: { token: string }) {
                     </option>
                   ))}
                 </select>
+              ) : null}
+              {models.length ? (
+                <>
+                  <select value={sentModel} disabled={cmd.busy} onChange={(e) => setModelId(e.target.value)} aria-label="Model" title="Which model it uses">
+                    <option value="">Default model</option>
+                    {models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.title}
+                      </option>
+                    ))}
+                  </select>
+                  <select value={sentEffort} disabled={cmd.busy} onChange={(e) => setEffort(e.target.value)} aria-label="Effort" title="How hard it thinks">
+                    <option value="">Default effort</option>
+                    {efforts(model).map((l) => (
+                      <option key={l} value={l}>
+                        {effortTitle(l)}
+                      </option>
+                    ))}
+                  </select>
+                </>
               ) : null}
               <span className="grow" />
               <button className="send" disabled={!text.trim() || cmd.busy} aria-label="Start the thread" title="Start the thread">
