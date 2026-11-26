@@ -2,10 +2,8 @@
 // composer. Only its project link and helper-owned work live here.
 use crate::app::Threadbear;
 use crate::call;
-use crate::style::px;
-use gpui_kit::component::dialog::DialogButtonProps;
-use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::{v_flex, WindowExt as _};
+use gpui_kit::component::input::InputState;
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use serde_json::{json, Value};
@@ -19,7 +17,7 @@ pub(crate) enum Tab {
     #[default]
     Conversation,
     Activity,
-    Todos,
+    Tasks,
     Threads,
 }
 
@@ -27,7 +25,7 @@ impl Tab {
     pub(crate) const ALL: [Self; 4] = [
         Self::Conversation,
         Self::Activity,
-        Self::Todos,
+        Self::Tasks,
         Self::Threads,
     ];
 
@@ -35,7 +33,7 @@ impl Tab {
         match self {
             Self::Conversation => "Conversation",
             Self::Activity => "Activity",
-            Self::Todos => "To-dos",
+            Self::Tasks => "Tasks",
             Self::Threads => "Threads",
         }
     }
@@ -73,6 +71,7 @@ pub(crate) struct CoordinatorsState {
     pub(crate) document_scroll: ScrollHandle,
     pub(crate) memory_scroll: ScrollHandle,
     pub(crate) work_scroll: ScrollHandle,
+    pub(crate) task_boards: std::collections::HashMap<String, crate::coordinator_tasks::BoardUi>,
     /// The open home's width, measured as it's drawn, for whether its tabs
     /// fit in the bar (coordinator_home.rs).
     pub(crate) home_width: std::rc::Rc<std::cell::Cell<f32>>,
@@ -283,7 +282,7 @@ impl Threadbear {
         .detach();
     }
 
-    fn replace_coordinator(&mut self, value: &Value, cx: &mut Context<Self>) {
+    pub(crate) fn replace_coordinator(&mut self, value: &Value, cx: &mut Context<Self>) {
         if let Some(coordinator) = Coordinator::decode(value) {
             let was_loading = self.coordinators.loading;
             self.coordinators.generation += 1;
@@ -303,80 +302,6 @@ impl Threadbear {
                 self.load_coordinators(cx);
             }
         }
-    }
-
-    pub(crate) fn add_coordinator_task(
-        &mut self,
-        project: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let title = cx.new(|cx| InputState::new(window, cx).placeholder("What needs doing?"));
-        let done =
-            cx.new(|cx| InputState::new(window, cx).placeholder("What does finished look like?"));
-        let app = cx.weak_entity();
-        let (project, typed, outcome) = (project.to_owned(), title.clone(), done);
-        window.open_alert_dialog(cx, move |dialog, _, _| {
-            let (app, project, title, done) =
-                (app.clone(), project.clone(), typed.clone(), outcome.clone());
-            dialog
-                .title("Add a to-do")
-                .width(px(430.))
-                .child(
-                    v_flex()
-                        .gap(px(12.))
-                        .child(Input::new(&typed))
-                        .child(Input::new(&outcome)),
-                )
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text("Add")
-                        .show_cancel(true),
-                )
-                .on_ok(move |_, _, cx| {
-                    let title = title.read(cx).value().trim().to_owned();
-                    let done = done.read(cx).value().trim().to_owned();
-                    if title.is_empty() || done.is_empty() {
-                        return false;
-                    }
-                    app.update(cx, |this, cx| {
-                        this.send_coordinator_task(&project, title, done, cx)
-                    })
-                    .ok();
-                    true
-                })
-        });
-        window.focus(&title.read(cx).focus_handle(cx), cx);
-        crate::web_panels::keyboard_to_app(window);
-    }
-
-    fn send_coordinator_task(
-        &mut self,
-        project: &str,
-        title: String,
-        done: String,
-        cx: &mut Context<Self>,
-    ) {
-        let key = format!("task:{project}");
-        if !self.coordinators.busy.insert(key.clone()) {
-            return;
-        }
-        let client = self.client.clone();
-        let params = json!({"projectId":project,"title":title,"doneWhen":done});
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = call(client, "coordinators.addTask", params).await;
-            this.update(cx, |this, cx| {
-                this.coordinators.busy.remove(&key);
-                match result {
-                    Ok(value) => this.replace_coordinator(&value["coordinator"], cx),
-                    Err(error) => this.show_error(error.message, cx),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
     }
 
     pub(crate) fn agent_memory_open(&self, project_id: &str) -> bool {

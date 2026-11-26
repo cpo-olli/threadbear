@@ -79,7 +79,24 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
     initial.notes = '## Decisions\n\n- Use the same pools and model picker as ordinary threads.\n- Routine work stays in helpers, outside the inbox.\n- Keep questions with the coordinator.\n- Project goals, state and notes are shared with the project page.\n\n## Runner & Storage\n\n- Coordinator state persists in `coordinators.json`.\n- `loops` survives reloads and merges cleanly with legacy records.';
     make(initial);
   }
-  return (method, p) => {
+  function publishAsk(coordinator, asks) {
+    const entry = threads.get(coordinator.threadId);
+    const ts = now();
+    const turnId = `coordinator_ask_${entry.events.length}`;
+    for (const e of [
+      { type: 'turn.started' },
+      { type: 'assistant.text', itemId: `${turnId}_reply`, text: 'One decision for you before the helpers carry on.' },
+      { type: 'turn.completed', outcome: 'completed', needs: 'you', asks, durationMs: 900 },
+    ]) {
+      const event = { ...e, seq: entry.events.length + 1, ts, threadId: coordinator.threadId, turnId };
+      entry.events.push(event);
+      broadcast('thread.event', { threadId: coordinator.threadId, event });
+    }
+    const seq = entry.events.length;
+    Object.assign(entry.summary, { needsYou: true, needs: 'you', asks, asksSeq: seq, lastSeq: seq, lastSeenSeq: seq, updatedAt: ts, lastActivityAt: ts });
+    threadChanged(coordinator.threadId);
+  }
+  return async (method, p) => {
     if (method === 'coordinators.list') return { coordinators };
     const target = project(p.projectId ?? initial?.id);
     if (!target) throw error(-32602, 'Project not found.');
@@ -101,6 +118,67 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
         if (helper.status === 'running') helper.status = 'stopped';
       }
       threadChanged(coordinator.threadId);
+    } else if (method === 'mock.coordinatorTaskBoard') {
+      coordinator.taskBoard = taskBoardFixture(coordinator.threadId, now());
+      const decision = coordinator.taskBoard.tasks[0];
+      publishAsk(coordinator, [{
+        action: decision.title, taskId: decision.id, why: decision.now,
+        options: decision.decision.options.map((o) => o.label),
+        optionNotes: decision.decision.options.map((o) => o.does),
+        suggested: 0,
+      }]);
+      decision.source.seq = threads.get(coordinator.threadId).summary.asksSeq;
+    } else if (method === 'coordinators.addToCoordinator') {
+      const text = String(p.text ?? '').trim();
+      if (!text || !coordinator.taskBoard) throw error(-32602, 'Open a task board and add a request first.');
+      // Give the application time to draw its pending state. The real runner
+      // acknowledges the request as soon as it has queued it.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      coordinator.taskBoard.tasks.push({
+        id: `request_${coordinator.taskBoard.tasks.length}`, title: text, kind: 'action',
+        owner: { kind: 'agent' }, state: 'todo',
+      });
+    } else if (method === 'coordinators.updateWorkItem') {
+      const item = coordinator.taskBoard?.workItems.find((w) => w.id === p.workItemId);
+      if (!item) throw error(-32602, 'Work item not found.');
+      item.collapsed = p.collapsed;
+    } else if (['coordinators.answerDecision', 'coordinators.postponeTask', 'coordinators.markTaskDone', 'coordinators.closeTask', 'coordinators.reopenTask'].includes(method)) {
+      const task = coordinator.taskBoard?.tasks.find((t) => t.id === p.taskId);
+      if (!task) throw error(-32602, 'Task not found.');
+      const entry = threads.get(coordinator.threadId);
+      if (task.needsYou && p.asksSeq !== entry.summary.asksSeq) {
+        throw error(-32602, 'That decision card has changed.');
+      }
+      if (method === 'coordinators.answerDecision' || method === 'coordinators.postponeTask') {
+        if (task.kind !== 'decision' || task.state !== 'todo') throw error(-32602, 'Choose an open decision.');
+        if (method === 'coordinators.answerDecision') {
+          task.state = 'done';
+          task.decision.answer = p.answer;
+        } else {
+          task.state = 'postponed';
+          task.due = p.due.type === 'after_task' ? p.due : {
+            type: 'at', at: p.due.at ?? (p.due.date ? new Date(`${p.due.date}T09:00:00`).toISOString() : atNine(1)),
+          };
+        }
+        if (task.needsYou) {
+          delete task.needsYou;
+          Object.assign(entry.summary, { needsYou: false, needs: 'nothing' });
+          delete entry.summary.asks;
+          delete entry.summary.asksSeq;
+          threadChanged(coordinator.threadId);
+        }
+      } else if (method === 'coordinators.reopenTask') {
+        if (!task.canReopen) throw error(-32602, 'Only a confirmed task can be reopened.');
+        task.state = 'ready_to_close';
+        delete task.canReopen;
+      } else {
+        if (method === 'coordinators.closeTask') {
+          if (task.state !== 'ready_to_close') throw error(-32602, 'Wait until the task is ready to close.');
+          task.canReopen = true;
+        } else if (task.owner.kind !== 'user') throw error(-32602, 'Choose an action owned by you.');
+        if (task.state === 'postponed') delete task.due;
+        task.state = 'done';
+      }
     } else if (method === 'coordinators.addTask') {
       if (!p.title?.trim() || !p.doneWhen?.trim()) throw error(-32602, 'Add a title and what finished looks like.');
       coordinator.tasks.push({ id: `todo_${coordinator.tasks.length}`, state: 'todo', title: p.title, doneWhen: p.doneWhen });
@@ -164,33 +242,69 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
       target.notes = String(p.text);
       target.updatedAt = now();
     } else if (method === 'mock.coordinatorAsk') {
-      // The coordinator ends a turn on a decision for Mike: its Needs you card
-      // shows, and Open loops mirrors it.
-      const entry = threads.get(coordinator.threadId);
+      // The legacy fixture keeps its Needs you card and Open loops.
       const decision = coordinator.loops.find((l) => l.kind === 'waiting_on_user');
-      const asks = [{ action: decision.title, why: decision.summary, options: decision.options }];
-      const ts = now();
-      const turnId = `coordinator_ask_${entry.events.length}`;
-      for (const e of [
-        { type: 'turn.started' },
-        { type: 'assistant.text', itemId: `${turnId}_reply`, text: 'One decision for you before the helpers carry on.' },
-        { type: 'turn.completed', outcome: 'completed', needs: 'you', asks, durationMs: 900 },
-      ]) {
-        const event = { ...e, seq: entry.events.length + 1, ts, threadId: coordinator.threadId, turnId };
-        entry.events.push(event);
-        broadcast('thread.event', { threadId: coordinator.threadId, event });
-      }
-      const seq = entry.events.length;
-      Object.assign(entry.summary, { needsYou: true, needs: 'you', asks, asksSeq: seq, lastSeq: seq, lastSeenSeq: seq, updatedAt: ts, lastActivityAt: ts });
-      threadChanged(coordinator.threadId);
+      publishAsk(coordinator, [{ action: decision.title, why: decision.summary, options: decision.options }]);
     } else if (method === 'mock.coordinatorVerify') {
       coordinator.tasks[0].state = 'done';
       target.state = 'The project home is ready. The coordinator checked the helper result and the conversation and living document use the same project state.';
       target.stateUpdatedAt = now();
       projectChanged();
     } else throw error(-32601, 'Unknown coordinator method.');
+    for (const item of coordinator.taskBoard?.workItems ?? []) {
+      const tasks = coordinator.taskBoard.tasks.filter((t) => !t.parentTaskId && t.workItemId === item.id);
+      item.progress = { done: tasks.filter((t) => t.state === 'done').length, total: tasks.length };
+    }
     coordinator.updatedAt = now();
     publish();
     return { coordinator };
   };
+}
+
+function taskBoardFixture(threadId, updatedAt) {
+  const action = (id, title, owner, state, fields = {}) => ({ id, title, kind: 'action', owner, state, ...fields });
+  const agent = { kind: 'agent' };
+  const user = { kind: 'user' };
+  const at = atNine(2);
+  return {
+    workItems: [
+      { id: 'getting-there', title: 'Getting there', collapsed: false },
+      { id: 'filming', title: 'Filming', collapsed: true },
+    ],
+    tasks: [
+      {
+        id: 'parking', title: 'Airport parking', kind: 'decision', owner: user, state: 'todo',
+        workItemId: 'getting-there', needsYou: true, updatedAt, source: { threadId },
+        now: 'LongTerm D is A$109 online and can be changed up to two hours before arrival.',
+        doneWhen: 'You have chosen who books the parking.',
+        due: { type: 'at', at },
+        decision: {
+          options: [
+            { label: 'Prepare the booking for me', does: 'You can check the dates before paying.' },
+            { label: 'I’ll book it myself', does: 'Use the car park quote in the source thread.' },
+          ],
+          recommendation: 'Prepare the booking for me',
+        },
+      },
+      action('prices', 'Compare car parks', agent, 'done', { workItemId: 'getting-there', parentTaskId: 'parking' }),
+      action('data', 'Check US data plans', agent, 'working', { workItemId: 'getting-there', source: { threadId: 'helper_layout', runId: 'run-data' } }),
+      action('barry', 'Reconfirm pickup with Barry', user, 'todo', {
+        workItemId: 'getting-there', due: { type: 'at', at },
+        now: 'Barry offered a lift on Saturday.', doneWhen: 'Barry has confirmed the pickup time.',
+      }),
+      action('pdfs', 'Check PDFs offline', user, 'postponed', {
+        workItemId: 'getting-there', due: { type: 'after_task', taskId: 'parking' },
+      }),
+      action('flights', 'Save flight details', agent, 'done', { workItemId: 'getting-there' }),
+      action('interviews', 'Confirm interviews', { kind: 'person', name: 'Wayne' }, 'waiting', { workItemId: 'filming' }),
+      action('shot-list', 'Read the one-page shot list', agent, 'ready_to_close', { now: 'The draft is ready to read.', source: { threadId, seq: 3 } }),
+    ],
+  };
+}
+
+function atNine(daysAway) {
+  const day = new Date();
+  day.setDate(day.getDate() + daysAway);
+  day.setHours(9, 0, 0, 0);
+  return day.toISOString();
 }

@@ -56,6 +56,7 @@ mod composer_url;
 mod confetti;
 mod connectors_panel;
 mod coordinator_home;
+mod coordinator_tasks;
 mod coordinators;
 mod crash_reporting;
 mod deep_links;

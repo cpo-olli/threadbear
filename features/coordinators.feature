@@ -65,8 +65,8 @@ Feature: Project coordinators
     And the coordinator shows no Done card
     And the coordinator is listed once in its own sidebar section
     And the coordinator's document contains "Two helpers are working"
-    When I open the coordinator's "To-dos" tab
-    Then the coordinator's "To-dos" tab is open
+    When I open the coordinator's "Tasks" tab
+    Then the coordinator's "Tasks" tab is open
     And the coordinator has the to-do "Build the project home" in "Helper working"
     When I pause the project coordinator
     Then the project coordinator is "paused"
@@ -127,3 +127,25 @@ Feature: Project coordinators
     When I open the coordinator's "Activity" tab
     And I click the decision in Open loops
     Then the coordinator's "Conversation" tab is open
+
+  @coordinators.home @coordinators @swift-pending
+  Scenario: Tasks and Highlights act on the same work
+    When I open the project "Threadbear"
+    And the coordinator publishes a task board
+    And I press the task button "Done"
+    Then the task "barry" is "Done"
+    When I press the task button "Got it, close"
+    Then the task "shot-list" is "Done"
+    When I press the task button "Undo"
+    Then the task "shot-list" is "Ready to close"
+    When the window is 1440 by 960 points
+    And I open the coordinator's "Tasks" tab
+    And I collapse the "Getting there" work item
+    Then the task board saves "getting-there" collapsed with 2 of 5 done
+    When I expand the "Getting there" work item
+    And I select the task "Airport parking"
+    And I press the task button "Not now"
+    And I press the task button "Tomorrow 9 a.m."
+    Then the task "parking" is "Postponed"
+    And Highlights has no link to "Airport parking"
+    And there's no error bar

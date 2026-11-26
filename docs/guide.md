@@ -1251,17 +1251,20 @@ with a charter, starting to-dos and a note on where things stand (a thread that
 asks before edits puts up a card first). It runs on this Mac; its
 conversation stays in a Coordinators section below Starred by default, while routine helpers
 run as hidden sessions out of the inbox and appear on the Activity tab.
-The project home has Conversation, Activity, To-dos and Threads tabs, up in the bar beside the project's name, how many helpers are working and Pause (on a narrow window the tabs drop to a row under it). To-dos
-lists everything still open on the project, not just helpers' jobs: steps only
-you can take and decisions you still have to make are on it too. The
-Highlights pane beside the chat has three parts: sticky **Open loops** at
-the top (questions you asked it, staying until you close them, plus a line for
-each decision on its Needs you card; you answer those on the card, and clicking
-the line takes you there), the scrollable **Project brief** (state, goals,
-active work and links), and a collapsed **Agent memory** drawer at the bottom
-for technical notes read and written by the coordinator and its helpers. A
-coordinator card's **Not now** answer puts the decision off until 9 a.m.
-tomorrow, when the coordinator can ask again. You can edit the brief or open Agent memory to edit the raw notes directly; if
+The project home has **Conversation**, **Activity**, **Tasks** and **Threads**
+tabs. On a narrow window the tabs move below the bar. Tasks shows the
+coordinator's work items, their progress and any ungrouped tasks. Select a task
+to see what's happening, what counts as done and where the work came from.
+Use the Add box to send the coordinator a request.
+
+Highlights shows the same tasks under **Needs you**, **In flight** and
+**Ready to close**. Answer a decision or mark your step done from either view.
+**Not now** can bring a decision back tomorrow at 9 a.m., on a date you pick
+or once another task is done. **Got it, close** confirms that work is finished,
+and **Undo** reopens it.
+
+The **Project brief** holds state, goals and links. Open the **Agent memory**
+drawer to see and edit the raw notes the coordinator and its helpers use. If
 another thread changed a field while you were editing, your draft stays open so
 you can merge it. Helpers report to the coordinator, which checks their results
 and brings you decisions it cannot settle. Ask it for a side job that isn't part of the

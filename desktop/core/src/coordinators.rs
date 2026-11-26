@@ -5,6 +5,8 @@ use crate::inbox::{Section, ThreadSummary};
 use serde_json::Value;
 use std::sync::Arc;
 
+pub mod tasks;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
     Active,
@@ -172,6 +174,7 @@ pub struct Coordinator {
     pub interests: Vec<String>,
     pub tasks: Vec<Task>,
     pub loops: Vec<Loop>,
+    pub task_board: Option<Arc<tasks::TaskBoard>>,
     pub updated_at: String,
 }
 
@@ -224,6 +227,7 @@ impl Coordinator {
                 .flatten()
                 .filter_map(Loop::decode)
                 .collect(),
+            task_board: tasks::TaskBoard::decode(&v["taskBoard"]).map(Arc::new),
             updated_at: v["updatedAt"].as_str().unwrap_or("").to_owned(),
         })
     }

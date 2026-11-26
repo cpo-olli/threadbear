@@ -49,7 +49,7 @@ impl Threadbear {
                 |pane| div().size_full().child(pane.clone()).into_any_element(),
             ),
             Tab::Activity => self.render_coordinator_activity(coordinator, cx),
-            Tab::Todos => self.render_coordinator_todos(coordinator, cx),
+            Tab::Tasks => self.render_coordinator_tasks(coordinator, window, cx),
             Tab::Threads => {
                 let threads = threadbear_core::projects::threads_in(
                     &project.id,
@@ -223,9 +223,7 @@ impl Threadbear {
                     format!("Show the project's {}", tab.title().to_lowercase()),
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.coordinators.tab = tab;
-                    this.close_subagent(cx);
-                    cx.notify();
+                    this.open_coordinator_tab(tab, cx);
                 }))
                 .child(label),
             );
@@ -236,6 +234,15 @@ impl Threadbear {
     /// The number beside Conversation: open loops to act on, else the
     /// decisions on its card.
     fn conversation_count(&self, coordinator: &Coordinator) -> usize {
+        if coordinator.task_board.is_some() {
+            return self
+                .threads
+                .get(&coordinator.thread_id)
+                .and_then(|t| t.asks.as_ref())
+                .map_or(0, |asks| {
+                    asks.iter().filter(|ask| ask.ticked != Some(true)).count()
+                });
+        }
         let actionable = coordinator.actionable_loops();
         if actionable > 0 {
             return actionable;
@@ -289,9 +296,7 @@ impl Threadbear {
                     format!("Show the project's {}", tab.title().to_lowercase()),
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.coordinators.tab = tab;
-                    this.close_subagent(cx);
-                    cx.notify();
+                    this.open_coordinator_tab(tab, cx);
                 }))
                 .child(label),
             );
@@ -389,14 +394,48 @@ impl Threadbear {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let memory_open = self.agent_memory_open(&project.id);
-        let loops = self.render_open_loops(project, coordinator, memory_open, window, cx);
         let memory = self.render_agent_memory(project, memory_open, window, cx);
+        if coordinator.task_board.is_some() {
+            let work = self.render_task_highlights(coordinator, cx);
+            let content = if memory_open {
+                div()
+                    .id("coordinator-tasks-next-to-memory")
+                    .flex_none()
+                    .max_h(relative(0.28))
+                    .overflow_y_scroll()
+                    .child(work)
+            } else {
+                div()
+                    .id("coordinator-highlights-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.coordinators.document_scroll)
+                    .child(work)
+                    .child(self.render_project_brief(project, window, cx))
+            };
+            return v_flex()
+                .id("coordinator-living-document")
+                .size_full()
+                .child(content)
+                .child(memory)
+                .into_any_element();
+        }
+        let work = self.render_open_loops(project, coordinator, memory_open, window, cx);
         let mut pane = v_flex()
             .id("coordinator-living-document")
             .size_full()
-            .child(loops);
+            .child(work);
         if !memory_open {
-            pane = pane.child(self.render_project_brief(project, coordinator, window, cx));
+            pane = pane.child(
+                div()
+                    .id("coordinator-project-brief")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.coordinators.document_scroll)
+                    .child(self.render_project_brief(project, window, cx)),
+            );
         }
         pane.child(memory).into_any_element()
     }
@@ -1056,7 +1095,6 @@ impl Threadbear {
     fn render_project_brief(
         &mut self,
         project: &Project,
-        coordinator: &Coordinator,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1076,88 +1114,22 @@ impl Threadbear {
             .child(self.render_text_section(project, TextField::State, window, cx))
             .child(self.render_text_section(project, TextField::Goals, window, cx));
 
-        let active_tasks: Vec<_> = coordinator.tasks.iter().filter(|t| !t.finished()).collect();
-        if !active_tasks.is_empty() {
-            let mut tasks = v_flex().w_full().gap(px(10.)).child(heading("Work", cx));
-            for task in active_tasks.iter().take(3) {
-                tasks = tasks.child(
-                    v_flex()
-                        .gap(px(2.))
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(style::secondary_text(cx))
-                                .child(task.status_label()),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .line_height(px(18.))
-                                .text_color(cx.theme().foreground)
-                                .child(task.title.clone()),
-                        ),
-                );
-            }
-            brief = brief.child(tasks);
+        if !project.links.is_empty() {
+            let text = project
+                .links
+                .iter()
+                .map(|l| format!("[{}]({})", l.title, l.url))
+                .collect::<Vec<_>>()
+                .join(" · ");
+            brief = brief.child(crate::open_gate::reading_markdown_view(
+                SharedString::from(format!("coordinator-links-{}", project.id)),
+                text,
+                crate::open_gate::Origin::ThisMac,
+                project.folders.first().map_or("", String::as_str),
+            ));
         }
 
-        let has_links = !project.links.is_empty();
-        if has_links || !active_tasks.is_empty() {
-            let mut footer = h_flex().w_full().items_center().gap(px(10.)).pt(px(4.));
-            if has_links {
-                let text = project
-                    .links
-                    .iter()
-                    .map(|l| format!("[{}]({})", l.title, l.url))
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-                footer = footer.child(div().flex_1().min_w_0().child(
-                    crate::open_gate::reading_markdown_view(
-                        SharedString::from(format!("coordinator-links-{}", project.id)),
-                        text,
-                        crate::open_gate::Origin::ThisMac,
-                        project.folders.first().map_or("", String::as_str),
-                    ),
-                ));
-            } else {
-                footer = footer.child(div().flex_1());
-            }
-            if !active_tasks.is_empty() {
-                let count = active_tasks.len();
-                footer = footer.child(
-                    crate::highlights::tipped(
-                        div()
-                            .id("coordinator-brief-active-tasks")
-                            .role(Role::Button)
-                            .flex_none()
-                            .cursor_pointer()
-                            .text_size(px(11.5))
-                            .text_color(style::secondary_text(cx))
-                            .hover(|s| s.underline())
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.coordinators.tab = Tab::Todos;
-                                this.close_subagent(cx);
-                                cx.notify();
-                            })),
-                        "Open the project's to-dos tab",
-                    )
-                    .child(format!(
-                        "{count} active task{}",
-                        if count == 1 { "" } else { "s" }
-                    )),
-                );
-            }
-            brief = brief.child(footer);
-        }
-
-        div()
-            .id("coordinator-project-brief")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(&self.coordinators.document_scroll)
-            .child(brief)
-            .into_any_element()
+        brief.into_any_element()
     }
 
     fn render_agent_memory(
@@ -1492,61 +1464,6 @@ impl Threadbear {
         body
     }
 
-    fn render_coordinator_todos(
-        &mut self,
-        coordinator: &Coordinator,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let mut list = v_flex()
-            .w_full()
-            .gap(px(18.))
-            .p(px(28.))
-            .child(heading("To-dos", cx));
-        for task in &coordinator.tasks {
-            list = list.child(
-                v_flex()
-                    .w_full()
-                    .gap(px(7.))
-                    .pb(px(17.))
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(style::secondary_text(cx))
-                            .child(task.status_label()),
-                    )
-                    .child(div().text_size(px(14.)).child(task.title.clone()))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .line_height(px(18.))
-                            .text_color(style::secondary_text(cx))
-                            .child(task.done_when.clone()),
-                    ),
-            );
-        }
-        let id = coordinator.project_id.clone();
-        let busy = self.coordinators.busy.contains(&format!("task:{id}"));
-        list = list.child(control(
-            "coordinator-add-task",
-            "Add a to-do",
-            "Add work and what finished looks like",
-            busy,
-            cx,
-            cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.add_coordinator_task(&id, window, cx)
-            }),
-        ));
-        div()
-            .id("coordinator-todos")
-            .size_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.coordinators.work_scroll)
-            .child(list)
-            .into_any_element()
-    }
-
     fn render_coordinator_activity(
         &mut self,
         coordinator: &Coordinator,
@@ -1684,6 +1601,24 @@ impl Threadbear {
             "thread": current.map(|c| c.thread_id.clone()),
             "state": current.map(|c| if c.state == State::Paused { "paused" } else { "active" }),
             "tasks": current.map(|c| c.tasks.iter().map(|t| json!({"title": t.title, "state": t.status_label()})).collect::<Vec<_>>()),
+            "taskBoard": current.and_then(|c| c.task_board.as_deref()).map(|board| {
+                json!({
+                    "workItems": board.groups().into_iter().filter_map(|group| {
+                        let item = group.item?;
+                        let progress = group.progress();
+                        Some(json!({
+                            "id": item.id, "collapsed": item.collapsed,
+                            "done": progress.done, "total": progress.total,
+                        }))
+                    }).collect::<Vec<_>>(),
+                    "tasks": board.tasks.iter().map(|task| json!({
+                        "id": task.id, "title": task.title, "state": task.state.label(),
+                        "mark": task.mark().glyph(), "parentTaskId": task.parent_task_id,
+                        "canReopen": task.can_reopen,
+                    })).collect::<Vec<_>>(),
+                    "sending": current.is_some_and(|c| self.task_request_sending(&c.project_id)),
+                })
+            }),
             "loops": loops,
             // What Open loops draws: the Needs you card's asks plus the
             // questions it's checking or has answered.

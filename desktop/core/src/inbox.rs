@@ -241,6 +241,8 @@ pub struct ThreadSummary {
 #[serde(rename_all = "camelCase", default)]
 pub struct OpenAsk {
     #[serde(default, deserialize_with = "crate::wire::field")]
+    pub task_id: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub action: String,
     #[serde(rename = "where")]
     #[serde(default, deserialize_with = "crate::wire::field")]
