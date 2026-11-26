@@ -21,6 +21,7 @@ use threadbear_core::composer::{effort_porridge, effort_title, ContextMeter};
 use threadbear_core::inbox::ThreadSummary;
 use threadbear_core::logins::{
     permission_help, permission_title, ChipSettings, PickerRow, PickerSection, RunnerLogins,
+    UNPOOLED_COLUMN,
 };
 
 /// What a chip row needs to know, read when it's drawn.
@@ -212,6 +213,46 @@ impl Composer {
         };
         let model = (!row.is_default).then(|| row.id.clone());
         if settings.uses_pools() {
+            if column == UNPOOLED_COLUMN {
+                if settings.is_pinned_to_unpooled() && provider == settings.provider {
+                    return self.set_model(model, cx);
+                }
+                let Some(account_id) = threadbear_core::new_thread::pick_unpooled_login(
+                    &data.logins.pools,
+                    &data.logins.accounts,
+                    provider,
+                    None,
+                ) else {
+                    return;
+                };
+                // Name the row's model explicitly on a move so the star
+                // (runner's default for that provider) isn't cleared onto the
+                // login's own default.
+                let model = Some(row.id.clone());
+                if data.is_new {
+                    return self.change_thread(
+                        |_| {},
+                        json!({ "accountId": account_id, "model": model }),
+                        cx,
+                    );
+                }
+                let switched = (provider != settings.provider)
+                    .then(|| provider_defaults(&data.logins, provider.to_owned()));
+                let (guess_id, guess_model) = (account_id.clone(), model.clone());
+                self.change_thread(
+                    move |t| {
+                        t.account_id = guess_id;
+                        t.pool_id = None;
+                        if let Some(to) = switched {
+                            switch_provider(t, to);
+                        }
+                        t.model = guess_model;
+                    },
+                    json!({ "accountId": account_id, "model": model }),
+                    cx,
+                );
+                return;
+            }
             // The thread's own pool and provider, or its pinned login: just
             // the model (ThreadSettings.pick).
             if column == PINNED_COLUMN
@@ -1584,7 +1625,9 @@ impl Render for ModelPickerView {
         // With pools, "Login: Auto (gmail for now)" under the effort levels,
         // opening in place to pin the thread to one of the pool's logins
         // (threadbear_core::login_picker, "The model picker's Login line").
-        let login = pools.then(|| self.render_login_footer(&data, &listing.pool, cx));
+        let login = pools.then(|| {
+            self.render_login_footer(&data, &listing.pool, listing.active_provider.as_deref(), cx)
+        });
         let right = v_flex()
             .flex_1()
             .min_w_0()
@@ -1649,7 +1692,8 @@ impl Render for ModelPickerView {
 
 impl ModelPickerView {
     /// Top pool strip: each pool's title with its login count and best room
-    /// ("Main  7 · 100%"), wrapping cleanly when there are several pools.
+    /// ("Main  7 · 100%"), plus a divider and "No pool" tab whenever at least
+    /// one login isn't in any pool, wrapping cleanly when there are several.
     fn render_pool_strip(
         &self,
         data: &ChipData,
@@ -1657,12 +1701,35 @@ impl ModelPickerView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let this = cx.entity().downgrade();
-        let (fg, secondary) = (cx.theme().foreground, cx.theme().muted_foreground);
+        let (fg, secondary, faint) = (
+            cx.theme().foreground,
+            cx.theme().muted_foreground,
+            style::faint_text(cx),
+        );
+        let (warn, danger) = (style::needs_you(cx), cx.theme().danger);
         let (active_fill, hover_fill) = (
             style::primary_opacity(cx, 0.11),
             style::primary_opacity(cx, 0.06),
         );
-        h_flex()
+        let sub_color = move |badge: Option<ChipBadge>, active: bool| match badge {
+            Some(b) if b.is_stop() => danger,
+            Some(ChipBadge::Low(_)) => warn,
+            _ if active => secondary,
+            _ => faint,
+        };
+        let format_sub = |count: usize, best: Option<f64>| match best {
+            Some(best) => format!(
+                "{count} \u{00B7} {}",
+                threadbear_core::new_thread::percent(best)
+            ),
+            None => count.to_string(),
+        };
+        let unpooled = threadbear_core::new_thread::unpooled_logins(
+            &data.logins.pools,
+            &data.logins.accounts,
+            None,
+        );
+        let mut strip = h_flex()
             .flex_wrap()
             .items_center()
             .gap(px(4.))
@@ -1675,16 +1742,13 @@ impl ModelPickerView {
                 let active = p.id == active_pool;
                 let pool_id = p.id.clone();
                 let title = p.title.clone();
-                let count =
-                    threadbear_core::new_thread::pool_logins(p, &data.logins.accounts, None).len();
-                let subtitle =
-                    match threadbear_core::new_thread::best_room(p, &data.logins.accounts) {
-                        Some(best) => format!(
-                            "{count} \u{00B7} {}",
-                            threadbear_core::new_thread::percent(best)
-                        ),
-                        None => count.to_string(),
-                    };
+                let logins =
+                    threadbear_core::new_thread::pool_logins(p, &data.logins.accounts, None);
+                let subtitle = format_sub(
+                    logins.len(),
+                    threadbear_core::new_thread::best_room_of(&logins),
+                );
+                let badge = threadbear_core::new_thread::group_chip_badge(&logins);
                 let pool_providers =
                     threadbear_core::new_thread::pool_providers(p, &data.logins.accounts);
                 let this = this.clone();
@@ -1729,15 +1793,76 @@ impl ModelPickerView {
                     .child(
                         div()
                             .text_size(px(11.))
-                            .text_color(if active {
-                                secondary
-                            } else {
-                                style::faint_text(cx)
-                            })
+                            .text_color(sub_color(badge, active))
                             .child(subtitle),
                     )
-            }))
-            .into_any_element()
+            }));
+        if !unpooled.is_empty() {
+            let active = active_pool == UNPOOLED_COLUMN;
+            let subtitle = format_sub(
+                unpooled.len(),
+                threadbear_core::new_thread::best_room_of(&unpooled),
+            );
+            let badge = threadbear_core::new_thread::group_chip_badge(&unpooled);
+            let providers = threadbear_core::new_thread::unpooled_providers(
+                &data.logins.pools,
+                &data.logins.accounts,
+            );
+            strip = strip
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(1.))
+                        .h(px(14.))
+                        .mx(px(3.))
+                        .bg(style::hairline(cx)),
+                )
+                .child(
+                    h_flex()
+                        .id("picker-pool-unpooled")
+                        .test_support()
+                        .role(Role::Button)
+                        .aria_label(SharedString::from("Pool: No pool"))
+                        .items_center()
+                        .gap(px(6.))
+                        .px(px(10.))
+                        .py(px(5.))
+                        .rounded(px(7.))
+                        .cursor_pointer()
+                        .when(active, |s| s.bg(active_fill))
+                        .when(!active, |s| s.hover(move |s| s.bg(hover_fill)))
+                        .tip(format!("Not in a pool: {subtitle}"))
+                        .on_click(move |_, _, cx| {
+                            if let Some(this) = this.upgrade() {
+                                this.update(cx, |this, cx| {
+                                    this.pool = Some(UNPOOLED_COLUMN.to_owned());
+                                    let keep = this
+                                        .provider
+                                        .as_deref()
+                                        .is_some_and(|p| providers.iter().any(|x| x == p));
+                                    if !keep {
+                                        this.provider = None;
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .when(active, |s| s.font_weight(FontWeight::SEMIBOLD))
+                                .text_color(if active { fg } else { secondary })
+                                .child("No pool"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(sub_color(badge, active))
+                                .child(subtitle),
+                        ),
+                );
+        }
+        strip.into_any_element()
     }
 
     /// Left icon rail for the providers in the chosen pool (or on the runner
@@ -1838,21 +1963,59 @@ impl ModelPickerView {
                 window.dispatch_action(Box::new(gpui_kit::base::actions::Cancel), cx);
             })
         };
-        let heading = |text: SharedString, top: f32, cx: &App| {
-            div()
+        let unpooled_hint = |provider: &str| -> Option<String> {
+            if !pools || listing.pool != UNPOOLED_COLUMN {
+                return None;
+            }
+            let logins = threadbear_core::new_thread::unpooled_logins(
+                &data.logins.pools,
+                &data.logins.accounts,
+                Some(provider),
+            );
+            match logins.len() {
+                0 => None,
+                1 => Some(format!(
+                    "Pins to {}",
+                    threadbear_core::new_thread::login_name(&logins[0].id, &data.logins.accounts)
+                )),
+                n => Some(format!("{n} unpooled logins")),
+            }
+        };
+        let heading = |text: SharedString, hint: Option<String>, top: f32, cx: &App| {
+            h_flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.))
                 .px(px(10.))
                 .pt(px(top))
                 .pb(px(3.))
-                .text_size(px(11.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(style::faint_text(cx))
-                .child(text)
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(style::faint_text(cx))
+                        .child(text),
+                )
+                .when_some(hint, |s, hint| {
+                    s.child(
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(style::faint_text(cx))
+                            .truncate()
+                            .child(hint),
+                    )
+                })
         };
         let mut list = v_flex().p(px(6.)).gap(px(1.));
         if listing.sections.iter().all(|s| s.rows.is_empty()) {
             if query.trim().is_empty() {
                 if let Some(active) = &listing.active_provider {
-                    list = list.child(heading(data.logins.provider_title(active).into(), 4., cx));
+                    list = list.child(heading(
+                        data.logins.provider_title(active).into(),
+                        unpooled_hint(active),
+                        4.,
+                        cx,
+                    ));
                 }
             }
             return list
@@ -1871,13 +2034,18 @@ impl ModelPickerView {
         }
         for (i, section) in listing.sections.iter().cloned().enumerate() {
             if let Some(title) = section.title {
-                list = list.child(heading(title.into(), if i == 0 { 4. } else { 12. }, cx));
+                list = list.child(heading(
+                    title.into(),
+                    unpooled_hint(&section.provider),
+                    if i == 0 { 4. } else { 12. },
+                    cx,
+                ));
             }
             let (main, older): (Vec<_>, Vec<_>) =
                 section.rows.into_iter().partition(|r| !r.is_older);
             list = list.children(main.into_iter().map(|r| row_view(r, &section.provider, cx)));
             if !older.is_empty() {
-                list = list.child(heading("Older".into(), 8., cx)).children(
+                list = list.child(heading("Older".into(), None, 8., cx)).children(
                     older
                         .into_iter()
                         .map(|r| row_view(r, &section.provider, cx)),
@@ -1951,24 +2119,42 @@ impl ModelPickerView {
     }
 
     /// The Login line (option C, 12 Nov 2026): "Login: Auto (gmail for
-    /// now)", or "Login: gmail" when pinned, and a chevron. A click opens the
-    /// list in place: Auto, then the logins of the pool the top strip shows,
-    /// each with its usage line and a bar of the room it has left. For a
-    /// pinned thread's own column, the pool Auto would put it in.
+    /// now)", or "Login: gmail" when pinned (with "(not in a pool)" when
+    /// pinned to an unpooled login), and a chevron. A click opens the list in
+    /// place: Auto then the pool's logins, or the unpooled logins for the
+    /// active provider (with no Auto row) when browsing the "No pool" tab.
     fn render_login_footer(
         &self,
         data: &ChipData,
         column: &str,
+        active_provider: Option<&str>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(settings) = data.settings() else {
             return div().into_any_element();
         };
         let accounts = &data.logins.accounts;
-        let (line, on) =
-            threadbear_core::login_picker::login_line(&settings.account, accounts, settings.pool());
+        let on_unpooled = column == UNPOOLED_COLUMN;
+        let pinned_unpooled = settings.is_pinned_to_unpooled();
+        let (line, on) = threadbear_core::login_picker::login_line_for(
+            &settings.account,
+            accounts,
+            settings.pool(),
+            pinned_unpooled,
+        );
         let open = self.login_open;
         let pinned = settings.pool().is_none();
+        let tip = if on_unpooled {
+            if pinned_unpooled {
+                "Pinned to this unpooled login. Open to pick another unpooled login"
+            } else {
+                "Not in a pool. Open to pick a specific unpooled login"
+            }
+        } else if pinned {
+            "Pinned to this login. Open to pick another, or Auto to let the pool pick"
+        } else {
+            "Let the pool pick, or pin this thread to one login"
+        };
         let header = h_flex()
             .id("picker-login")
             .test_support()
@@ -1982,11 +2168,7 @@ impl ModelPickerView {
             .text_size(px(11.))
             .line_height(px(style::natural_line(11.)))
             .hover(|s| s.bg(style::primary_opacity(cx, 0.04)))
-            .tip(if pinned {
-                "Pinned to this login. Open to pick another, or Auto to let the pool pick"
-            } else {
-                "Let the pool pick, or pin this thread to one login"
-            })
+            .tip(tip)
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.login_open = !this.login_open;
                 cx.notify();
@@ -2013,20 +2195,36 @@ impl ModelPickerView {
         if !open {
             return header.into_any_element();
         }
-        let Some(pool_id) = self.login_list_pool(data, column, cx) else {
-            return header.into_any_element();
-        };
-        let Some(pool) = data.logins.pool(&pool_id) else {
-            return header.into_any_element();
-        };
         let now = threadbear_core::chrono::Local::now();
-        let rows = threadbear_core::login_picker::pool_login_rows(
-            pool,
-            accounts,
-            settings.pool().map(|p| p.id.as_str()),
-            pinned.then_some(settings.account.as_str()),
-            &now,
-        );
+        let (pool_id, rows) = if on_unpooled {
+            let rows = threadbear_core::login_picker::unpooled_login_rows(
+                &data.logins.pools,
+                accounts,
+                active_provider,
+                settings.pool().map(|p| p.id.as_str()),
+                pinned.then_some(settings.account.as_str()),
+                &now,
+            );
+            if rows.is_empty() {
+                return header.into_any_element();
+            }
+            (String::new(), rows)
+        } else {
+            let Some(pool_id) = self.login_list_pool(data, column, cx) else {
+                return header.into_any_element();
+            };
+            let Some(pool) = data.logins.pool(&pool_id) else {
+                return header.into_any_element();
+            };
+            let rows = threadbear_core::login_picker::pool_login_rows(
+                pool,
+                accounts,
+                settings.pool().map(|p| p.id.as_str()),
+                pinned.then_some(settings.account.as_str()),
+                &now,
+            );
+            (pool_id, rows)
+        };
         let list = v_flex()
             .px(px(6.))
             .pb(px(6.))
@@ -2452,8 +2650,9 @@ pub(crate) fn picker_lines(composer: &Entity<Composer>, cx: &App) -> Vec<String>
     picker_lines_with(&data, list)
 }
 
-/// The Login line and its list (open or not) for the thread's own pool, or
-/// a pinned thread's Auto pool, as the automation reads and clicks them.
+/// The Login line and its list (open or not) for the thread's own pool,
+/// unpooled logins when pinned to an unpooled login, or a pinned thread's Auto
+/// pool, as the automation reads and clicks them.
 #[cfg(feature = "automation")]
 fn login_list(
     composer: &Entity<Composer>,
@@ -2469,8 +2668,25 @@ fn login_list(
         return None;
     }
     let accounts = &data.logins.accounts;
-    let line =
-        threadbear_core::login_picker::login_line(&settings.account, accounts, settings.pool());
+    let pinned_unpooled = settings.is_pinned_to_unpooled();
+    let line = threadbear_core::login_picker::login_line_for(
+        &settings.account,
+        accounts,
+        settings.pool(),
+        pinned_unpooled,
+    );
+    let now = threadbear_core::chrono::Local::now();
+    if pinned_unpooled {
+        let rows = threadbear_core::login_picker::unpooled_login_rows(
+            &data.logins.pools,
+            accounts,
+            None,
+            None,
+            Some(settings.account.as_str()),
+            &now,
+        );
+        return Some((String::new(), line, rows));
+    }
     let pool_id = match settings.pool() {
         Some(pool) => pool.id.clone(),
         None => composer.read(cx).unpin_pool(data, cx)?,
@@ -2482,7 +2698,7 @@ fn login_list(
         accounts,
         settings.pool().map(|p| p.id.as_str()),
         pinned.then_some(settings.account.as_str()),
-        &threadbear_core::chrono::Local::now(),
+        &now,
     );
     Some((pool_id, line, rows))
 }
@@ -2517,10 +2733,12 @@ fn picker_lines_with(
             lines.push(line);
         }
     };
-    // A pinned thread's own login first, as the picker opens on it.
-    let pinned = (settings.uses_pools() && settings.pool().is_none()).then(|| {
-        threadbear_core::login_picker::pinned_line(&settings.account, &data.logins.accounts)
-    });
+    // A pinned thread's own login first, as the picker opens on it (unless
+    // it's pinned to an unpooled login, which opens on "# [x] No pool").
+    let pinned = (settings.uses_pools()
+        && settings.pool().is_none()
+        && !settings.is_pinned_to_unpooled())
+    .then(|| threadbear_core::login_picker::pinned_line(&settings.account, &data.logins.accounts));
     if let Some(line) = pinned {
         lines.push(format!("# {line}"));
         add_rows(settings.rows(&settings.provider, ""), &mut lines);
@@ -2534,6 +2752,16 @@ fn picker_lines_with(
                 pool.title
             ));
             for section in settings.sections(&pool.id, "") {
+                if let Some(title) = section.title {
+                    lines.push(format!("## {title}"));
+                }
+                add_rows(section.rows, &mut lines);
+            }
+        }
+        if settings.has_unpooled() {
+            let is_own = settings.is_pinned_to_unpooled();
+            lines.push(format!("# {}No pool", if is_own { "[x] " } else { "[ ] " }));
+            for section in settings.sections(UNPOOLED_COLUMN, "") {
                 if let Some(title) = section.title {
                     lines.push(format!("## {title}"));
                 }
@@ -2682,10 +2910,18 @@ pub(crate) fn picker_click(
         }
         // A pinned thread's own login first, as the picker lists it, so a
         // pick there stays on that login rather than moving into a pool.
-        let pinned = settings.pool().is_none().then(|| PINNED_COLUMN.to_owned());
-        pinned
-            .into_iter()
+        let head = if settings.is_pinned_to_unpooled() {
+            Some(UNPOOLED_COLUMN.to_owned())
+        } else if settings.pool().is_none() {
+            Some(PINNED_COLUMN.to_owned())
+        } else {
+            None
+        };
+        let tail = (settings.has_unpooled() && !settings.is_pinned_to_unpooled())
+            .then(|| UNPOOLED_COLUMN.to_owned());
+        head.into_iter()
             .chain(order.iter().map(|p| p.id.clone()))
+            .chain(tail)
             .collect()
     } else {
         let mut providers: Vec<String> = Vec::new();

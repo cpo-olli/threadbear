@@ -58,6 +58,34 @@ Feature: The chips under the message box
     And I click "GPT-6.1-Sol" in the model picker
     Then the model chip says "Personal · GPT-6.1-Sol"
 
+  # Logins not in any pool get a "No pool" tab at the end of the pool strip
+  # (Mike's pick, Option A, 26 Nov): the Swift app is frozen.
+  @composer.modelpicker @swift-pending
+  Scenario: The No pool tab lets a thread pick models on logins outside any pool
+    Given the runner also has logins outside any pool
+    When I open the model picker
+    And I click "Pool: No pool" in the model picker
+    And I click "Opus 5.5" in the model picker
+    Then the model chip says "solo-high · Opus 5.5"
+    And the "model" menu has a row "# [x] No pool"
+    And the "model" menu has a row "--- Login: solo-high (not in a pool)"
+    And the "model" menu has a row "[x] solo-high"
+    And the "model" menu has a row "[ ] solo-low"
+    And the "model" menu has no row "[ ] Auto"
+    And the "model" menu has no row "[x] Auto"
+    When I pick "Login: solo-low" from the "model" menu
+    Then the model chip says "solo-low · Opus 5.5"
+    And the "model" menu has a row "--- Login: solo-low (not in a pool)"
+    When I open the model picker
+    And I click "Provider: Codex" in the model picker
+    And I click "GPT-6.1-Sol" in the model picker
+    Then the model chip says "Codex solo-codex · GPT-6.1-Sol · Low"
+    When I open the model picker
+    And I click "Pool: Personal" in the model picker
+    And I click "Provider: Codex" in the model picker
+    And I click "GPT-6.1-Sol" in the model picker
+    Then the model chip says "Personal · GPT-6.1-Sol · Low"
+
   # The Login line under the effort levels (Mike's pick, 12 Nov): the Swift
   # app is frozen with its "Pinned to … · Unpin" line, so these are GPUI's.
   @composer.modelpicker @swift-pending

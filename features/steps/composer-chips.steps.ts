@@ -53,6 +53,43 @@ When('I pick {string} from the {string} menu', async function (this: ThreadbearW
   await this.app.do({ cmd: 'composer-menu', menu, click: title });
 });
 
+// Adds unpooled Claude (two logins, different room) and Codex logins without
+// touching the demo pools, so the "No pool" tab appears in the model picker.
+Given('the runner also has logins outside any pool', async function (this: ThreadbearWorld) {
+  const out = await this.app.do({ cmd: 'mock', method: 'accounts', params: {} });
+  type MockAccount = { id: string; provider: string; defaultModel?: string; models?: unknown[] };
+  const { accounts } = JSON.parse(out.slice(out.indexOf('{'))) as { accounts: MockAccount[] };
+  const claude = accounts.find((a) => a.provider === 'claude');
+  const codex = accounts.find((a) => a.provider === 'codex');
+  assert.ok(claude && codex, 'expected demo Claude and Codex accounts');
+  const readAt = new Date().toISOString();
+  const extra = [
+    {
+      id: 'claude-solo-low', provider: 'claude', title: 'solo-low@example.com', email: 'solo-low@example.com',
+      configDir: '~/.claude-solo-low', defaultModel: claude.defaultModel, models: claude.models,
+      usage: { readAt, source: 'live', windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 15 }] },
+    },
+    {
+      id: 'claude-solo-high', provider: 'claude', title: 'solo-high@example.com', email: 'solo-high@example.com',
+      configDir: '~/.claude-solo-high', defaultModel: claude.defaultModel, models: claude.models,
+      usage: { readAt, source: 'live', windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 88 }] },
+    },
+    {
+      id: 'codex-solo', provider: 'codex', title: 'Codex · solo-codex@example.com', email: 'solo-codex@example.com',
+      configDir: '~/.codex-solo', defaultModel: codex.defaultModel, models: codex.models,
+      usage: { readAt, source: 'live', windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 52 }] },
+    },
+  ];
+  await this.app.do({ cmd: 'mock', method: 'accounts', params: { accounts: [...accounts, ...extra] } });
+  let lines: string[] = [];
+  for (let tries = 0; tries < 40; tries += 1) {
+    lines = await menuLines(this, 'model');
+    if (lines.some((l) => l.startsWith('# [ ] No pool'))) return;
+    await sleep(150);
+  }
+  assert.fail(`No pool tab didn't appear:\n${lines.join('\n')}`);
+});
+
 Then('the composer\'s permission mode is {string}', async function (this: ThreadbearWorld, mode: string) {
   await this.until(`permission mode ${mode}`, (d) => (d.composer as { mode?: string }).mode === mode);
 });

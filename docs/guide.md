@@ -1636,10 +1636,12 @@ The switch happens only when you click.
 
 OpenCode, Cursor and Grok, and other agent CLIs that speak the Agent Client
 Protocol, get threads of their own too. If one is installed and logged in
-it turns up as a login and a pool, with its models in the picker. In the
-model picker, pools sit across the top, the chosen pool's providers down
+it turns up as a login and a pool, with its models in the picker. In the model picker, pools sit across the top, the chosen pool's providers down
 the left, and that provider's models on the right (search looks across
-every provider in the chosen pool). OpenCode's
+every provider in the chosen pool). When any login isn't in a pool, a **No pool**
+tab appears after a divider so you can still pick its models and pin the thread
+directly to it (or choose a specific unpooled login from the Login line at the
+foot). OpenCode's
 free models work with no login; Cursor needs `agent login` first, and Grok
 `grok login`.
 Gemini on a Google AI plan (Pro or Ultra) runs through Google's own
