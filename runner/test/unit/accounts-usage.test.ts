@@ -326,7 +326,7 @@ test('a refused login fails the turn as auth, and its made-up reply is dropped',
   const [byText] = normalizer().handle({ type: 'result', subtype: 'success', is_error: true, result: 'Invalid API key · Please run /login', duration_ms: 5 });
   assert.equal((byText as any).result.errorKind, 'auth');
   const [pastDue] = normalizer().handle({ type: 'result', subtype: 'success', is_error: true, result: "Claude Code can't use your Claude subscription, usually because a payment is past due · Pay or renew at https://claude.ai/settings/billing (if you just paid, try again shortly), or use an Anthropic API key instead", duration_ms: 5 });
-  assert.equal((pastDue as any).result.errorKind, 'auth');
+  assert.equal(pastDue && 'result' in pastDue ? pastDue.result.errorKind : undefined, 'auth');
 });
 
 test("a turn that couldn't reach the API fails as network; an answer from the API doesn't", () => {
