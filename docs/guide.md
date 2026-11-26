@@ -2204,7 +2204,13 @@ your Convex deployment as they are, so nothing can scrub a secret from one, and
 `"sync": { "pastedPictures": false }` in `runner.json` keeps them on the Mac. A tool line opens to what the tool did if its runner has full sync on (it starts off; `tb settings full on|off` changes it, and docs/on-your-mac.md says what it sends), and its screenshots show when you tap them. The pencil beside the search starts a new
 thread on a runner's default folder and login. On your Mac,
 `threadbear://thread/<id>` opens a thread in the app instead (the Open
-thread button on a tab BrowserBear has marked for an agent uses it). With
+thread button on a tab BrowserBear has marked for an agent uses it). Another
+app can start a thread for you with `threadbear://new?text=<words>`, plus
+`project=<id>` and `folder=<one of its folders>` on the Mac: the new-thread
+box opens with the words in it, in that project and folder if this Mac has
+them, and nothing is sent until you press Send. The iPhone app takes the same
+link and opens its New thread sheet with the words (Earshot's Ask Claude
+button uses it to start a thread that works out who a voice was). With
 the new desktop app installed beside the Mac app, those links open the new
 one; `desktop/scripts/thread-links.sh swift` sends them back to the Mac app.
 
