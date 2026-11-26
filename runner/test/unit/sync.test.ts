@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
+import { FakeAccounts, FakeAdapter, makeHarness, tick, tmpDir, withCodex } from '../helpers/fakes.ts';
 import { ConvexSync, forBackend, RELAY_CARDS_API_VERSION, ASKED_API_VERSION, LINKS_API_VERSION, PROJECTS_DIFF_API_VERSION, STARS_API_VERSION, NETWORK_WAIT_API_VERSION, OPTION_NOTES_API_VERSION, NEXT_PICK_API_VERSION, BACKEND_API_VERSION, MAC_RUNNER_STATS_API_VERSION, TURNS_API_VERSION, ICONS_API_VERSION, RUNNER_ICON_API_VERSION, SCHEDULES_API_VERSION, SHARE_API_VERSION, WOKE_API_VERSION, STARTED_BY_API_VERSION, SECTIONS_API_VERSION, MODELS_API_VERSION, REPLY_IMAGES_API_VERSION, REPLY_IMAGES_LOOKBACK_MS, REPLY_IMAGES_SCANS_PER_FLUSH, toAccountDoc, PRESENCE_MS, SYNC_COALESCE_MS, HEARTBEAT_MS, SHARED_USAGE_POLL_MS, SYNC_BATCH, ensureRunnerId, toThreadDoc, convexPoster, convexUploader, pictureName, type ThreadDoc } from '../../src/sync.ts';
 import type { Project, ThreadSummary } from '../../src/protocol.ts';
 import { Scheduler, type ScheduleBackend } from '../../src/schedules.ts';
@@ -746,8 +746,7 @@ type Fake = { h: ReturnType<typeof makeHarness>; sync: ConvexSync; calls: Call[]
 // What the fake deployment's photos were fetched from, across setupFull calls in a test.
 const downloads: string[] = [];
 
-function setupFull(opts: { elsewhereThread?: (threadId: string) => ThreadSummary | undefined; heads?: { threadId: string; lastSeq: number }[]; taken?: Set<string>; failApply?: boolean | 'async'; log?: Logger; apiVersion?: number; hold?: (fn: string, args: Record<string, unknown>) => Promise<void> | undefined; holdDownload?: (url: string) => Promise<void> | undefined; answer?: (fn: string, args: Record<string, unknown>) => unknown } = {}): Fake {
-  const h = makeHarness();
+function setupFull(opts: { elsewhereThread?: (threadId: string) => ThreadSummary | undefined; heads?: { threadId: string; lastSeq: number }[]; taken?: Set<string>; failApply?: boolean | 'async'; log?: Logger; apiVersion?: number; hold?: (fn: string, args: Record<string, unknown>) => Promise<void> | undefined; holdDownload?: (url: string) => Promise<void> | undefined; answer?: (fn: string, args: Record<string, unknown>) => unknown } = {}, h = makeHarness()): Fake {
   const calls: Call[] = [];
   // In the order they finish, with hold() keeping some back.
   const landed: Call[] = [];
@@ -1359,6 +1358,45 @@ test('commands: a create from the phone can name its model and effort; an effort
   ]);
   await tick(10);
   assert.deepEqual(applied, ['create one phone haiku high', 'create two phone']);
+});
+
+test('commands: website and iPhone create with only a model id use a login that offers it', async (t) => {
+  const claude = new FakeAdapter();
+  const codex = new FakeAdapter('codex');
+  const opencode = new FakeAdapter('opencode');
+  const h = makeHarness(undefined, {}, {
+    adapters: { claude, codex, opencode },
+    accounts: new FakeAccounts([
+      ...withCodex().map((account) => account.id === 'claude-main'
+        ? { ...account, models: [{ id: 'opus', model: 'claude-open', title: 'Opus' }] }
+        : account),
+      { id: 'codex-extra', provider: 'codex', title: 'Extra', configDir: '/tmp/codex-extra', models: [{ id: 'gpt-extra', model: 'gpt-extra', title: 'Extra', effortLevels: ['high'] }] },
+      {
+        id: 'opencode-main', provider: 'opencode', title: 'OpenCode', configDir: '/tmp/opencode',
+        models: ['gpt-open', 'claude-open', 'open/router'].map((id) => ({ id, model: id, title: id })),
+      },
+    ]),
+  });
+  const { sync, calls, push } = setupFull({}, h);
+  t.after(() => sync.stop());
+  sync.start();
+  await sync.flushNow();
+  push([
+    { commandId: 'web', kind: 'create', args: { text: 'Website', model: 'gpt-extra', effort: 'high' }, createdAt: 1 },
+    { commandId: 'ios-gpt', kind: 'create', args: { text: 'iPhone', cwd: h.cfg.defaults.cwd, model: 'gpt-open' }, createdAt: 2 },
+    { commandId: 'ios-claude', kind: 'create', args: { text: 'iPhone', model: 'claude-open' }, createdAt: 3 },
+    { commandId: 'web-other', kind: 'create', args: { text: 'Website', model: 'open/router' }, createdAt: 4 },
+  ]);
+  await tick(10);
+  const finished = calls.filter(({ fn }) => fn === 'sync:finishCommand');
+  assert.equal(finished.length, 4);
+  assert.deepEqual(codex.sessions.map(({ opts }) => [opts.account.id, opts.model, opts.effort]), [['codex-extra', 'gpt-extra', 'high']]);
+  assert.deepEqual(opencode.sessions.map(({ opts }) => [opts.account.id, opts.model]), [
+    ['opencode-main', 'gpt-open'],
+    ['opencode-main', 'claude-open'],
+    ['opencode-main', 'open/router'],
+  ]);
+  assert.equal(claude.sessions.length, 0);
 });
 
 test('an archive command an agent sent (by: "agent") says an agent archived it; one without, the user', async () => {

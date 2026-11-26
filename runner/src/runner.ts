@@ -3893,7 +3893,12 @@ export class Runner {
     const inPool = pool.accountIds.includes(rec.accountId);
     if (current && inPool && loginOk(current)) return;
     const now = this.clock.now();
-    const next = nextLogin(pool, accounts, rec, now);
+    // A new thread's first turn keeps the advertised model picked for it,
+    // even if every login listing it is out of room.
+    const model = rec.model;
+    const keepModel = !rec.sessionUsed && !rec.lastTurnCompletedSeq && current && modelRow(current, model);
+    const eligible = keepModel ? accounts.filter((a) => a.provider === rec.provider && modelRow(a, model)) : accounts;
+    const next = nextLogin(pool, eligible, rec, now);
     if ('waitUntil' in next) return;
     const why = !current ? `${rec.accountId} isn't on this Mac` : !inPool ? `${current.title} isn't in ${pool.title}` : current.planEnded ? `${current.title}'s plan has ended` : current.signedOut ? `${current.title} is signed out` : `${current.title} ${limitWhy(current, now)}`;
     this.moveLogin(st, accounts.find((a) => a.id === next.accountId)!, why);

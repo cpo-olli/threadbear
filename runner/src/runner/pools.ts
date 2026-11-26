@@ -130,39 +130,68 @@ export const poolsPart = {
     return accounts.find((a) => modelRow(a, model))?.provider;
   },
 
-  // The pool and login for a new thread with no accountId: the pool named,
-  // else the folder's, else the default; and when a model is named whose
-  // provider has no login there, the first pool that has one. The login is
-  // the pool's one of the thread's provider (its model's, else the pool's
-  // first) with the most room, else one of another provider with room,
-  // else the first of its provider. undefined when no pool has a login
-  // this runner can use.
+  // Start in the named, folder or default pool. An advertised model limits
+  // the pick to its logins, with other pools considered for an implicit pick.
   pickForNew(this: Runner, p: { poolId?: string; cwd: string; model?: string; provider?: Provider; onlyProvider?: Provider }): { poolId: string; accountId: string } | undefined {
     const accounts = this.usableAccounts().filter((a) => !p.onlyProvider || a.provider === p.onlyProvider);
     const pools = this.pools().filter((x) => poolAccounts(x, accounts).length);
-    let pool: Pool | undefined;
-    if (p.poolId !== undefined) {
-      pool = pools.find((x) => x.id === p.poolId);
-      if (!pool) throw new RpcError(ErrorCode.badParams, `No pool called ${p.poolId}. Pools: ${pools.map((x) => x.id).join(', ') || 'none'}`);
-    }
-    // The provider the picker's pick was under, when it says: a model id
-    // can be claimed by several (OpenCode lists gpt-… ids too).
-    const wanted = (p.poolId !== undefined ? p.provider : undefined) ?? (p.model ? this.modelProvider(p.model) : undefined);
+    const named = p.poolId !== undefined;
+    let pool = named
+      ? pools.find((x) => x.id === p.poolId)
+      : poolForFolder(pools, p.cwd) ?? pools.find((x) => x.id === this.defaultPoolId(pools, accounts)) ?? pools[0];
     if (!pool) {
-      pool = poolForFolder(pools, p.cwd) ?? pools.find((x) => x.id === this.defaultPoolId(pools, accounts)) ?? pools[0];
-      if (!pool) return undefined;
-      // Naming a model picks its provider: create_thread with an Opus
-      // model and no account must not land on Codex and drop the model.
-      if (wanted && !poolProviders(pool, accounts).includes(wanted)) pool = pools.find((x) => poolProviders(x, accounts).includes(wanted)) ?? pool;
+      if (named) throw new RpcError(ErrorCode.badParams, `No pool called ${p.poolId}. Pools: ${pools.map((x) => x.id).join(', ') || 'none'}`);
+      return undefined;
     }
+    const json = peekRunnerJson(this.cfg.home).defaults;
+    const prefer = json?.accountId ?? this.cfg.defaults.accountId;
+    const now = this.clock.now();
+    const hint = named ? p.provider : undefined;
+    let wanted = hint;
+    if (p.model) {
+      const model = p.model;
+      const search = named ? [pool] : [pool, ...pools.filter((x) => x !== pool)];
+      const members = accounts.filter((a) => (!hint || a.provider === hint) && search.some((x) => x.accountIds.includes(a.id)));
+      const advertised = members.filter((a) => modelRow(a, model));
+      // The website and iPhone send the picker id. A resolved alias can
+      // have that same value on a different provider.
+      const byId = advertised.filter((a) => a.models?.some((row) => row.id === model));
+      const matches = byId.length ? byId : advertised;
+      // Both remote pickers show duplicate ids once, with Claude and
+      // Codex first. A Mac picker can name its provider.
+      const first = matches.find((a) => a.provider === 'claude') ?? matches.find((a) => a.provider === 'codex') ?? matches[0];
+      if (first) {
+        const eligible = advertised.filter((a) => a.provider === first.provider);
+        let withoutRoom: { poolId: string; accountId: string } | undefined;
+        for (const candidate of search) {
+          const accountId = pickInPool(candidate, eligible, { provider: first.provider, prefer, now });
+          if (accountId) return { poolId: candidate.id, accountId };
+          const member = poolAccounts(candidate, eligible)[0];
+          if (member) withoutRoom ??= { poolId: candidate.id, accountId: member.id };
+        }
+        if (withoutRoom) return withoutRoom;
+      }
+
+      wanted ??= this.modelProvider(model);
+      // A cold native login can still know the model even though its
+      // picker list hasn't arrived. An ACP model needs an advertised row.
+      if ((wanted === 'codex' && model.startsWith('gpt-')) || (wanted === 'claude' && isClaudeModel(model))) {
+        const unprobed = members.filter((a) => a.provider === wanted && !a.models?.length);
+        for (const candidate of search) {
+          const accountId = pickInPool(candidate, unprobed, { provider: wanted, prefer, now });
+          if (accountId) return { poolId: candidate.id, accountId };
+        }
+      }
+    }
+
+    // With no advertised model or cold match, use the usual provider and
+    // room fallback. checkSettings works out what the chosen login can run.
+    if (!named && wanted && !poolProviders(pool, accounts).includes(wanted)) pool = pools.find((x) => poolProviders(x, accounts).includes(wanted)) ?? pool;
     const providers = poolProviders(pool, accounts);
     const provider = wanted && providers.includes(wanted) ? wanted : providers[0];
-    // The last login used wins a tie, or when nothing says another has
-    // more room, as pickAccount has it.
-    const json = peekRunnerJson(this.cfg.home).defaults;
-    let accountId = pickInPool(pool, accounts, { provider, prefer: json?.accountId ?? this.cfg.defaults.accountId });
+    let accountId = pickInPool(pool, accounts, { provider, prefer, now });
     if (!accountId) {
-      const next = nextLogin(pool, accounts, { accountId: '', provider }, this.clock.now());
+      const next = nextLogin(pool, accounts, { accountId: '', provider }, now);
       if (!('waitUntil' in next)) accountId = next.accountId;
     }
     accountId ??= poolAccounts(pool, accounts).find((a) => a.provider === provider)?.id ?? poolAccounts(pool, accounts)[0].id;

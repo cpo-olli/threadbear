@@ -608,10 +608,21 @@ thread to another login when the one it's on runs out of room.
   `poolId` if given, else the pool whose `folders` holds `cwd` (the
   longest match), else `defaults.poolId` (`runner.json`'s, the pool last
   named in a `threads.create`; failing that, the pool holding
-  `defaults.accountId`). Then, if a `model` is named whose provider has no
-  login in that pool (and no `poolId` was given), the first pool that has
-  one. The thread's provider is its model's, or the pool's first provider;
-  its login is the pool's pick of that provider (below, "Which login"). A dev
+  `defaults.accountId`). When a `model` is named, the runner looks for
+  logins listing that model. With a named pool it looks inside that pool,
+  using `provider` if given. Otherwise it tries the preferred pool first,
+  then the other pools in order, looking for a matching login with room.
+  If every match is out of room, the first matching pool and login are
+  used. A picker id takes precedence over a resolved alias on another
+  provider. When the same picker id is listed by several providers, an
+  unhinted request uses Claude, then Codex, then the first other provider
+  that lists it, in the runner's account order. The website and iPhone
+  also give Claude and Codex priority for duplicate picker ids. A prefix
+  can suggest Claude or Codex when no login lists the model. Logins of
+  that provider whose lists are still unknown
+  get first try. If there is still no match, the usual pool fallback
+  chooses a login, and the runner checks the requested model against it.
+  Without a model the pool's provider and room rules apply as usual. A dev
   runner's `keepAccount` pins new threads to its account instead, unless
   that login's plan has ended (`planEnded`).
   `defaults.poolId` in `hello` is folder-blind: the app applies folders
