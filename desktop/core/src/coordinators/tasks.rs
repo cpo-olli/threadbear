@@ -1,5 +1,6 @@
 //! The canonical coordinator task board and the two desktop views of it.
 use crate::inbox::{OpenAsk, ThreadSummary};
+use chrono::{NaiveDate, NaiveDateTime, Timelike};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -406,6 +407,11 @@ impl TaskAction {
     }
 }
 
+/// The date picker sends a local calendar date, which the runner schedules for 9 a.m.
+pub fn can_postpone_to_date(date: NaiveDate, now: NaiveDateTime) -> bool {
+    date > now.date() || (date == now.date() && now.hour() < 9)
+}
+
 pub fn collapse_request(project: &str, item: &str, collapsed: bool) -> (&'static str, Value) {
     (
         "coordinators.updateWorkItem",
@@ -426,6 +432,21 @@ mod tests {
     use crate::coordinators::Coordinator;
     use crate::inbox::ThreadSummary;
     use serde_json::json;
+
+    #[test]
+    fn postpone_date_must_have_a_future_local_nine_am() {
+        let yesterday = chrono::NaiveDate::from_ymd_opt(2026, 11, 26).unwrap();
+        let today = yesterday.succ_opt().unwrap();
+        let tomorrow = today.succ_opt().unwrap();
+        let before = today.and_hms_opt(8, 59, 59).unwrap();
+        let at = today.and_hms_opt(9, 0, 0).unwrap();
+        let after = today.and_hms_opt(16, 0, 0).unwrap();
+        assert!(!can_postpone_to_date(yesterday, before));
+        assert!(can_postpone_to_date(today, before));
+        assert!(!can_postpone_to_date(today, at));
+        assert!(!can_postpone_to_date(today, after));
+        assert!(can_postpone_to_date(tomorrow, after));
+    }
 
     fn board() -> TaskBoard {
         TaskBoard::decode(&json!({

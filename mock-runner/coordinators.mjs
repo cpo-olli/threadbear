@@ -96,6 +96,30 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
     Object.assign(entry.summary, { needsYou: true, needs: 'you', asks, asksSeq: seq, lastSeq: seq, lastSeenSeq: seq, updatedAt: ts, lastActivityAt: ts });
     threadChanged(coordinator.threadId);
   }
+  function resolveAsk(entry, taskId) {
+    const { summary } = entry;
+    const asks = summary.asks;
+    const index = asks?.findIndex((ask) => ask.taskId === taskId) ?? -1;
+    if (index < 0) return;
+    const previous = entry.events.findLast((event) => event.type === 'asks.ticked' && event.asksSeq === summary.asksSeq)?.resolved ?? [];
+    const resolved = [...new Set([...previous, index])].sort((a, b) => a - b);
+    summary.asks = asks.map((ask, position) => resolved.includes(position) ? { ...ask, ticked: true } : ask);
+    const ticked = summary.asks.flatMap((ask, position) => ask.ticked ? [position] : []);
+    const event = {
+      type: 'asks.ticked', asksSeq: summary.asksSeq, ticked, resolved,
+      seq: entry.events.length + 1, ts: now(), threadId: summary.id,
+    };
+    entry.events.push(event);
+    summary.lastSeq = event.seq;
+    if (resolved.length === asks.length) {
+      Object.assign(summary, { needsYou: false, needs: 'nothing' });
+      delete summary.asks;
+      delete summary.asksSeq;
+    }
+    broadcast('thread.event', { threadId: summary.id, event });
+    threadChanged(summary.id);
+  }
+
   return async (method, p) => {
     if (method === 'coordinators.list') return { coordinators };
     const target = project(p.projectId ?? initial?.id);
@@ -162,10 +186,7 @@ export function coordinatorDemo({ threads, projects, broadcast, projectChanged, 
         }
         if (task.needsYou) {
           delete task.needsYou;
-          Object.assign(entry.summary, { needsYou: false, needs: 'nothing' });
-          delete entry.summary.asks;
-          delete entry.summary.asksSeq;
-          threadChanged(coordinator.threadId);
+          resolveAsk(entry, task.id);
         }
       } else if (method === 'coordinators.reopenTask') {
         if (!task.canReopen) throw error(-32602, 'Only a confirmed task can be reopened.');

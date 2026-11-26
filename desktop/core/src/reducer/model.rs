@@ -1748,14 +1748,33 @@ impl TranscriptModel {
                 }
             }
 
-            EventPayload::AsksTicked { asks_seq, ticked } => {
+            EventPayload::AsksTicked {
+                asks_seq,
+                ticked,
+                resolved,
+            } => {
                 if let Some(card_id) = self.asks_row_for_seq.get(asks_seq).cloned() {
-                    let ticked: BTreeSet<i64> = ticked.iter().copied().collect();
-                    self.update(&card_id, move |content| {
+                    let mut all_resolved = false;
+                    self.update(&card_id, |content| {
                         if let RowContent::Asks(card) = content {
-                            card.ticked = ticked;
+                            card.resolved.extend(
+                                resolved
+                                    .iter()
+                                    .copied()
+                                    .filter(|i| (0..card.asks.len() as i64).contains(i)),
+                            );
+                            card.ticked = ticked
+                                .iter()
+                                .copied()
+                                .chain(card.resolved.iter().copied())
+                                .collect();
+                            all_resolved =
+                                !card.asks.is_empty() && card.resolved.len() == card.asks.len();
                         }
                     });
+                    if all_resolved && self.open_asks_row.as_deref() == Some(card_id.as_str()) {
+                        self.close_open_asks();
+                    }
                 }
             }
 

@@ -148,4 +148,36 @@ Feature: Project coordinators
     And I press the task button "Tomorrow 9 a.m."
     Then the task "parking" is "Postponed"
     And Highlights has no link to "Airport parking"
+    When I open the coordinator's "Conversation" tab
+    Then the Conversation decision card is gone
     And there's no error bar
+
+
+  @coordinators.home @coordinators @swift-pending
+  Scenario: Answering from Highlights retires the open Conversation card
+    When I open the project "Threadbear"
+    And the coordinator publishes a task board
+    Then the Conversation decision card is open
+    When I press the task button "I’ll book it myself"
+    Then the task "parking" is "Done"
+    And the Conversation decision card is gone
+    And Highlights has no link to "Airport parking"
+    And there's no error bar
+
+  @coordinators.home @coordinators @swift-pending
+  Scenario: Task details scroll to expanded postponement controls at the default viewport
+    When I open the project "Threadbear"
+    And the coordinator publishes a task board
+    And I open the coordinator's "Tasks" tab
+    And I select the task "Airport parking"
+    And I scroll the Tasks details down
+    Then the Tasks details show "Not now"
+    When I press the task button "Not now"
+    And I scroll the Tasks details down
+    Then the Tasks details show "Tomorrow 9 a.m."
+    When I press the task button "After a task"
+    And I scroll the Tasks details down
+    Then the Tasks details show "After Check US data plans"
+    When I press the task button "Pick a date"
+    And I scroll the Tasks details down
+    Then the Tasks details show "Choose a date at 9 a.m."

@@ -9,6 +9,7 @@ type Coordinator = {
   tab: string;
   state: string | null;
   tasks: { title: string; state: string }[] | null;
+  taskDetailsBounds?: [number, number, number, number];
   taskBoard?: {
     workItems: { id: string; collapsed: boolean; done: number; total: number }[];
     tasks: { id: string; title: string; state: string }[];
@@ -263,4 +264,29 @@ Then('the task board saves {string} collapsed with {int} of {int} done', async f
 Then('Highlights has no link to {string}', async function (this: ThreadbearWorld, title: string) {
   const labels = JSON.parse(await this.app.do({ cmd: 'labels' })) as { label: string }[];
   assert.equal(labels.some((control) => control.label === `Open ${title} in Tasks`), false);
+});
+
+
+Then('the Conversation decision card is open', async function (this: ThreadbearWorld) {
+  await this.until('an open Conversation decision card', (d) => d.composer.card?.[0] === 'Needs you');
+});
+
+Then('the Conversation decision card is gone', async function (this: ThreadbearWorld) {
+  await this.until('Conversation cleared the resolved decision card', (d) => !d.composer.card?.length);
+});
+
+When('I scroll the Tasks details down', async function (this: ThreadbearWorld) {
+  const bounds = coordinator(await this.app.dump())?.taskDetailsBounds;
+  assert.ok(bounds, 'The Tasks details must be drawn');
+  const [left, top, right, bottom] = bounds;
+  assert.ok(bottom > top && right > left, 'The details pane has visible space');
+  await this.app.do({ cmd: 'point', x: (left + right) / 2, y: (top + bottom) / 2, scrollY: -2000 });
+});
+
+Then('the Tasks details show {string}', async function (this: ThreadbearWorld, label: string) {
+  const bounds = coordinator(await this.app.dump())?.taskDetailsBounds;
+  assert.ok(bounds, 'The Tasks details must be drawn');
+  const [left, top, right, bottom] = bounds;
+  const labels = JSON.parse(await this.app.do({ cmd: 'labels' })) as { label: string; x: number; y: number }[];
+  assert.ok(labels.some((control) => control.label === label && control.x >= left && control.x < right && control.y >= top && control.y < bottom), `No visible Tasks details control ${label}`);
 });

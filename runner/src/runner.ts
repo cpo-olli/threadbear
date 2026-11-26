@@ -2134,12 +2134,15 @@ export class Runner {
       this.withholdMessage(st, { text, origin: opts.origin, scheduleId: opts.scheduleId });
       return opts.messageId ?? crypto.randomUUID();
     }
-    if (opts.answers?.length && fromMike(text, opts) && this.answered) {
-      const open = rec.needs?.needs === 'you' && rec.needs.seq === rec.lastTurnCompletedSeq ? rec.needs.asks : undefined;
-      try {
-        this.answered(rec.id, opts.answers, open);
-      } catch (e) {
-        this.log.warn('acting on an answer failed', { threadId: rec.id, error: String((e as Error)?.message ?? e) });
+    if (opts.answers?.length && fromMike(text, opts)) {
+      this.coordinators?.checkCardAnswers(rec, opts.answers);
+      if (this.answered) {
+        const open = rec.needs?.needs === 'you' && rec.needs.seq === rec.lastTurnCompletedSeq ? rec.needs.asks : undefined;
+        try {
+          this.answered(rec.id, opts.answers, open);
+        } catch (e) {
+          this.log.warn('acting on an answer failed', { threadId: rec.id, error: String((e as Error)?.message ?? e) });
+        }
       }
     }
     // He has had his say: a wait's checks at its latest time count from here
@@ -4542,17 +4545,39 @@ export class Runner {
     const card = rec.needs;
     if (!card?.asks || card.seq !== asksSeq || card.seq !== rec.lastTurnCompletedSeq) throw new RpcError(ErrorCode.badParams, "That isn't the thread's open card of asks.");
     if (!Number.isInteger(index) || index < 0 || index >= card.asks.length) throw new RpcError(ErrorCode.badParams, 'No such ask.');
+    if (card.resolved?.includes(index)) throw new RpcError(ErrorCode.badParams, 'That decision was already handled on the task board.');
     const set = new Set(card.ticked);
     if (ticked) set.add(index);
     else set.delete(index);
     card.ticked = [...set].sort((a, b) => a - b);
-    // Ticking means Mike is looking at it, so the tick doesn't make the
-    // thread unread.
+    this.publishAskTicks(st, card);
+    return { thread: this.summary(st) };
+  }
+
+  resolveCoordinatorAsks(st: ThreadState, indexes: number[]): void {
+    const card = st.rec.needs;
+    if (!card?.asks || card.seq !== st.rec.lastTurnCompletedSeq) return;
+    const resolved = new Set(card.resolved);
+    const count = resolved.size;
+    for (const index of indexes) resolved.add(index);
+    if (resolved.size === count) return;
+    const previous = card.resolved;
+    card.resolved = [...resolved].sort((a, b) => a - b);
+    try {
+      this.publishAskTicks(st, card);
+    } catch (error) {
+      card.resolved = previous;
+      throw error;
+    }
+  }
+
+  private publishAskTicks(st: ThreadState, card: NonNullable<ThreadRecord['needs']>): void {
+    const { rec } = st;
+    const ticked = [...new Set([...(card.ticked ?? []), ...(card.resolved ?? [])])].sort((a, b) => a - b);
     const caughtUp = rec.lastSeenSeq >= rec.lastSeq;
-    const ev = this.emit(st, { type: 'asks.ticked', asksSeq, ticked: card.ticked });
+    const ev = this.emit(st, { type: 'asks.ticked', asksSeq: card.seq, ticked, ...(card.resolved?.length ? { resolved: card.resolved } : {}) });
     if (caughtUp) rec.lastSeenSeq = ev.seq;
     this.markDirty(st);
-    return { thread: this.summary(st) };
   }
 
   // A quiet wake (HibernationPart.wake) wants Mike once no schedule will
@@ -5186,7 +5211,7 @@ export class Runner {
       s.needs = cleared ? 'nothing' : card.needs;
       if (afterJobs && !cleared) s.asksAfterJobs = true;
       if (asks && !cleared) {
-        const ticked = new Set(card.ticked);
+        const ticked = new Set([...(card.ticked ?? []), ...(card.resolved ?? [])]);
         s.asks = asks.map((a, i) => (ticked.has(i) || (active && !active.includes(a)) ? { ...a, ticked: true as const } : a));
         s.asksSeq = card.seq;
       }

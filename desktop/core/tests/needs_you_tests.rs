@@ -483,6 +483,48 @@ fn testAsksTickedOnTheRunnerComeTicked() {
     assert_eq!(open.ticked, ticks(&[0]));
 }
 
+#[test]
+fn task_board_resolution_keeps_other_asks_open_and_dismisses_the_last() {
+    let mut model = from_events(vec![needs_you(
+        3,
+        "t1",
+        json!([{"action": "Pick a day", "options": ["Friday", "Monday"]},
+               {"action": "Pick a room", "options": ["Blue", "Red"]}]),
+    )]);
+    model.apply(vec![event_turn(
+        4,
+        "asks.ticked",
+        json!({"asksSeq": 3, "ticked": [0], "resolved": [0]}),
+        None,
+    )]);
+    let Some(RowContent::Asks(open)) = model.open_card().map(|row| &row.content) else {
+        panic!("the other decision stays open");
+    };
+    assert!(!open.can_answer(0));
+    assert!(open.can_answer(1));
+    let picks = [(0, 1), (1, 0)].into_iter().collect();
+    assert_eq!(open.active_picks(&picks), [(1, 0)].into_iter().collect());
+
+    model.apply(vec![event_turn(
+        5,
+        "asks.ticked",
+        json!({"asksSeq": 3, "ticked": [1]}),
+        None,
+    )]);
+    let Some(RowContent::Asks(open)) = model.open_card().map(|row| &row.content) else {
+        panic!("a checklist tick must not retire a decision");
+    };
+    assert!(!open.can_answer(0));
+    assert!(open.can_answer(1));
+    model.apply(vec![event_turn(
+        6,
+        "asks.ticked",
+        json!({"asksSeq": 3, "ticked": [0, 1], "resolved": [0, 1]}),
+        None,
+    )]);
+    assert!(model.open_card().is_none());
+}
+
 /// Sent is answered: the card doesn't wait for the runner to show the
 /// message, which can sit queued for a while. A failed send brings it back.
 #[test]

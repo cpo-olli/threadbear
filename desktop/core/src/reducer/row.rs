@@ -764,6 +764,7 @@ pub struct AsksCard {
     pub seq: i64,
     pub asks: Vec<Ask>,
     pub ticked: BTreeSet<i64>,
+    pub resolved: BTreeSet<i64>,
     pub is_open: bool,
     /// The option picked on each ask (ask index to option index).
     pub picks: BTreeMap<i64, i64>,
@@ -789,6 +790,7 @@ impl AsksCard {
             seq,
             asks,
             ticked: BTreeSet::new(),
+            resolved: BTreeSet::new(),
             is_open: true,
             picks: BTreeMap::new(),
             next: Vec::new(),
@@ -803,6 +805,18 @@ impl AsksCard {
 
     pub fn next_pick_one(&self) -> bool {
         self.next_pick.as_deref() == Some("one") && self.next.len() > 1
+    }
+
+    pub fn can_answer(&self, index: usize) -> bool {
+        index < self.asks.len() && !self.resolved.contains(&(index as i64))
+    }
+
+    pub fn active_picks(&self, picks: &BTreeMap<i64, i64>) -> BTreeMap<i64, i64> {
+        picks
+            .iter()
+            .filter(|(index, _)| !self.resolved.contains(index))
+            .map(|(&index, &choice)| (index, choice))
+            .collect()
     }
 
     pub fn ticked_count(&self) -> usize {

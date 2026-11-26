@@ -2529,6 +2529,74 @@ test('a published decision has one id through the card, postponement, wake and a
   assert.equal(h.runner.get(coordinator.threadId).asks?.length ?? 0, 0);
 });
 
+test('task board actions retire only their asks, preserving other choices on the same card', async (t) => {
+  const { c, h, project, claude } = setup();
+  t.after(() => c.stop());
+  const { threadId } = c.create({ projectId: project.id, accountId: 'claude-3' }).coordinator;
+  await tick();
+  const session = claude.sessions.at(-1)!;
+  session.out({ kind: 'event', event: {
+    type: 'tool.call', itemId: 'two-decisions', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn',
+    input: { needs: 'you', asks: [
+      { action: 'Pick a day', options: ['Friday', 'Monday'] },
+      { action: 'Pick a room', options: ['Blue', 'Red'] },
+    ] },
+  } });
+  session.result('completed');
+  await tick();
+  const { asks, asksSeq } = h.runner.get(threadId);
+  const [day, room] = asks ?? [];
+  assert.ok(day?.taskId && room?.taskId && asksSeq);
+  const tickEvents = () => h.events(threadId).filter((event) => event.type === 'asks.ticked').filter((event) => event.asksSeq === asksSeq);
+  const rpc = coordinatorMethods(c);
+  rpc['coordinators.answerDecision']({ projectId: project.id, taskId: day.taskId, answer: 'Friday', asksSeq });
+  assert.deepEqual(tickEvents().at(-1)?.resolved, [0]);
+  assert.deepEqual(h.runner.get(threadId).asks?.map((ask) => Boolean(ask.ticked)), [true, false]);
+  const before = userMessages(h.runner, threadId);
+  assert.throws(() => h.runner.send(threadId, 'Monday', [], { answers: [{ action: day.action, answer: 'Monday' }] }), /already handled/);
+  assert.equal(userMessages(h.runner, threadId), before);
+  h.runner.tickAsk(threadId, asksSeq, 1, true);
+  h.runner.tickAsk(threadId, asksSeq, 1, false);
+  assert.deepEqual(tickEvents().at(-1)?.ticked, [0]);
+  assert.deepEqual(tickEvents().at(-1)?.resolved, [0]);
+  rpc['coordinators.postponeTask']({ projectId: project.id, taskId: room.taskId, due: { type: 'tomorrow' }, asksSeq });
+  assert.deepEqual(tickEvents().at(-1)?.resolved, [0, 1]);
+  assert.equal(h.runner.get(threadId).asks, undefined);
+  assert.throws(() => h.runner.send(threadId, 'Red', [], { answers: [{ action: room.action, answer: 'Red' }] }), /already handled/);
+  assert.equal(userMessages(h.runner, threadId), before);
+});
+
+test('postponing to a date at or before local 9 a.m. leaves the board and wake queue intact', (t) => {
+  const { c, h, project } = setup();
+  t.after(() => c.stop());
+  const { threadId } = c.create({ projectId: project.id }).coordinator;
+  const taskId = c.addWorkTask(project.id, {
+    title: 'Choose a day', doneWhen: 'A day is chosen', work: { kind: 'decision', owner: { kind: 'user' } },
+  }).taskId;
+  const today = new Date(h.clock.now());
+  today.setDate(today.getDate() + 1);
+  today.setHours(9, 0, 0, 0);
+  const beforeNine = today.getTime() - 1;
+  h.clock.advance(beforeNine - h.clock.now());
+  const day = (at: Date) => `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`;
+  const before = c.get(project.id).taskBoard;
+  const wakes = c.forThread(threadId)!.events.length;
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  assert.throws(() => c.postponeTask(project.id, taskId, { type: 'date', date: day(yesterday) }), /future/);
+  assert.deepEqual(c.get(project.id).taskBoard, before);
+  assert.equal(c.forThread(threadId)!.events.length, wakes);
+  const accepted = c.postponeTask(project.id, taskId, { type: 'date', date: day(today) });
+  assert.equal(accepted.taskBoard.tasks[0]?.state, 'postponed');
+  h.clock.advance(1);
+  const atNine = c.get(project.id).taskBoard;
+  const queuedAtNine = c.forThread(threadId)!.events.slice();
+  assert.throws(() => c.postponeTask(project.id, taskId, { type: 'date', date: day(today) }), /future/);
+  assert.throws(() => c.postponeTask(project.id, taskId, { type: 'at', at: today.toISOString() }), /future/);
+  assert.deepEqual(c.get(project.id).taskBoard, atNine);
+  assert.deepEqual(c.forThread(threadId)!.events, queuedAtNine);
+});
+
 test('the legacy card Not now reply postpones the decision and its date survives a restart', async (t) => {
   const { c, h, project, claude, home } = setup();
   t.after(() => c.stop());

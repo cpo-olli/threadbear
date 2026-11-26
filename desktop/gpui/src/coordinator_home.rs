@@ -1601,6 +1601,7 @@ impl Threadbear {
             "thread": current.map(|c| c.thread_id.clone()),
             "state": current.map(|c| if c.state == State::Paused { "paused" } else { "active" }),
             "tasks": current.map(|c| c.tasks.iter().map(|t| json!({"title": t.title, "state": t.status_label()})).collect::<Vec<_>>()),
+            "taskDetailsBounds": current.and_then(|c| self.task_details_bounds(&c.project_id)),
             "taskBoard": current.and_then(|c| c.task_board.as_deref()).map(|board| {
                 json!({
                     "workItems": board.groups().into_iter().filter_map(|group| {

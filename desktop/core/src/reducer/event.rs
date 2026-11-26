@@ -2122,6 +2122,7 @@ pub enum EventPayload {
     AsksTicked {
         asks_seq: i64,
         ticked: Vec<i64>,
+        resolved: Vec<i64>,
     },
     /// Mike edited the message at `from_seq`: every event from there to
     /// `to_seq` is gone from the conversation.
@@ -2378,7 +2379,16 @@ fn decode_payload(type_: &str, c: &Object) -> Result<EventPayload, ()> {
                     .ok_or(())?,
                 Some(_) => return Err(()),
             };
-            EventPayload::AsksTicked { asks_seq, ticked }
+            let resolved = c
+                .get("resolved")
+                .and_then(Value::as_array)
+                .map(|items| items.iter().filter_map(int_value).collect())
+                .unwrap_or_default();
+            EventPayload::AsksTicked {
+                asks_seq,
+                ticked,
+                resolved,
+            }
         }
         "assistant.text.delta" => {
             let f = TextFields::decode(c);

@@ -178,6 +178,9 @@ impl Composer {
                 });
             }
         }
+        self.card
+            .picks
+            .retain(|index, _| !card.resolved.contains(index));
     }
 
     /// The card's saved Something else words (drafts.rs), into each box not
@@ -321,6 +324,9 @@ impl Composer {
         let Some(card) = self.open_card(cx) else {
             return;
         };
+        if !card.can_answer(ask) {
+            return;
+        }
         self.sync_card(&card, cx);
         let key = ask as i64;
         let picked = self.card.picks.get(&key) == Some(&option);
@@ -356,12 +362,11 @@ impl Composer {
                         return;
                     }
                     if let Some(card) = this.open_card(cx) {
-                        if let Some(next) = composer::next_unanswered(
-                            page,
-                            card.asks.len(),
-                            &this.card.picks,
-                            false,
-                        ) {
+                        let mut picks = this.card.picks.clone();
+                        picks.extend(card.resolved.iter().map(|&index| (index, 0)));
+                        if let Some(next) =
+                            composer::next_unanswered(page, card.asks.len(), &picks, false)
+                        {
                             this.set_page(next, cx);
                         }
                     }
@@ -579,6 +584,9 @@ impl Composer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.open_card(cx).is_some_and(|card| card.can_answer(ask)) {
+            return;
+        }
         if command || !self.show_unanswered(ask, true, window, cx) {
             self.send(window, cx);
         }
@@ -597,7 +605,8 @@ impl Composer {
         let Some(card) = self.open_card(cx) else {
             return false;
         };
-        let filled = composer::filled_picks(&self.card.picks, &self.card.notes);
+        let mut filled = composer::filled_picks(&self.card.picks, &self.card.notes);
+        filled.extend(card.resolved.iter().map(|&index| (index, 0)));
         let Some(next) = composer::next_unanswered(ask, card.asks.len(), &filled, or_this) else {
             return false;
         };
@@ -619,13 +628,14 @@ impl Composer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.card.picks.is_empty()
-            && self.card.next_picks.is_empty()
-            && self.card.explain.is_empty()
-        {
+        let Some(card) = self.open_card(cx) else {
+            return false;
+        };
+        let has_answers = !card.active_picks(&self.card.picks).is_empty();
+        if !has_answers && self.card.next_picks.is_empty() && self.card.explain.is_empty() {
             return false;
         }
-        if !self.card.picks.is_empty() && self.show_unanswered(self.card.page, true, window, cx) {
+        if has_answers && self.show_unanswered(self.card.page, true, window, cx) {
             return true;
         }
         self.send(window, cx);
@@ -665,7 +675,8 @@ impl Composer {
                 Value::Null,
             ));
         }
-        let answers = composer::answers(&card.asks, &self.card.picks, &self.card.notes);
+        let picks = card.active_picks(&self.card.picks);
+        let answers = composer::answers(&card.asks, &picks, &self.card.notes);
         if answers.is_empty() {
             return None;
         }
@@ -673,9 +684,9 @@ impl Composer {
             .iter()
             .map(|(_, a)| json!({ "action": a.action, "answer": a.answer }))
             .collect();
-        let images = composer::note_images(&card.asks, &self.card.picks, &self.card.notes);
+        let images = composer::note_images(&card.asks, &picks, &self.card.notes);
         Some((
-            composer::answers_message(&card.asks, &self.card.picks, &self.card.notes, words),
+            composer::answers_message(&card.asks, &picks, &self.card.notes, words),
             images,
             Value::Array(answers_json),
         ))
@@ -684,13 +695,15 @@ impl Composer {
     /// What the box's card asks for next: its placeholder, by what's picked
     /// (ComposerView.placeholder).
     pub(crate) fn card_placeholder(&self, cx: &App) -> &'static str {
-        let needs_you = self.open_card(cx).is_some_and(|c| !c.is_done());
-        if !self.card.picks.is_empty()
+        let Some(card) = self.open_card(cx) else {
+            return "Message";
+        };
+        if !card.active_picks(&self.card.picks).is_empty()
             || !self.card.next_picks.is_empty()
             || !self.card.explain.is_empty()
         {
             "Add anything else…"
-        } else if needs_you {
+        } else if !card.is_done() {
             "Or say something else…"
         } else {
             "Message"
@@ -1226,7 +1239,7 @@ impl Composer {
             {
                 let body = v_flex()
                     .w_full()
-                    .child(self.render_ask(index, ask, numbered, window, cx));
+                    .child(self.render_card_ask(card, index, ask, numbered, window, cx));
                 let cell = div().w_full().min_w_0().col_start(1).row_start(1);
                 pages = pages.child(match slide {
                     // The two asks sliding like a deck (CardDeck): the next
@@ -1267,10 +1280,31 @@ impl Composer {
             column = column.child(pages);
         } else {
             for (index, ask) in card.asks.iter().enumerate() {
-                column = column.child(self.render_ask(index, ask, numbered, window, cx));
+                column = column.child(self.render_card_ask(card, index, ask, numbered, window, cx));
             }
         }
         column.into_any_element()
+    }
+
+    fn render_card_ask(
+        &mut self,
+        card: &AsksCard,
+        index: usize,
+        ask: &Ask,
+        numbered: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if card.can_answer(index) {
+            return self.render_ask(index, ask, numbered, window, cx);
+        }
+        v_flex()
+            .gap(px(4.))
+            .p(px(8.))
+            .text_color(style::secondary_text(cx))
+            .child(ask.action.clone())
+            .child(small_label("Handled on the task board", cx))
+            .into_any_element()
     }
 
     /// One of an ask's links: through the thread's own link handling, as a
@@ -2174,6 +2208,9 @@ impl Composer {
         }
         let mut lines = vec![format!("{} picked", self.card.picks.len())];
         for (i, ask) in card.asks.iter().enumerate() {
+            if !card.can_answer(i) {
+                continue;
+            }
             let options = composer::choices(ask);
             // Each with what it does in brackets, when the agent said, and the
             // ask's links after, as the Swift dump's `decisions` has them (the
@@ -2286,7 +2323,7 @@ impl Composer {
             let Some(the_ask) = card.asks.get(ask.wrapping_sub(1)) else {
                 return Err(format!("no choice {pick}"));
             };
-            if *choice > composer::choices(the_ask).len() {
+            if !card.can_answer(ask - 1) || *choice > composer::choices(the_ask).len() {
                 return Err(format!("no choice {pick}"));
             }
             let option = if *choice == 0 {
@@ -2303,7 +2340,7 @@ impl Composer {
             let Ok(n) = n.parse::<usize>() else {
                 return Err(format!("no ask in {value}"));
             };
-            if !(1..=card.asks.len()).contains(&n) {
+            if !card.can_answer(n.wrapping_sub(1)) {
                 return Err(format!("no ask in {value}"));
             }
             let ask = n - 1;
@@ -2323,8 +2360,8 @@ impl Composer {
             let Some(ask) = n
                 .parse::<usize>()
                 .ok()
-                .filter(|n| (1..=card.asks.len()).contains(n))
-                .map(|n| n - 1)
+                .map(|n| n.wrapping_sub(1))
+                .filter(|&n| card.can_answer(n))
             else {
                 return Err(format!("no ask in {value}"));
             };

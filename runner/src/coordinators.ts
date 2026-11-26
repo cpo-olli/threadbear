@@ -8,8 +8,9 @@ import crypto from 'node:crypto';
 import type { Runner, Notification, ThreadState } from './runner.ts';
 import type { Projects } from './projects.ts';
 import type { Clock, TimerHandle } from './clock.ts';
+import type { ThreadRecord } from './store.ts';
 import type { Logger } from './log.ts';
-import type { Ask, EffortLevel, PermissionMode, PersistedEvent, Project, Question, ThreadSummary } from './protocol.ts';
+import type { Ask, AskAnswer, EffortLevel, PermissionMode, PersistedEvent, Project, Question, ThreadSummary } from './protocol.ts';
 import { ErrorCode, RpcError, sentByAgent } from './protocol.ts';
 import type { StartSessionOptions, SubagentUpdate } from './adapters/types.ts';
 import { atomicWriteFileSync, isDirectory } from './fsutil.ts';
@@ -316,6 +317,7 @@ export class Coordinators {
       this.save();
       this.deps.host.markDirty(thread);
     }
+    this.reconcileCard(row);
   }
 
   private activate(row: Coordinator): void {
@@ -897,12 +899,14 @@ export class Coordinators {
   postponeTask(projectId: string, id: string, input: TaskDueInput): CoordinatorView {
     this.requireOn();
     const record = this.workTask(this.must(projectId), id);
+    const now = this.deps.clock.now();
     let due;
     try {
-      due = resolveTaskDue(input, this.deps.clock.now());
+      due = resolveTaskDue(input, now);
     } catch {
       throw bad('Choose Tomorrow, a valid date or ISO time, or another task on this desk.');
     }
+    if (due.type === 'at' && Date.parse(due.at) <= now) throw bad('Choose a postpone time in the future.');
     return this.setWorkTaskDetails(projectId, id, { ...getTaskDetails(record), state: 'postponed', due });
   }
 
@@ -1910,6 +1914,25 @@ export class Coordinators {
     return bound;
   }
 
+  private reconcileCard(row: Coordinator): void {
+    const thread = this.deps.host.threads.get(row.threadId);
+    const card = thread?.rec.needs;
+    if (!thread || card?.seq !== thread.rec.lastTurnCompletedSeq || !card.asks?.length) return;
+    const active = new Set(this.activeAsks(row.threadId, card.asks, card.seq));
+    this.deps.host.resolveCoordinatorAsks(thread, card.asks.flatMap((ask, index) => active.has(ask) ? [] : [index]));
+  }
+
+  checkCardAnswers(thread: ThreadRecord, answers: AskAnswer[]): void {
+    if (!this.forThread(thread.id)) return;
+    const card = thread.needs;
+    if (!card?.asks || card.seq !== thread.lastTurnCompletedSeq) return;
+    const active = new Set(this.activeAsks(thread.id, card.asks, card.seq));
+    const resolved = new Set(card.asks.flatMap((ask, index) => active.has(ask) && !card.resolved?.includes(index) ? [] : [taskTitleKey(ask.action)]));
+    if (answers.some(({ action }) => resolved.has(taskTitleKey(action)))) {
+      throw bad('That decision was already handled on the task board. Open the current card or use the Tasks tab.');
+    }
+  }
+
   activeAsks(threadId: string, asks: Ask[], seq: number): Ask[] {
     const row = this.forThread(threadId);
     if (!row || !this.on()) return asks;
@@ -1964,9 +1987,12 @@ export class Coordinators {
     const record = this.workTask(row, id);
     if (!isUserDecision(record)) throw bad('Choose a user-owned decision.');
     const previous = workTaskView(record, row.threadId).decision?.answer;
-    if (isTaskDone(record) && previous === answer) return this.get(projectId);
+    if (isTaskDone(record) && previous === answer) {
+      this.reconcileCard(row);
+      return this.get(projectId);
+    }
     this.checkAskSeq(row, id, asksSeq);
-    if (putsOff(answer)) return this.postponeTask(projectId, id, { type: 'tomorrow' });
+    if (putsOff(answer)) return this.postponeFromCard(projectId, id, { type: 'tomorrow' });
     if (isTaskDone(record)) throw bad('That decision is already closed.');
     const review = this.taskReview(row, record);
     if (review?.status === 'answered') throw bad('Open the review to see its current response.');
@@ -1976,18 +2002,23 @@ export class Coordinators {
         this.closeUserDecision(row, record, answer);
         this.changed(row);
       }
+      this.reconcileCard(row);
       return this.get(projectId);
     }
     delete record.designReviewId;
     this.closeUserDecision(row, record, answer);
     this.queueUserTaskEvent(row, { source: 'The user answered a decision', taskId: id, title: record.title, answer });
+    this.reconcileCard(row);
     return this.get(projectId);
   }
 
   postponeFromCard(projectId: string, id: string, due: TaskDueInput, asksSeq?: number): CoordinatorView {
     this.requireOn();
-    this.checkAskSeq(this.must(projectId), id, asksSeq);
-    return this.postponeTask(projectId, id, due);
+    const row = this.must(projectId);
+    this.checkAskSeq(row, id, asksSeq);
+    const result = this.postponeTask(projectId, id, due);
+    this.reconcileCard(row);
+    return result;
   }
 
   userTaskState(projectId: string, id: string, action: 'done' | 'close' | 'reopen'): CoordinatorView {

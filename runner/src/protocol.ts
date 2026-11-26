@@ -975,7 +975,7 @@ export type EventBody =
       review?: LabReviewLedger;
     }
   // The ticks on a card of asks, the whole set each time. Outside any turn.
-  | { type: 'asks.ticked'; asksSeq: number; ticked: number[] }
+  | { type: 'asks.ticked'; asksSeq: number; ticked: number[]; resolved?: number[] }
   // wake: a background task's notification that went into the running
   // turn, which opens a turn that's had its end_turn again (needs.ts,
   // takenEndTurn).

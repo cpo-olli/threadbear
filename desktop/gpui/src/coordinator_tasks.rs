@@ -16,7 +16,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use serde_json::{json, Value};
 use std::collections::HashSet;
-use threadbear_core::chrono::{DateTime, Local};
+use threadbear_core::chrono::{DateTime, Local, NaiveDate};
 use threadbear_core::coordinators::tasks::{
     self, Group, Highlight, Kind, Mark, Owner, PostponeUntil, State, TaskAction, TaskBoard,
     TaskDue, WorkTask,
@@ -75,6 +75,24 @@ enum EditMode {
 }
 
 impl Threadbear {
+    pub(crate) fn task_details_bounds(&self, project: &str) -> Option<[f32; 4]> {
+        if self.coordinators.tab != Tab::Tasks {
+            return None;
+        }
+        let bounds = self
+            .coordinators
+            .task_boards
+            .get(project)?
+            .detail_scroll
+            .bounds();
+        Some([
+            bounds.left().into(),
+            bounds.top().into(),
+            bounds.right().into(),
+            bounds.bottom().into(),
+        ])
+    }
+
     pub(crate) fn task_request_sending(&self, project: &str) -> bool {
         self.coordinators
             .task_boards
@@ -1032,12 +1050,12 @@ impl Threadbear {
                 );
                 if let Some(EditMode::Date { picker, .. }) = mode {
                     controls = controls.child(
-                        div()
-                            .id("task-date-picker")
-                            .w(px(165.))
-                            .max_w_full()
-                            .tip("Choose a date at 9 a.m.")
-                            .child(DatePicker::new(picker).small().placeholder("Choose a date")),
+                        crate::highlights::tipped_as(
+                            div().id("task-date-picker").w(px(165.)).max_w_full(),
+                            "Choose a date at 9 a.m.",
+                            Role::GenericContainer,
+                        )
+                        .child(DatePicker::new(picker).small().placeholder("Choose a date")),
                     );
                 }
                 if let Some(EditMode::AfterTask) = mode {
@@ -1182,7 +1200,11 @@ impl Threadbear {
                 EditorChoice::Postpone => EditMode::Postpone,
                 EditorChoice::AfterTask => EditMode::AfterTask,
                 EditorChoice::Date => {
-                    let picker = cx.new(|cx| DatePickerState::new(window, cx));
+                    let picker = cx.new(|cx| {
+                        DatePickerState::new(window, cx).disabled_matcher(|date: &NaiveDate| {
+                            !tasks::can_postpone_to_date(*date, Local::now().naive_local())
+                        })
+                    });
                     let project = project.clone();
                     let change = cx.subscribe_in(
                         &picker,
@@ -1190,6 +1212,16 @@ impl Threadbear {
                         move |this, _, event: &DatePickerEvent, window, cx| {
                             let DatePickerEvent::Change(date) = event;
                             if let Some(chosen) = date.start() {
+                                if !tasks::can_postpone_to_date(
+                                    chosen.date(),
+                                    Local::now().naive_local(),
+                                ) {
+                                    this.show_error(
+                                        "Choose a postpone time in the future.".to_owned(),
+                                        cx,
+                                    );
+                                    return;
+                                }
                                 let date = chosen.format("%Y-%m-%d").to_string();
                                 this.task_action(
                                     &project,

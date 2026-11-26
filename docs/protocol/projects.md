@@ -814,8 +814,10 @@ The same methods are available over the runner's normal RPC transports.
 Input `due` is `{ type: "tomorrow" }`, `{ type: "date", date: "YYYY-MM-DD" }`,
 `{ type: "after_task", taskId }`, or `{ type: "at", at }`. A decision in
 a Needs you card carries `taskId` in its ask. Both surfaces answer or
-postpone that ID. The board exposes `needsYou: true` for published, active
-decisions and `canReopen: true` for confirmations that support Undo. Card
+postpone that ID. The runner retires the matching ask immediately through an
+`asks.ticked` event with `resolved` indexes. Unresolved asks on the same card
+keep their original indexes. The board exposes `needsYou: true` for published,
+active decisions and `canReopen: true` for confirmations that support Undo. Card
 clients may send `asksSeq` to reject a stale card. The runner records the
 answer and marks the decision done, then wakes the coordinator to act on the
 answer. Use a separate action task for remaining work. Postponing clears the
@@ -860,7 +862,8 @@ optional `coordinatorProjectId`, with no backend version change.
   recorded answer.
 - An absolute due trigger is `{ type: "at", at, preset? }` with an ISO
   timestamp. Following the runner's Tomorrow preset, date picks use 9 a.m.
-  in the runner's local time. The runner stores the resolved instant. An
+  in the runner's local time. The runner rejects an absolute postpone time
+  that has already been reached. The runner stores the resolved instant. An
   `{ type: "after_task", taskId }` trigger is satisfied when that task is done.
   Only postponed tasks trigger a wake. The runner clears the postponement
   and queues a durable wake together, including while the coordinator is
