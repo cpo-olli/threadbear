@@ -125,7 +125,7 @@ const ONLINE_MS = 3 * 60_000;
 // offered in runners.list: an old install, or a test's.
 const FORGET_MS = 30 * 86_400_000;
 
-export type ScheduleRunner = Pick<Runner, 'create' | 'send' | 'sendScheduled' | 'dropScheduled' | 'get' | 'list' | 'hello' | 'onNotification' | 'publish' | 'patchTrust'> & Partial<Pick<Runner, 'accessOf' | 'scheduleHeld'>> & { cfg?: Pick<Runner['cfg'], 'defaults'> };
+export type ScheduleRunner = Pick<Runner, 'createAfterModelProbe' | 'send' | 'sendScheduled' | 'dropScheduled' | 'get' | 'list' | 'hello' | 'onNotification' | 'publish' | 'patchTrust'> & Partial<Pick<Runner, 'accessOf' | 'scheduleHeld'>> & { cfg?: Pick<Runner['cfg'], 'defaults'> };
 
 export type CreateScheduleParams = {
   // A card's approval of `check` (patch-trust.ts, approveCheck). Not from a client.
@@ -1860,7 +1860,7 @@ export class Scheduler {
         record('skipped', out.threadId, out.note);
         return { outcome: 'skipped', note: out.note };
       }
-      const r = this.runner.create({
+      const r = await this.runner.createAfterModelProbe({
         text,
         title: rec.title,
         // Made on another runner, the folder is as it was typed there.

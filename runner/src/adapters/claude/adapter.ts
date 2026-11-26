@@ -9,7 +9,7 @@ import type { Account, ContextUsage, EffortLevel, ModelChoice, PermissionMode, Q
 import { isEffortLevel } from '../../protocol.ts';
 import fs from 'node:fs';
 import type { AgentAdapter, AgentSession, RewindRequest, RewindResult, SessionSink, StartSessionOptions, UserInput } from '../types.ts';
-import { RewindRefusedError } from '../types.ts';
+import { MODEL_LIST_TIMEOUT_MS, RewindRefusedError } from '../types.ts';
 import type { SlashCommand } from '../../slash-commands.ts';
 import { frontmatter } from '../../claude-trust.ts';
 import { cutPointBefore, sessionTranscriptPath } from '../../transcripts.ts';
@@ -165,7 +165,8 @@ export class ClaudeAdapter implements AgentAdapter {
   // Asks the account's CLI what its model picker offers. Starting the CLI
   // with no prompt is enough: it answers initialize without a turn (under
   // a second, no tokens), and is closed straight after.
-  async models(account: Account): Promise<ModelChoice[]> {
+  async models(account: Account, signal = AbortSignal.timeout(MODEL_LIST_TIMEOUT_MS)): Promise<ModelChoice[]> {
+    signal.throwIfAborted();
     const { deps } = this;
     const never = { async *[Symbol.asyncIterator]() { await new Promise<never>(() => {}); } } as AsyncIterable<SDKUserMessage>;
     const abort = new AbortController();
@@ -180,10 +181,14 @@ export class ClaudeAdapter implements AgentAdapter {
     };
     const queryFn = deps.queryFn ?? sdkQuery;
     const q = queryFn({ prompt: never, options });
+    const cancelled = Promise.withResolvers<never>();
+    const onAbort = () => cancelled.reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
     try {
-      const init = await q.initializationResult();
+      const init = await Promise.race([q.initializationResult(), cancelled.promise]);
       return modelChoices(init.models ?? []);
     } finally {
+      signal.removeEventListener('abort', onAbort);
       try {
         q.close();
       } catch {

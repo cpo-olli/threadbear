@@ -264,9 +264,12 @@ export class CodexAdapter implements AgentAdapter {
 
   // model/list without hidden models, in Codex's order. With no thread
   // loaded the process starts no MCP servers.
-  async models(account: Account): Promise<ModelChoice[]> {
+  async models(account: Account, signal?: AbortSignal): Promise<ModelChoice[]> {
+    signal?.throwIfAborted();
     // Every process on a login runs with its home as shared (readyHome).
     await this.readyHome(account);
+    signal?.throwIfAborted();
+    let onAbort: (() => void) | undefined;
     return withShortLivedProcess(
       this.shortLived(account, `models:${account.id}`),
       async (p) => {
@@ -280,7 +283,13 @@ export class CodexAdapter implements AgentAdapter {
         }
         return out;
       },
-      (p, live) => this.track(p, live),
+      (p, live) => {
+        this.track(p, live);
+        if (live) {
+          onAbort = () => p.kill();
+          signal?.addEventListener('abort', onAbort, { once: true });
+        } else if (onAbort) signal?.removeEventListener('abort', onAbort);
+      },
     );
   }
 

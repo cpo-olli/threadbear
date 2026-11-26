@@ -62,7 +62,7 @@ import type {
   ToolApprovalAnswer,
   TurnResult,
 } from './adapters/types.ts';
-import { SessionNotFoundError } from './adapters/types.ts';
+import { MODEL_LIST_TIMEOUT_MS, SessionNotFoundError } from './adapters/types.ts';
 import type { UseResetOutcome } from './adapters/types.ts';
 import type { EventLog, ThreadRecord, ThreadStore, QueuedSend, SubagentRecord } from './store.ts';
 import { cutOut } from './store.ts';
@@ -116,7 +116,7 @@ import { CARRY_ON_BACK, CARRY_ON_MOVED, CARRY_ON_NETWORK, CARRY_ON_RESTART, CARR
 export { CARRY_ON_BACK, CARRY_ON_MOVED, CARRY_ON_NETWORK, CARRY_ON_RESTART, CARRY_ON_SIGNED_OUT, CARRY_ON_TOKEN, NET_CARRY_ON_MAX, NET_PROBE_FIRST_MS, NET_PROBE_MAX_MS, NET_WAIT_MAX_MS, STOPPED_CARRY_ON_MAX_AGE_MS, STOPPED_WORK_WAKES, STOPPED_WORK_WAKE_MAX_AGE_MS, WROTE_INSTEAD, isCarryOn, stoppedWorkMessage };
 import { TITLE_PROMPT, askedLine, checkImages, cleanTitle, fromMike, isAutomaticInput, matchAnswers, oneLine, scheduledMessageId, titleFrom, userMessage } from './runner/messages.ts';
 export { TITLE_PROMPT, askedLine, checkImages, cleanTitle, fromMike, isAutomaticInput, matchAnswers, oneLine, scheduledMessageId, titleFrom, userMessage };
-import { effortTitle, isClaudeModel, modelAccounts, modelRow, modelTitle, pickerModelRow } from './runner/models.ts';
+import { effortTitle, explicitModelKind, isClaudeModel, modelAccounts, modelRow, modelTitle, ModelListsPending } from './runner/models.ts';
 export { effortTitle, isClaudeModel, modelRow, modelTitle };
 import { newRuntime } from './runner/runtime.ts';
 export { newRuntime };
@@ -854,8 +854,7 @@ export class Runner {
   unvouchedSettled = false;
   // Accounts whose CLI has been asked for its models (or is being asked).
   probed = new Set<string>();
-  // Queued or active probes, including a fresh read after a CLI update.
-  private modelProbes = new Map<string, number>();
+  private modelProbes = new Map<string, Promise<void>>();
   rescanTimer?: TimerHandle;
   landRecheckAt = 0;
   liveTimer?: TimerHandle;
@@ -1069,37 +1068,64 @@ export class Runner {
     this.armRescan();
   }
 
-  // Asks each account's CLI for its model list, one account at a time so
-  // startup doesn't spawn three CLIs at once. Clients hear through
-  // accounts.updated; a failure just leaves the list unknown. `only` picks
-  // some accounts: a login that has just appeared, or every Codex account
-  // after a Codex update (a new version can change the list).
-  async probeModels(only?: (a: Account) => boolean): Promise<void> {
+  // Each login has an independent, bounded read. Concurrent callers
+  // share the same in-flight read for that login.
+  async probeModels(only?: (a: Account) => boolean, refresh = false): Promise<void> {
     const targets = this.safeAccounts().filter((a) => !only || only(a));
-    for (const a of targets) {
-      this.probed.add(a.id);
-      this.modelProbes.set(a.id, (this.modelProbes.get(a.id) ?? 0) + 1);
-    }
-    for (const account of targets) {
+    await Promise.all(targets.map(async (account) => {
+      // A CLI upgrade still needs a fresh read if its old CLI was probing.
+      if (refresh) await this.modelProbes.get(account.id);
+      await this.probeModel(account);
+    }));
+  }
+
+  private probeModel(account: Account): Promise<void> {
+    const pending = this.modelProbes.get(account.id);
+    if (pending) return pending;
+    this.probed.add(account.id);
+    const adapter = this.adapters[account.provider];
+    const models = adapter?.models?.bind(adapter);
+    if (this.stopping || !models) return Promise.resolve();
+
+    const probe = Promise.resolve().then(async () => {
+      if (this.stopping) {
+        this.modelProbes.delete(account.id);
+        return;
+      }
+      const abort = new AbortController();
+      let timer: TimerHandle | undefined;
       try {
-        const adapter = this.adapters[account.provider];
-        if (this.stopping || !adapter?.models) continue;
-        const models = await adapter.models(account);
-        this.learnAccount(account.id, { models });
+        const deadline = new Promise<never>((_, reject) => {
+          timer = this.clock.setTimeout(() => {
+            const error = new Error('the model probe timed out');
+            reject(error);
+            abort.abort(error);
+          }, MODEL_LIST_TIMEOUT_MS);
+        });
+        const list = await Promise.race([models(account, abort.signal), deadline]);
+        this.learnAccount(account.id, { models: list });
       } catch (e) {
         this.log.warn('could not read the model list', { accountId: account.id, error: String(e) });
       } finally {
-        const pending = this.modelProbes.get(account.id) ?? 1;
-        if (pending > 1) this.modelProbes.set(account.id, pending - 1);
-        else this.modelProbes.delete(account.id);
+        timer?.cancel();
+        this.modelProbes.delete(account.id);
       }
-    }
+    });
+    this.modelProbes.set(account.id, probe);
+    return probe;
   }
 
-  waitForModelLists(accounts: Account[]): never {
-    const pending = new Set(accounts.map((a) => a.id));
-    void this.probeModels((a) => pending.has(a.id) && a.models === undefined && !this.modelProbes.has(a.id));
-    throw new RpcError(ErrorCode.busy, "Couldn't confirm which login offers that model while model lists are unavailable. Try again, or choose the default model.");
+  // The routing exception comes from drafting, before a thread or its
+  // first turn exists. Re-read account and pool state after the probes.
+  async createAfterModelProbe(params: Parameters<NewThreadsPart['create']>[0]): Promise<ReturnType<NewThreadsPart['create']>> {
+    try {
+      return this.create(params);
+    } catch (e) {
+      if (!(e instanceof ModelListsPending)) throw e;
+      const pending = new Set(e.accountIds);
+      await this.probeModels((a) => pending.has(a.id) && a.models === undefined);
+      return this.create(params);
+    }
   }
 
   learnAccount(accountId: string, info: LearnedAccountInfo): void {
@@ -3903,7 +3929,7 @@ export class Runner {
     const pool = this.poolById(rec.poolId);
     if (!pool) return;
     const accounts = this.usableAccounts();
-    const eligible = this.poolTurnAccounts(rec, accounts);
+    const eligible = this.poolTurnAccounts(rec, pool, accounts);
     const current = accounts.find((a) => a.id === rec.accountId);
     const inPool = pool.accountIds.includes(rec.accountId);
     if (current && eligible.includes(current) && inPool && loginOk(current)) return;
@@ -4296,7 +4322,7 @@ export class Runner {
       for (const text of checked.notes) this.emit(st, { type: 'system.note', text }, rt.turn?.turnId);
     }
     if (params.model !== undefined || providerChanged || model !== rec.model) {
-      if (account && model && model === params.model) rec.explicitModel = pickerModelRow(account, model) ? 'pickerId' : 'modelId';
+      if (account && model && model === params.model) rec.explicitModel = explicitModelKind(account, model);
       else delete rec.explicitModel;
     }
     if (model !== rec.model) {

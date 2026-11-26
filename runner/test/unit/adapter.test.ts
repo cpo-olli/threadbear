@@ -523,6 +523,30 @@ test("models() asks a promptless CLI for its picker; the 'default' row is left o
   assert.deepEqual(modelChoices([{ value: '', displayName: '' } as never]), []);
 });
 
+test('a cancelled Claude model read closes the query even when initialization is hung', async () => {
+  const { fn, state } = fakeQuery();
+  const dir = tmpDir();
+  let closed = false;
+  const adapter = new ClaudeAdapter({
+    claudePath: '/nonexistent', registry: new ProcessRegistry(dir, nullLogger), log: nullLogger,
+    queryFn: (...args) => {
+      const query = fn(...args);
+      return {
+        ...query,
+        initializationResult: () => new Promise(() => {}),
+        close: () => { closed = true; query.close(); },
+      };
+    },
+  });
+  const abort = new AbortController();
+  const result = adapter.models({ id: 'claude-3', provider: 'claude', title: 'x', configDir: dir }, abort.signal);
+  const rejects = assert.rejects(result, /probe timed out/);
+  abort.abort(new Error('probe timed out'));
+  await rejects;
+  assert.equal(closed, true);
+  assert.equal(state.options.abortController.signal.aborted, true);
+});
+
 test('thread rules go to the CLI as allowedTools; messages carry the turn id', async () => {
   const { session, state } = start(['Bash(npm test)']);
   assert.deepEqual(state.options.allowedTools, ['Bash(npm test)']);

@@ -14,7 +14,7 @@ import { historyItems, selectHistory } from '../handoff-history.ts';
 import type { ThreadState } from '../runner.ts';
 import type { ThreadRecord } from '../store.ts';
 import { CARRY_ON_BACK, CARRY_ON_MOVED, CARRY_ON_SIGNED_OUT } from './carry-on.ts';
-import { modelAccounts, modelRow, modelTitle, nativeModelProvider, pickerModelRow } from './models.ts';
+import { modelAccounts, modelRow, modelTitle, ModelListsPending, nativeModelProvider, pickerModelRow } from './models.ts';
 import { providerName } from '../providers.ts';
 
 export const poolsPart = {
@@ -145,7 +145,7 @@ export const poolsPart = {
       // id, even if another login already lists it as a resolved alias.
       if (!matches.some((a) => pickerModelRow(a, model))) {
         const cold = members.filter((a) => a.models === undefined && a.provider !== 'claude' && a.provider !== 'codex');
-        if (cold.length) this.waitForModelLists(cold);
+        if (cold.length) throw new ModelListsPending(cold);
       }
       const pooled = matches.filter((a) => pooledIds.has(a.id));
       const candidates = pooled.length ? pooled : matches;
@@ -192,13 +192,16 @@ export const poolsPart = {
 
   // The same list drives retries, waits and moves. The current login can
   // resume while its list loads again after a runner restart.
-  poolTurnAccounts(this: Runner, rec: ThreadRecord, accounts: Account[] = this.usableAccounts()): Account[] {
+  poolTurnAccounts(this: Runner, rec: ThreadRecord, pool: Pool, accounts: Account[] = this.usableAccounts()): Account[] {
     const { model, explicitModel } = rec;
     if (!model || !explicitModel) return accounts;
-    return accounts.filter((a) => a.provider === rec.provider && (
-      (a.id === rec.accountId && a.models === undefined)
-      || (explicitModel === 'pickerId' ? pickerModelRow(a, model) !== undefined : modelRow(a, model)?.model === model)
-    ));
+    const peers = poolAccounts(pool, accounts).filter((a) => a.provider === rec.provider);
+    const current = peers.find((a) => a.id === rec.accountId && a.models === undefined);
+    const matches = explicitModel === 'unresolved'
+      ? modelAccounts(peers, model)
+      : peers.filter((a) => explicitModel === 'pickerId' ? pickerModelRow(a, model) !== undefined : modelRow(a, model)?.model === model);
+    if (current) matches.push(current);
+    return matches;
   },
 
   // A turn ended failed with errorKind usageLimit. A pool thread marks the
@@ -232,7 +235,7 @@ export const poolsPart = {
     if (this.bucket(rec) !== 'inbox') return;
     // A message sent meanwhile goes next; the before-a-turn check moves it.
     if (rec.queue.length) return;
-    const accounts = this.poolTurnAccounts(rec);
+    const accounts = this.poolTurnAccounts(rec, pool);
     const title = was?.title ?? rec.accountId;
     const waits = rec.carryOnAtReset !== false;
     // A carry-on that runs dry too moves on again while another login has
@@ -270,7 +273,7 @@ export const poolsPart = {
     if (was?.provider !== 'claude') return;
     // The refusal may not have reached the list (no SignInState: tests, or
     // a fork's): never move back onto it.
-    const eligible = this.poolTurnAccounts(rec, accounts).map((a) => (a.id === rec.accountId ? { ...a, signedOut: true } : a));
+    const eligible = this.poolTurnAccounts(rec, pool, accounts).map((a) => (a.id === rec.accountId ? { ...a, signedOut: true } : a));
     const next = nextLogin(pool, eligible, rec, this.clock.now());
     if ('waitUntil' in next) return;
     this.moveLogin(st, accounts.find((a) => a.id === next.accountId)!, `${was?.title ?? rec.accountId} is signed out`);
@@ -380,7 +383,7 @@ export const poolsPart = {
     const stuck = rec.status === 'error' && rec.limitHitTurn !== undefined;
     if (!stuck || rec.waitingForRoom || rt.turn || rec.queue.length || this.bucket(rec) !== 'inbox') return;
     const pool = this.poolById(rec.poolId);
-    if (pool) this.startWait(st, roomWait(pool, this.poolTurnAccounts(rec), this.clock.now()), 'Carrying on by itself once there is room.');
+    if (pool) this.startWait(st, roomWait(pool, this.poolTurnAccounts(rec, pool), this.clock.now()), 'Carrying on by itself once there is room.');
     else this.waitForOwnLogin(st, 'is at its limit.');
   },
 
@@ -423,7 +426,7 @@ export const poolsPart = {
       return;
     }
     let moved = false;
-    const eligible = this.poolTurnAccounts(rec, accounts);
+    const eligible = this.poolTurnAccounts(rec, pool, accounts);
     const to = early === undefined ? undefined : eligible.find((a) => a.id === early && loginOk(a) && pool.accountIds.includes(a.id));
     if (to) {
       this.moveLogin(st, to, current ? `${current.title} ${limitWhy(current, now, true)}` : `${rec.accountId} isn't on this Mac`);
@@ -478,7 +481,7 @@ export const poolsPart = {
     const now = this.clock.now();
     // Another login: never the one it ran dry on, whose block a reading
     // from another of its sessions can clear (a model's own limit).
-    const next = nextLogin(pool, this.poolTurnAccounts(rec), rec, now);
+    const next = nextLogin(pool, this.poolTurnAccounts(rec, pool), rec, now);
     if ('waitUntil' in next) return undefined;
     // The login the wait is for is back at its reset, a minute before
     // `until`. That's the timer's, with its minute of grace, as a provider
@@ -497,7 +500,7 @@ export const poolsPart = {
     if (!w || rt.deleted || rt.turn || rec.queue.length || this.bucket(rec) !== 'inbox' || rec.carryOnAtReset === false) return false;
     const pool = this.poolById(rec.poolId);
     if (!pool?.accountIds.includes(rec.accountId) || !this.readBack.has(rec.accountId)) return false;
-    const current = this.poolTurnAccounts(rec).find((a) => a.id === rec.accountId);
+    const current = this.poolTurnAccounts(rec, pool).find((a) => a.id === rec.accountId);
     return !!current && loginOk(current);
   },
 

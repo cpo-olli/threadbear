@@ -985,7 +985,7 @@ async function main(): Promise<void> {
         ? {
             create: (p: Parameters<typeof runner.create>[0]) => {
               if (box.broken) throw new Error(`This box can't start its thread: ${box.broken}`);
-              return runner.create({ ...p, id: box.secrets.threadId, cwd: box.cwd, accountId: 'claude-main' });
+              return runner.createAfterModelProbe({ ...p, id: box.secrets.threadId, cwd: box.cwd, accountId: 'claude-main' });
             },
             save: saveBox,
           }

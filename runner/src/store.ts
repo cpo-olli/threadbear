@@ -88,7 +88,7 @@ function listOf(v: unknown, kind: 'object' | 'string' | 'number'): unknown[] | u
 }
 export function normaliseRecord(rec: Record<string, unknown>): boolean {
   const before = JSON.stringify(rec);
-  if (!rec.model || (rec.explicitModel !== 'pickerId' && rec.explicitModel !== 'modelId')) delete rec.explicitModel;
+  if (!rec.model || (rec.explicitModel !== 'pickerId' && rec.explicitModel !== 'modelId' && rec.explicitModel !== 'unresolved')) delete rec.explicitModel;
   for (const k of OBJECTS) if (rec[k] !== undefined && !isObject(rec[k])) delete rec[k];
   for (const [k, kind] of [...OBJECT_LISTS.map((k) => [k, 'object'] as const), ...STRING_LISTS.map((k) => [k, 'string'] as const), ...NUMBER_LISTS.map((k) => [k, 'number'] as const)]) {
     if (rec[k] === undefined) continue;
@@ -201,7 +201,7 @@ export type ThreadRecord = {
   model?: string;
   // The requested model survived validation. Defaults and older records
   // that didn't save its origin keep the usual pool spillover.
-  explicitModel?: 'pickerId' | 'modelId';
+  explicitModel?: 'pickerId' | 'modelId' | 'unresolved';
   effort?: EffortLevel;
   modelInUse?: string; // full id the CLI ran the last turn on
   effortInUse?: EffortLevel; // the level the CLI reported for the last turn

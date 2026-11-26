@@ -13,6 +13,7 @@ import { checkSummary } from '../helpers/protocol-check.ts';
 import { readRunnerJson, writeRunnerJson } from '../../src/config.ts';
 import type { Account, ModelChoice, Pool, Provider } from '../../src/protocol.ts';
 import { RpcError } from '../../src/protocol.ts';
+import { MODEL_LIST_TIMEOUT_MS } from '../../src/adapters/types.ts';
 import { CallerGate } from '../../src/rpc-gate.ts';
 import type { UsageReading } from '../../src/usage.ts';
 import { CARRY_ON_BACK, CARRY_ON_MOVED, CARRY_ON_SIGNED_OUT, type SignInSink, type UsageSink } from '../../src/runner.ts';
@@ -281,20 +282,37 @@ test('a cold OpenCode list defers ambiguous names and retries a failed probe wit
   });
   await tick();
   const requests = ['gpt-open', 'claude-open', 'claude-cold-open'].map((model) => ({ text: 'Start', model }));
-  for (const request of requests) {
-    assert.throws(() => h.runner.create(request), (e: RpcError) => e.code === -32020 && /model lists/.test(e.message));
-  }
-  assert.throws(() => h.runner.create({ ...requests[0], accountId: 'open' }), /model lists/);
+  const starts = [...requests, { ...requests[0], accountId: 'open' }].map((request) => h.runner.createAfterModelProbe(request));
+  await tick();
   assert.equal(probes, 2);
   assert.equal(h.runner.list().length, 0);
   assert.equal(claude.sessions.length + codex.sessions.length + open.sessions.length, 0);
   finishProbe(requests.map(({ model }) => modelChoice(model)));
+  const created = await Promise.all(starts);
+  assert.deepEqual(created.map(({ thread }) => thread.accountId), ['open', 'open', 'open', 'open']);
+  assert.deepEqual(created.map(({ thread }) => thread.model), [...requests.map((r) => r.model), requests[0].model]);
+  assert.equal(open.sessions.length, 4);
+});
+
+test('a create waits for the OpenCode deadline before returning busy without a thread', async () => {
+  const open = new FakeAdapter('opencode');
+  open.models = async () => new Promise(() => {});
+  const h = makeHarness(undefined, {}, {
+    adapters: { claude: new FakeAdapter(), opencode: open },
+    accounts: new FakeAccounts([listedLogin('claude', 'claude'), listedLogin('open', 'opencode')]),
+  });
+  const create = h.runner.createAfterModelProbe({ text: 'Start', model: 'gpt-open' });
+  let failed = false;
+  const rejects = assert.rejects(create, (e: RpcError) => {
+    failed = true;
+    return e.code === -32020 && /model lists/.test(e.message);
+  });
   await tick();
-  for (const request of requests) {
-    const thread = h.runner.create(request).thread;
-    assert.equal(thread.accountId, 'open');
-    assert.equal(open.last.opts.model, request.model);
-  }
+  assert.equal(failed, false);
+  h.clock.advance(MODEL_LIST_TIMEOUT_MS);
+  await rejects;
+  assert.equal(h.runner.list().length, 0);
+  assert.equal(open.sessions.length, 0);
 });
 
 test('a successfully fetched empty list offers no models', () => {
@@ -474,6 +492,37 @@ test('a refused Claude login skips logins missing its explicit model', async () 
   assert.equal(h.runner.get(thread.id).accountId, 'matching');
   assert.equal(h.adapter.last.opts.model, wanted.id);
 });
+
+for (const action of ['send', 'limit', 'auth'] as const) {
+  for (const selection of ['create', 'update'] as const) {
+    test(`an Opus choice made at ${selection} before catalogs load still moves after ${action}`, async () => {
+      const h = poolHarness({ accounts: [
+        listedLogin('initial', 'claude'),
+        listedLogin('resolved-only', 'claude', undefined, 80),
+        listedLogin('matching', 'claude', undefined, 40),
+      ] });
+      const thread = h.runner.create({ text: 'Start', ...(selection === 'create' ? { model: 'opus' } : {}) }).thread;
+      h.adapter.last.init();
+      if (selection === 'update') h.runner.update({ threadId: thread.id, model: 'opus' });
+      const opus = modelChoice('opus', 'claude-opus-4-6');
+      h.runner.learnAccount('initial', { models: [opus] });
+      h.runner.learnAccount('resolved-only', { models: [modelChoice('other-picker-id', 'opus')] });
+      h.runner.learnAccount('matching', { models: [opus] });
+      if (action === 'send') {
+        h.adapter.last.result();
+        h.setUsage('initial', room(0));
+        h.runner.send(thread.id, 'Next');
+      } else if (action === 'limit') {
+        limit(h.adapter.last);
+      } else {
+        h.adapter.last.result('failed', undefined, 'Sign in required', { errorKind: 'auth' });
+      }
+      await tick();
+      assert.equal(h.runner.get(thread.id).accountId, 'matching');
+      assert.equal(h.adapter.last.opts.model, 'opus');
+    });
+  }
+}
 
 test('choosing a model on an existing pool thread changes login, and clearing it restores default spillover', async () => {
   const wanted = modelChoice('gpt-special');

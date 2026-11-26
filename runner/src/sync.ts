@@ -703,7 +703,7 @@ export type CommandHost = {
   hibernateWhen?(p: { threadId: string; said: string }): unknown;
   // Seen up to the last event it has.
   markSeen(threadId: string): unknown;
-  create(p: { text: string; images?: ImageRef[]; cwd?: string; accountId?: string; model?: string; effort?: EffortLevel; permissionMode?: PermissionMode; origin?: 'phone' }): { thread: ThreadSummary };
+  create(p: { text: string; images?: ImageRef[]; cwd?: string; accountId?: string; model?: string; effort?: EffortLevel; permissionMode?: PermissionMode; origin?: 'phone' }): { thread: ThreadSummary } | Promise<{ thread: ThreadSummary }>;
   // Stops the thread's turn (a command from the main Mac, API 44).
   interrupt?(threadId: string): unknown;
   share(threadId: string, p: { access: 'off' | 'link'; newLink?: boolean }): unknown;

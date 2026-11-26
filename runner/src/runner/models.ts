@@ -2,7 +2,20 @@
 // Split out of runner.ts (24 Nov 2026) so its parts under runner/ can use them
 // without importing runner.ts back (mikecann-lint's no-import-cycle).
 import type { Account, EffortLevel, ModelChoice, Provider } from '../protocol.ts';
+import { ErrorCode, RpcError } from '../protocol.ts';
 import { stripModelSuffix } from '../accounts.ts';
+
+// Routing can stop before creating a thread so the caller can wait for
+// just the catalogs it needs, then re-evaluate the pick.
+export class ModelListsPending extends RpcError {
+  readonly accountIds: string[];
+
+  constructor(accounts: Account[]) {
+    super(ErrorCode.busy, "Couldn't confirm which login offers that model while model lists are unavailable. Try again, or choose the default model.");
+    this.name = 'ModelListsPending';
+    this.accountIds = accounts.map((a) => a.id);
+  }
+}
 
 // Claude's own ids: its aliases, and anything starting claude- (with or
 // without a [1m] suffix).
@@ -25,6 +38,11 @@ export function modelRow(account: Account, model: string | undefined): ModelChoi
 
 export function pickerModelRow(account: Account, model: string): ModelChoice | undefined {
   return account.models?.find((m) => m.id === model);
+}
+
+export function explicitModelKind(account: Account, model: string): 'unresolved' | 'pickerId' | 'modelId' {
+  if (account.models === undefined) return 'unresolved';
+  return pickerModelRow(account, model) ? 'pickerId' : 'modelId';
 }
 
 // The pickers send the id, which can also be another row's resolved model.

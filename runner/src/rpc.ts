@@ -844,7 +844,7 @@ export class RpcServer {
         // create_thread this way: there's no sandbox to start it in now
         // (taken out 16 Nov 2026), and it mustn't start outside one.
         if (p.confined === true) throw bad("This asks for a thread shut in a sandbox, which Threadbear no longer has, so it wasn't started.");
-        const res = r.create({
+        return r.createAfterModelProbe({
           text: optString(p, 'text') ?? '',
           images: optImages(p),
           cwd: optString(p, 'cwd'),
@@ -863,7 +863,6 @@ export class RpcServer {
           // A CLI this connection had started ahead of it (threads.warm).
           ...(typeof p.warmId === 'string' ? { warmId: p.warmId } : {}),
         });
-        return { thread: res.thread, turnId: res.turnId };
       }
       // A CLI started ahead of the new thread the app is writing
       // (docs/protocol/connection.md, "Warm start"; runner/warm-start.ts).

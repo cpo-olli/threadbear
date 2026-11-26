@@ -338,12 +338,14 @@ export class RewindRefusedError extends Error {
 export type UseResetOutcome = 'reset' | 'nothingToReset' | 'noCredit' | 'alreadyRedeemed';
 export type UseResetResult = { outcome: UseResetOutcome; limits?: Extract<AdapterOutput, { kind: 'limits' }> };
 
+export const MODEL_LIST_TIMEOUT_MS = 25_000;
+
 export interface AgentAdapter {
   readonly provider: Provider;
   start(opts: StartSessionOptions, sink: SessionSink): AgentSession;
   // What the account's CLI offers as models, without starting a turn.
   // Optional: a provider without a picker leaves it out.
-  models?(account: Account): Promise<ModelChoice[]>;
+  models?(account: Account, signal?: AbortSignal): Promise<ModelChoice[]>;
   // Codex: spends one of the login's usage-limit resets (Mike's click on
   // the limit box, never by itself) and reads its limits after.
   useReset?(account: Account): Promise<UseResetResult>;

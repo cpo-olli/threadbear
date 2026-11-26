@@ -6,7 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FakeAccounts, FakeAdapter, makeHarness, tick, tmpDir, withCodex } from '../helpers/fakes.ts';
 import { ConvexSync, forBackend, RELAY_CARDS_API_VERSION, ASKED_API_VERSION, LINKS_API_VERSION, PROJECTS_DIFF_API_VERSION, STARS_API_VERSION, NETWORK_WAIT_API_VERSION, OPTION_NOTES_API_VERSION, NEXT_PICK_API_VERSION, BACKEND_API_VERSION, MAC_RUNNER_STATS_API_VERSION, TURNS_API_VERSION, ICONS_API_VERSION, RUNNER_ICON_API_VERSION, SCHEDULES_API_VERSION, SHARE_API_VERSION, WOKE_API_VERSION, STARTED_BY_API_VERSION, SECTIONS_API_VERSION, MODELS_API_VERSION, REPLY_IMAGES_API_VERSION, REPLY_IMAGES_LOOKBACK_MS, REPLY_IMAGES_SCANS_PER_FLUSH, toAccountDoc, PRESENCE_MS, SYNC_COALESCE_MS, HEARTBEAT_MS, SHARED_USAGE_POLL_MS, SYNC_BATCH, ensureRunnerId, toThreadDoc, convexPoster, convexUploader, pictureName, type ThreadDoc } from '../../src/sync.ts';
-import type { Project, ThreadSummary } from '../../src/protocol.ts';
+import type { ModelChoice, Project, ThreadSummary } from '../../src/protocol.ts';
+import { phoneCommands } from '../../src/handover.ts';
 import { Scheduler, type ScheduleBackend } from '../../src/schedules.ts';
 import { nullLogger, type Logger } from '../../src/log.ts';
 import { AT_MAC_IDLE_MS, isAtMac } from '../../src/presence.ts';
@@ -856,7 +857,7 @@ function setupFull(opts: { elsewhereThread?: (threadId: string) => ThreadSummary
       },
       create: (p) => {
         applied.push(`create ${p.text} ${p.origin}${p.model ? ` ${p.model}` : ''}${p.effort ? ` ${p.effort}` : ''}`);
-        return h.runner.create(p);
+        return phoneCommands(h.runner).create(p);
       },
       share: (id, p) => {
         applied.push(`share ${id} ${p.access}${p.newLink ? ' new' : ''}`);
@@ -1403,6 +1404,43 @@ test('commands: website and iPhone create with only a model id use a login that 
   ]);
   assert.equal(claude.sessions.length, 0);
   assert.deepEqual(h.runner.list().filter((thread) => thread.provider === 'opencode').map((thread) => thread.poolId), [undefined, undefined, undefined]);
+});
+
+test('commands: a known Opus can start while an iPhone create waits for OpenCode models', async (t) => {
+  const claude = new FakeAdapter();
+  const open = new FakeAdapter('opencode');
+  const catalog = Promise.withResolvers<ModelChoice[]>();
+  let probes = 0;
+  open.models = async () => {
+    probes++;
+    return catalog.promise;
+  };
+  const h = makeHarness(undefined, {}, {
+    adapters: { claude, opencode: open },
+    accounts: new FakeAccounts([
+      { id: 'claude-main', provider: 'claude', title: 'Claude', configDir: '/tmp/claude', models: [{ id: 'opus', model: 'claude-opus-4-6', title: 'Opus' }] },
+      { id: 'opencode-main', provider: 'opencode', title: 'OpenCode', configDir: '/tmp/open' },
+    ]),
+  });
+  const { sync, calls, push } = setupFull({}, h);
+  t.after(() => sync.stop());
+  sync.start();
+  await sync.flushNow();
+  const results = () => calls.filter((c) => c.fn === 'sync:finishCommand').map((c) => [c.args.commandId, c.args.ok]);
+  push([
+    { commandId: 'web', kind: 'create', args: { text: 'Website', model: 'opus' }, createdAt: 1 },
+    { commandId: 'phone', kind: 'create', args: { text: 'iPhone', cwd: h.cfg.defaults.cwd, model: 'gpt-open' }, createdAt: 2 },
+  ]);
+  await tick(10);
+  assert.deepEqual(results(), [['web', true]]);
+  assert.equal(claude.last.opts.model, 'opus');
+  assert.equal(open.sessions.length, 0);
+  assert.equal(probes, 1, 'the command joins the startup probe');
+  catalog.resolve([{ id: 'gpt-open', model: 'gpt-open', title: 'GPT in OpenCode' }]);
+  await tick(10);
+  assert.deepEqual(results(), [['web', true], ['phone', true]]);
+  assert.equal(open.last.opts.model, 'gpt-open');
+  assert.equal(h.runner.list().length, 2);
 });
 
 test('an archive command an agent sent (by: "agent") says an agent archived it; one without, the user', async () => {

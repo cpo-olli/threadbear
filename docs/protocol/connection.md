@@ -471,8 +471,9 @@ still `-32602`.)
   resolved model ids. Before the list is known, Claude can try its native
   ids and aliases, and Codex can try `gpt-` ids, unless another provider
   already advertises the id. A new thread with no exact picker id and an
-  unresolved ACP login in scope returns `-32020` so it can be retried
-  once the list is available.
+  unresolved ACP login in scope waits for the login's model probe (up to
+  25 seconds per login). If the needed lists are still unavailable when
+  the probes finish, it returns `-32020` without making a thread.
 - A model the chosen account doesn't support is replaced by the provider's
   default, with a `system.note` ("sonnet isn't a Codex model, so this
   thread uses GPT-6.1-Sol").

@@ -619,11 +619,12 @@ thread to another login when the one it's on runs out of room.
   eligible providers list the same picker id, the runner gives Claude
   and Codex priority in that order, as the website and iPhone do in
   their pickers. If no list has the picker id and a candidate ACP
-  login's list is still unknown, the
-  runner asks for its list and returns a retryable error before creating
-  a thread. A known empty list counts as loaded. With no unresolved ACP
-  login, a native Claude or Codex id can use a login of that provider
-  whose list is unknown. If there is still no match, the usual pool
+  login's list is still unknown, the runner waits for its model probe.
+  Probes run independently. If the needed catalog stays unknown after
+  an error or deadline, the request can be retried. A known empty list
+  counts as loaded. With no unresolved ACP login, a native Claude or
+  Codex id can use a login of that provider whose list is unknown. If
+  there is still no match, the usual pool
   fallback checks the model against its chosen login and explains any
   replacement.
   Without a model the pool's provider and room rules apply as usual. A dev
@@ -799,8 +800,10 @@ thread to another login when the one it's on runs out of room.
 - **Where it moves.** A thread whose request chose a specific model moves
   automatically only to logins of the same provider that list that model.
   This applies before a turn, after a limit or sign-out, and while waiting
-  for room. A thread using the default model takes the pool's pick of its
-  provider (Which login), leaving out the one it's on. If none has room,
+  for room. A native choice made before its list arrived matches picker
+  ids first, then resolved ids. A thread using the default model takes
+  the pool's pick of its provider (Which login), leaving out the one
+  it's on. If none has room,
   it uses the first other provider in pool order with a login with room:
   a cross-provider move, a handoff like any
   provider change, onto that provider's default model

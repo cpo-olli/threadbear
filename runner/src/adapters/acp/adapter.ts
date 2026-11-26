@@ -242,7 +242,7 @@ export class AcpAdapter implements AgentAdapter {
   // folder of temp means it's in nobody's way, and it's closed where the
   // agent can. For an agent that only reports thought_level for the active
   // model (OpenCode 2), switches through each model to read its effortLevels.
-  async models(account: Account): Promise<ModelChoice[]> {
+  async models(account: Account, signal?: AbortSignal): Promise<ModelChoice[]> {
     return this.shortLived(
       account,
       `models:${account.id}`,
@@ -276,7 +276,7 @@ export class AcpAdapter implements AgentAdapter {
           return e ? { ...c, effortLevels: e.levels, ...(e.defaultEffort ? { defaultEffort: e.defaultEffort } : {}) } : c;
         });
       },
-      { deadlineMs: MODELS_DEADLINE_MS },
+      { deadlineMs: MODELS_DEADLINE_MS, signal },
     );
   }
 
@@ -333,8 +333,9 @@ export class AcpAdapter implements AgentAdapter {
     account: Account,
     label: string,
     job: (p: AcpProcess, session: SessionResult | undefined, commands: (ms: number) => Promise<string[]>) => Promise<T>,
-    o: { session?: boolean; noTools?: boolean; deadlineMs?: number } = {},
+    o: { session?: boolean; noTools?: boolean; deadlineMs?: number; signal?: AbortSignal } = {},
   ): Promise<T> {
+    o.signal?.throwIfAborted();
     const { deps } = this;
     const bin = this.binary();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-acp-'));
@@ -365,6 +366,8 @@ export class AcpAdapter implements AgentAdapter {
     let init: InitializeResult | undefined;
     const deadline = o.deadlineMs ? setTimeout(() => p.kill(), o.deadlineMs) : undefined;
     deadline?.unref();
+    const onAbort = () => p.kill();
+    o.signal?.addEventListener('abort', onAbort, { once: true });
     try {
       init = await p.start();
       if (!deps.agent.identifies(init)) throw new Error(`The program found for ${providerName(this.provider)} isn't it.`);
@@ -374,6 +377,7 @@ export class AcpAdapter implements AgentAdapter {
       if (r?.sessionId && p.alive && init?.agentCapabilities?.sessionCapabilities?.close !== undefined) await p.request('session/close', { sessionId: r.sessionId }, CLOSE_SESSION_MS).catch(() => undefined);
       clearTimeout(deadline);
       await p.close().catch(() => undefined);
+      o.signal?.removeEventListener('abort', onAbort);
       removeQuietly(cwd);
     }
   }

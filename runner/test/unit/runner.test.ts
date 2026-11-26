@@ -2,10 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { FakeAccounts, makeHarness, tick, tmpDir, withCodex } from '../helpers/fakes.ts';
+import { FakeAccounts, FakeAdapter, makeHarness, tick, tmpDir, withCodex } from '../helpers/fakes.ts';
 import { checkSequence, checkSummary } from '../helpers/protocol-check.ts';
 import { makePng } from '../helpers/png.ts';
-import { AGENT_MESSAGE_PREFIX, RpcError } from '../../src/protocol.ts';
+import { AGENT_MESSAGE_PREFIX, RpcError, type ModelChoice } from '../../src/protocol.ts';
+import { MODEL_LIST_TIMEOUT_MS } from '../../src/adapters/types.ts';
 import { askedLine, UNTIL_RESTART, WROTE_INSTEAD } from '../../src/runner.ts';
 import { PATIENCE_MS } from '../helpers/patience.ts';
 
@@ -826,6 +827,48 @@ test('the model list comes from the adapter at startup and reaches clients', asy
   };
   await h.runner.probeModels();
   assert.equal(h.runner.hello().accounts[0].models?.length, 1);
+});
+
+test('model probes run independently, release a hung login at the deadline, and ignore its late answer', async () => {
+  const claude = new FakeAdapter();
+  const opencode = new FakeAdapter('opencode');
+  const late = Promise.withResolvers<ModelChoice[]>();
+  const opus = { id: 'opus', model: 'claude-opus-4-6', title: 'Opus' };
+  const gpt = { id: 'gpt-open', model: 'gpt-open', title: 'GPT in OpenCode' };
+  let signal: AbortSignal | undefined;
+  let claudeCalls = 0;
+  let openCalls = 0;
+  claude.models = async (_account, probeSignal) => {
+    signal = probeSignal;
+    return ++claudeCalls === 1 ? late.promise : [opus];
+  };
+  opencode.models = async () => {
+    openCalls++;
+    return [gpt];
+  };
+  const h = makeHarness(undefined, {}, {
+    adapters: { claude, opencode },
+    accounts: new FakeAccounts([
+      { id: 'claude-main', provider: 'claude', title: 'Claude', configDir: '/tmp/claude' },
+      { id: 'opencode-main', provider: 'opencode', title: 'OpenCode', configDir: '/tmp/open' },
+    ]),
+  });
+  const probe = h.runner.probeModels();
+  await tick();
+  assert.deepEqual(h.runner.hello().accounts.find((a) => a.id === 'opencode-main')?.models, [gpt]);
+  assert.equal(claudeCalls, 1);
+  assert.equal(openCalls, 1);
+  assert.equal(signal?.aborted, false);
+  const firstSignal = signal;
+  h.clock.advance(MODEL_LIST_TIMEOUT_MS);
+  await probe;
+  assert.equal(firstSignal?.aborted, true);
+  assert.equal(h.runner.hello().accounts.find((a) => a.id === 'claude-main')?.models, undefined);
+  await h.runner.probeModels((a) => a.provider === 'claude');
+  assert.equal(claudeCalls, 2);
+  late.resolve([]);
+  await tick();
+  assert.deepEqual(h.runner.hello().accounts.find((a) => a.id === 'claude-main')?.models, [opus]);
 });
 
 test('a CLI that dies mid-turn fails the turn with an error event', () => {

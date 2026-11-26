@@ -17,10 +17,11 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { ThreadState } from '../runner.ts';
 import { checkImages, oneLine, titleFrom, userMessage } from './messages.ts';
-import { effortTitle, modelRow, modelTitle, nativeModelProvider, pickerModelRow } from './models.ts';
+import { effortTitle, explicitModelKind, modelRow, modelTitle, ModelListsPending, nativeModelProvider } from './models.ts';
 import { newRuntime } from './runtime.ts';
 import { providerInfo, providerName } from '../providers.ts';
 import { cutSafely } from '../safe-cut.ts';
+import type { Spare } from './warm-start.ts';
 
 export const newThreadsPart = {
   create(this: Runner, params: {
@@ -65,15 +66,8 @@ export const newThreadsPart = {
       // Every one checked before the thread exists: a bad id makes nothing.
       for (const p of projectIds) projects.get(p);
     }
-    const spare = params.id === undefined && !projectIds.length ? this.claimSpare(params.warmId) : undefined;
-    let made;
-    try {
-      made = this.makeThread(params, spare ? { id: spare.id, sessionId: spare.sessionId } : undefined);
-    } catch (e) {
-      spare?.session.kill();
-      throw e;
-    }
-    const { st, notes, loginNote } = made;
+    const warmId = params.id === undefined && !projectIds.length ? params.warmId : undefined;
+    const { st, notes, loginNote, spare } = this.makeThread(params, warmId);
     if (params.starred) st.rec.starredAt = this.isoNow();
     if (spare) this.cli(st, { kind: 'claim', spare });
     if (projectIds.length) this.projects!.changeMembership(st.rec.id, { add: projectIds, by: 'mike' });
@@ -198,10 +192,25 @@ export const newThreadsPart = {
     detached?: boolean;
     coordinatorHelperFor?: string;
     id?: string;
-  }, ids?: { id: string; sessionId: string }): { st: ThreadState; notes: string[]; loginNote?: string } {
-    this.checkAccepting();
-    const { rec, account, poolId, notes, loginNote } = this.draftRecord(params, ids);
-    this.store.create(rec);
+  }, warmId?: string): { st: ThreadState; notes: string[]; loginNote?: string; spare?: Spare } {
+    // A request waiting for model catalogs can try again with the warm CLI.
+    const warm = warmId && this.spare?.id === warmId && !this.threads.has(warmId) ? this.spare : undefined;
+    let draft;
+    try {
+      this.checkAccepting();
+      draft = this.draftRecord(params, warm);
+    } catch (e) {
+      if (!(e instanceof ModelListsPending)) this.claimSpare(warm?.id)?.session.kill();
+      throw e;
+    }
+    const spare = this.claimSpare(warm?.id);
+    const { rec, account, poolId, notes, loginNote } = draft;
+    try {
+      this.store.create(rec);
+    } catch (e) {
+      spare?.session.kill();
+      throw e;
+    }
     const st: ThreadState = { rec, rt: newRuntime(this.clock.now()) };
     this.threads.set(rec.id, st);
     // What Mike picked last is what the next thread starts on, so a
@@ -210,7 +219,7 @@ export const newThreadsPart = {
       /* keep the last pick */
     } else if (!poolId) this.rememberAccount(account.id);
     else if (params.poolId !== undefined) this.rememberPool(poolId);
-    return { st, notes, loginNote };
+    return { st, notes, loginNote, spare };
   },
 
   // A new thread's record as create works it out, without making the
@@ -271,7 +280,7 @@ export const newThreadsPart = {
     const account = this.accounts.get(accountId);
     if (!account) throw new RpcError(ErrorCode.accountNotFound, `No account called ${accountId}`);
     this.checkProvider(account);
-    if (params.model && account.models === undefined && account.provider !== 'claude' && account.provider !== 'codex') this.waitForModelLists([account]);
+    if (params.model && account.models === undefined && account.provider !== 'claude' && account.provider !== 'codex') throw new ModelListsPending([account]);
     if (!isDirectory(cwd)) throw new RpcError(ErrorCode.badParams, `Folder not found: ${cwd}`);
     // A folder the old sandbox experiment shut threads in (config.ts).
     const retired = this.retiredSandbox(cwd);
@@ -305,7 +314,7 @@ export const newThreadsPart = {
     const checked = this.checkSettings(account, params.model || this.defaultModelFor(account.provider), params.effort ?? this.defaultEffortFor(account.provider));
     if (checked.model) {
       rec.model = checked.model;
-      if (params.model === checked.model) rec.explicitModel = pickerModelRow(account, checked.model) ? 'pickerId' : 'modelId';
+      if (params.model === checked.model) rec.explicitModel = explicitModelKind(account, checked.model);
     }
     if (checked.effort) rec.effort = checked.effort;
     // Whether the first turn should look for a worktree patch. Reading the
