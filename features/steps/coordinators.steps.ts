@@ -13,6 +13,7 @@ type Coordinator = {
   openLoopsCount: number | null;
   agentMemoryOpen: boolean;
   undoLoop: { loopId: string; title: string } | null;
+  replyingLoop: { loopId: string; picked: string | null } | null;
   documentShown: boolean;
   editing: { draft: string; reviewCurrent: string | null } | null;
   document: { state: string; notes: string } | null;
@@ -198,6 +199,14 @@ When('I undo closing the open loop', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'click', tip: 'Reopen this closed loop' });
 });
 
-When('I reply {string} to the waiting open loop', async function (this: ThreadbearWorld, option: string) {
-  await this.app.do({ cmd: 'click', tip: `Reply "${option}" and close this loop` });
+When('I pick {string} on the waiting open loop', async function (this: ThreadbearWorld, option: string) {
+  await this.app.do({ cmd: 'click', tip: `Pick "${option}", then add anything else and send` });
+});
+
+Then('the reply box is open with {string} picked', async function (this: ThreadbearWorld, option: string) {
+  await this.until(`reply box with "${option}" picked`, (d) => coordinator(d)?.replyingLoop?.picked === option);
+});
+
+When('I send the picked reply {string}', async function (this: ThreadbearWorld, option: string) {
+  await this.app.do({ cmd: 'click', tip: `Send "${option}" and close this loop` });
 });

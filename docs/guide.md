@@ -1254,7 +1254,8 @@ run as hidden sessions out of the inbox and appear on the Activity tab.
 The project home has Conversation, Activity, To-dos and Threads tabs, with
 Highlights organized into three parts beside the chat: sticky **Open loops** at
 the top (your open or answered questions and decisions waiting on you, staying
-open until you close or reply to them), the scrollable **Project brief** (state,
+open until you close or reply to them; clicking one of a decision's answers picks it and
+opens a box for anything else you want to add, and Send sends both), the scrollable **Project brief** (state,
 goals, active work and links), and a collapsed **Agent memory** drawer at the
 bottom for technical notes read and written by the coordinator and its helpers.
 You can edit the brief or open Agent memory to edit the raw notes directly; if

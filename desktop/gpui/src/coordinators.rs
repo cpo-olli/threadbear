@@ -47,11 +47,27 @@ pub(crate) struct UndoLoop {
     pub(crate) title: String,
 }
 
+/// The box open under an open loop: a written reply, or one of its options
+/// picked (`picked`) waiting for a note and Send, the way a Needs you card's
+/// pick waits for the message box.
 pub(crate) struct LoopReplyDraft {
     pub(crate) project_id: String,
     pub(crate) loop_id: String,
     pub(crate) close: bool,
+    pub(crate) picked: Option<String>,
     pub(crate) input: Entity<InputState>,
+}
+
+impl LoopReplyDraft {
+    /// What goes to the coordinator: the pick, then the note under it.
+    pub(crate) fn reply_text(&self, cx: &App) -> String {
+        let note = self.input.read(cx).value().trim().to_owned();
+        match self.picked.as_deref() {
+            Some(pick) if note.is_empty() => pick.to_owned(),
+            Some(pick) => format!("{pick}\n{note}"),
+            None => note,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -504,13 +520,73 @@ impl Threadbear {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_loop_draft(project_id, loop_id, close, None, placeholder, window, cx);
+    }
+
+    /// An option on an open loop: picked, not sent. The box opens under it
+    /// for a note, and Send (or Return) sends the pick with it. Clicking the
+    /// picked option again puts the box away.
+    pub(crate) fn pick_coordinator_loop_option(
+        &mut self,
+        project_id: &str,
+        loop_id: &str,
+        option: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let same_pick = self.coordinators.replying_loop.as_ref().is_some_and(|d| {
+            d.project_id == project_id
+                && d.loop_id == loop_id
+                && d.picked.as_deref() == Some(option.as_str())
+        });
+        if same_pick {
+            self.cancel_reply_coordinator_loop(cx);
+            return;
+        }
+        self.open_loop_draft(
+            project_id,
+            loop_id,
+            true,
+            Some(option),
+            "Add anything else (optional)…",
+            window,
+            cx,
+        );
+    }
+
+    /// Opens the loop's box, or keeps the one already open on this loop (and
+    /// what's typed in it) while the pick changes.
+    #[expect(clippy::too_many_arguments, reason = "one call site per kind of draft")]
+    fn open_loop_draft(
+        &mut self,
+        project_id: &str,
+        loop_id: &str,
+        close: bool,
+        picked: Option<String>,
+        placeholder: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let placeholder = placeholder.to_owned();
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        let existing = self
+            .coordinators
+            .replying_loop
+            .as_ref()
+            .filter(|d| d.project_id == project_id && d.loop_id == loop_id)
+            .map(|d| d.input.clone());
+        let input = match existing {
+            Some(input) => {
+                input.update(cx, |s, cx| s.set_placeholder(placeholder, window, cx));
+                input
+            }
+            None => cx.new(|cx| InputState::new(window, cx).placeholder(placeholder)),
+        };
         let focus = input.read(cx).focus_handle(cx);
         self.coordinators.replying_loop = Some(LoopReplyDraft {
             project_id: project_id.to_owned(),
             loop_id: loop_id.to_owned(),
             close,
+            picked,
             input,
         });
         window.focus(&focus, cx);
@@ -530,7 +606,7 @@ impl Threadbear {
                     draft.project_id.clone(),
                     draft.loop_id.clone(),
                     draft.close,
-                    draft.input.read(cx).value().to_string(),
+                    draft.reply_text(cx),
                 )
             })
         else {

@@ -109,7 +109,7 @@ Feature: Project coordinators
     Then agent memory is collapsed
 
   @coordinators.home @coordinators @swift-pending
-  Scenario: Open loops stay pinned until closed, can be undone, and accept quick replies
+  Scenario: Open loops stay pinned until closed, can be undone, and take a picked reply with a note
     When I open the project "Threadbear"
     Then the coordinator has 3 open loops
     When I close the answered open loop
@@ -117,6 +117,9 @@ Feature: Project coordinators
     And the undo banner is shown for the closed loop
     When I undo closing the open loop
     Then the coordinator has 3 open loops
-    When I reply "Collapse by default" to the waiting open loop
+    When I pick "Collapse by default" on the waiting open loop
+    Then the reply box is open with "Collapse by default" picked
+    And the coordinator has 3 open loops
+    When I send the picked reply "Collapse by default"
     Then the coordinator has 2 open loops
     And there's no error bar

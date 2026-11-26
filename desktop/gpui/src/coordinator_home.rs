@@ -709,14 +709,20 @@ impl Threadbear {
 
         body = body.child(self.render_loop_actions(project, item, busy, cx));
 
-        if let Some(input) = self
+        if let Some((input, picked)) = self
             .coordinators
             .replying_loop
             .as_ref()
             .filter(|draft| draft.project_id == project.id && draft.loop_id == item.id)
-            .map(|draft| draft.input.clone())
+            .map(|draft| (draft.input.clone(), draft.picked.clone()))
         {
-            body = body.child(self.render_loop_reply_input(&item.id, input, busy, cx));
+            body = body.child(self.render_loop_reply_input(
+                &item.id,
+                input,
+                picked.as_deref(),
+                busy,
+                cx,
+            ));
         }
 
         h_flex()
@@ -907,12 +913,25 @@ impl Threadbear {
             return actions.into_any_element();
         }
 
+        // An option picks, it doesn't send: the box opens under the card for
+        // a note, and its Send sends both (pick_coordinator_loop_option).
+        let picked = self
+            .coordinators
+            .replying_loop
+            .as_ref()
+            .filter(|d| d.project_id == project.id && d.loop_id == item.id)
+            .and_then(|d| d.picked.clone());
         for (opt_index, option) in item.options.iter().enumerate() {
             let opt_project = project_id.clone();
             let opt_id = loop_id.clone();
             let opt_text = option.clone();
-            let tip = format!("Reply \"{option}\" and close this loop");
-            let tone = if opt_index == 0 {
+            let is_picked = picked.as_deref() == Some(option.as_str());
+            let tip = if is_picked {
+                format!("Unpick \"{option}\"")
+            } else {
+                format!("Pick \"{option}\", then add anything else and send")
+            };
+            let tone = if is_picked || (picked.is_none() && opt_index == 0) {
                 ButtonTone::amber(cx)
             } else {
                 ButtonTone::neutral(cx)
@@ -920,19 +939,19 @@ impl Threadbear {
             actions = actions.child(loop_button(
                 SharedString::from(format!("loop-option-{loop_id}-{opt_index}")),
                 ButtonSpec {
-                    icon: None,
+                    icon: is_picked.then_some("checkmark"),
                     label: option,
                     tip: &tip,
                     tone,
                     busy,
                 },
                 cx,
-                cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.send_coordinator_loop_reply(
+                cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.pick_coordinator_loop_option(
                         &opt_project,
                         &opt_id,
                         opt_text.clone(),
-                        true,
+                        window,
                         cx,
                     )
                 }),
@@ -999,9 +1018,14 @@ impl Threadbear {
         &self,
         loop_id: &str,
         input: Entity<gpui_kit::component::input::InputState>,
+        picked: Option<&str>,
         busy: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let send_tip = match picked {
+            Some(pick) => format!("Send \"{pick}\" and close this loop"),
+            None => "Send this reply to the coordinator".to_owned(),
+        };
         h_flex()
             .w_full()
             .items_center()
@@ -1027,7 +1051,7 @@ impl Threadbear {
                 ButtonSpec {
                     icon: None,
                     label: "Send",
-                    tip: "Send this reply to the coordinator",
+                    tip: &send_tip,
                     tone: ButtonTone::amber(cx),
                     busy,
                 },
@@ -1650,6 +1674,11 @@ impl Threadbear {
             json!({"field":e.field.title(),"draft":e.input.read(cx).value().to_string(),"reviewCurrent":current.filter(|text| !e.saving && *text != e.baseline)})
         });
         let agent_memory_open = project.is_some_and(|p| self.agent_memory_open(&p.id));
+        let replying_loop = self
+            .coordinators
+            .replying_loop
+            .as_ref()
+            .map(|d| json!({"loopId": d.loop_id, "picked": d.picked}));
         let undo_loop = self.coordinators.undo_loop.as_ref().map(|u| {
             json!({
                 "projectId": u.project_id,
@@ -1693,6 +1722,7 @@ impl Threadbear {
             "openLoopsCount": current.map(|c| c.open_loops().len()),
             "agentMemoryOpen": agent_memory_open,
             "undoLoop": undo_loop,
+            "replyingLoop": replying_loop,
             "documentShown": document_shown,
             "editing": editing,
             "document": project.map(|p| json!({"goals": p.goals, "state": p.state, "notes": p.notes})),
