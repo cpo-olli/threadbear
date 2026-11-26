@@ -141,17 +141,19 @@ test('a coordinator and its questions, reads and replies are the same on every r
       p.endTurn({ needs: 'you', asks: [{ question: 'Start the first task?', options: [{ label: 'Start it' }, { label: 'Wait' }] }] });
       p.sendFromPhone('Start it.');
       p.say('The helper finished. Should I land the change?');
-      p.endTurn({ needs: 'you', asks: [{ question: 'Land the change?', options: [{ label: 'Land it' }, { label: 'Wait' }] }] });
+      p.endTurn({ needs: 'you', asks: [{ question: 'Land the change?', taskId: 'landing-decision', options: [{ label: 'Land it' }, { label: 'Not now' }], suggested: 0 }] });
       if (read) p.read();
     });
     assert.deepEqual(refused, []);
+    assert.equal(views.here.asks[0]?.taskId, 'landing-decision');
+    const mirroredAsks = views.here.asks.map(({ taskId: _taskId, ...ask }) => ask);
     for (const route of ['here', 'relay', 'phone'] as const) {
       const view = views[route];
       assert.equal(view.coordinatorProjectId, 'p_threadbear', route);
       assert.equal(view.unread, !read, route);
       assert.equal(view.needs, 'you', 'reading does not answer the coordinator');
-      assert.deepEqual(view.asks, views.here.asks);
-      assert.ok(view.asks.length > 0, 'the current coordinator question remains visible');
+      assert.deepEqual(view.asks, route === 'here' ? views.here.asks : mirroredAsks);
+      assert.deepEqual(view.asks[0]?.options, ['Land it', 'Not now']);
       assert.deepEqual(view.messages, views.here.messages);
       assert.ok(view.messages.some((m) => m.role === 'user' && m.text === 'Start it.' && m.origin === 'phone'));
     }

@@ -72,6 +72,8 @@ export function needsFromTool(input: unknown): Needs | undefined {
     const action = clipText(r.action, MAX_ACTION) ?? clipText(r.question, MAX_ACTION);
     if (!action) continue;
     const ask: Ask = { action };
+    const taskId = str(r.taskId, 100);
+    if (taskId) ask.taskId = taskId;
     const where = str(r.where, MAX_SHORT);
     if (where) ask.where = where;
     const reply = str(r.reply, MAX_SHORT);
@@ -771,6 +773,17 @@ export function unansweredItems(events: PersistedEvent[], now: string[] = []): s
   }
   for (const t of now) open.delete(plainKey(t));
   return [...open.values()].map((i) => i.text).slice(-MAX_OPEN_ITEMS);
+}
+
+export const REVIEW_NUDGE = 'Not ended: a helper finished and its task is still in review:';
+export function reviewNudge(tasks: { title: string }[]): string {
+  return `${REVIEW_NUDGE} ${tasks.map((task) => JSON.stringify(task.title)).join(', ')}. Check the result against doneWhen. If the user needs to decide or do something, put it to them now with options and a recommendation. Offer to get it ready or do it for them where your charter allows. If the work needs their sign-off, leave it ready to close. If it should stay in review, call end_turn again. This note comes once per helper run.`;
+}
+
+const NOT_NOW = /^(?:not now|not yet|not today|decide later|hold off|postpone|defer|snooze|remind me|ask me (?:again|tomorrow|later)|park it for now|later|wait)[.!]?$/i;
+export function putsOff(answer: string): boolean {
+  const clean = answer.trim().replace(/\s+/g, ' ');
+  return NOT_NOW.test(clean) || /^(?:not now|remind me|ask me again|postpone)\b/i.test(clean);
 }
 
 // Whether this turn has had the note (connectors.ts, nudgedThisTurn, is the same).

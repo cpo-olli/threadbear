@@ -3399,8 +3399,8 @@ export class Runner {
       if (said) {
         rec.needs = {
           seq: ev.seq,
-          needs: said.needs,
-          ...(said.asks ? { asks: said.asks } : {}),
+          needs: body.needs ?? said.needs,
+          ...(body.asks ? { asks: body.asks } : {}),
           ...(said.next?.length ? { next: said.next } : {}),
           ...(said.nextPick ? { nextPick: said.nextPick } : {}),
           ...(said.nextSuggested !== undefined ? { nextSuggested: said.nextSuggested } : {}),
@@ -4982,6 +4982,14 @@ export class Runner {
     if (st.rt.deleted) throw new Error('The thread was deleted.');
     this.flushDeltas(st);
     const log = this.store.log(st.rec.id);
+    if (body.type === 'turn.completed' && body.outcome === 'completed' && body.needs === 'you' && body.asks?.length && this.coordinators) {
+      const asks = this.coordinators.bindAsks(st.rec.id, body.asks, log.lastSeq + 1);
+      if (asks.length) body.asks = asks;
+      else {
+        delete body.asks;
+        body.needs = 'nothing';
+      }
+    }
     const event = { seq: log.lastSeq + 1, ts: this.isoNow(), threadId: st.rec.id, ...(turnId ? { turnId } : {}), ...body } as PersistedEvent;
     log.append(event);
     st.rec.lastSeq = event.seq;
@@ -5139,6 +5147,11 @@ export class Runner {
     // Asks the agent said wait for its shell jobs count them too.
     const afterJobs = this.asksHeld(st);
     const unfinished = running || (this.coordinators?.forThread(rec.id) ? afterJobs : agentsStillWorking(background, afterJobs));
+    const card = rec.needs?.seq === rec.lastTurnCompletedSeq ? rec.needs : undefined;
+    const asks = card?.asks;
+    const active = card && asks && this.coordinators?.activeAsks(rec.id, asks, card.seq);
+    const cleared = Boolean(asks?.length && active?.length === 0);
+    const pendingReviews = rec.reviews?.filter((review) => review.status === 'pending' && this.coordinators?.reviewAskVisible(rec.id, review.id) !== false).length;
     const s: ThreadSummary = {
       id: rec.id,
       title: rec.title,
@@ -5152,7 +5165,7 @@ export class Runner {
       // (docs/protocol/needs-you.md, "Needs you"). A pending design review only
       // counts once the turn ends: show_options doesn't block, and Mike
       // didn't want a "Needs you" (or a phone push) mid-turn.
-      needsYou: (!unfinished && Boolean(rec.reviews?.some(r => r.status === 'pending'))) || rec.status === 'waiting' || Boolean(rec.forceUnread) || this.quietWakeShows(rec) || (!unfinished && rec.lastTurnCompletedSeq > rec.lastSeenSeq && !this.saidNothing(rec)),
+      needsYou: (!unfinished && Boolean(pendingReviews)) || rec.status === 'waiting' || Boolean(rec.forceUnread) || this.quietWakeShows(rec) || (!unfinished && rec.lastTurnCompletedSeq > rec.lastSeenSeq && !cleared && !this.saidNothing(rec)),
       createdAt: rec.createdAt,
       updatedAt: rec.updatedAt,
       lastActivityAt: rec.lastActivityAt,
@@ -5166,16 +5179,15 @@ export class Runner {
     if (rec.waitingForRoom) s.waitingForRoom = { ...rec.waitingForRoom };
     if (rec.carryOnAtReset === false) s.carryOnAtReset = false;
     if (rec.waitingForNetwork) s.waitingForNetwork = { since: rec.waitingForNetwork.since };
-    if (rec.needs && rec.needs.seq === rec.lastTurnCompletedSeq) {
-      s.needs = rec.needs.needs;
-      if (afterJobs) s.asksAfterJobs = true;
-      if (rec.needs.asks) {
-        const ticked = new Set(rec.needs.ticked);
-        s.asks = rec.needs.asks.map((a, i) => (ticked.has(i) ? { ...a, ticked: true as const } : a));
-        s.asksSeq = rec.needs.seq;
+    if (card) {
+      s.needs = cleared ? 'nothing' : card.needs;
+      if (afterJobs && !cleared) s.asksAfterJobs = true;
+      if (asks && !cleared) {
+        const ticked = new Set(card.ticked);
+        s.asks = asks.map((a, i) => (ticked.has(i) || (active && !active.includes(a)) ? { ...a, ticked: true as const } : a));
+        s.asksSeq = card.seq;
       }
     }
-    const pendingReviews = rec.reviews?.filter(r => r.status === 'pending').length;
     if (pendingReviews) s.pendingReviews = pendingReviews;
     if (rec.model) s.model = rec.model;
     if (rec.effort) s.effort = rec.effort;

@@ -19,7 +19,7 @@ import { call, load, memoryBackend } from './convex-memory.ts';
 import { ConvexSync } from '../../src/sync.ts';
 import { Relay } from '../../src/relay.ts';
 import { nullLogger } from '../../src/log.ts';
-import type { ImageRef, LabReviewLedger } from '../../src/protocol.ts';
+import type { Ask, ImageRef, LabReviewLedger } from '../../src/protocol.ts';
 import type { Post, Upload } from '../../src/sync.ts';
 
 const OWNER = 'owner-key';
@@ -28,7 +28,6 @@ const RUNNER = 'mini0000001';
 const END_TURN = 'mcp__threadbear__end_turn';
 
 // What a person sees of a thread, on any of the three: its card and its messages.
-export type Ask = { action: string; options?: string[]; optionNotes?: string[]; suggested?: number; links?: { title: string; url: string }[] };
 export type View = {
   coordinatorProjectId?: string;
   unread: boolean;

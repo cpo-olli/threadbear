@@ -719,20 +719,20 @@ updatedAt, closedAt? }`. Older coordinators without `loops` default to `[]`.
   once answered. They stay visible until explicitly closed (`coordinators.closeLoop`
   or `closeLoop` after explicit user sign-off). `coordinators.reopenLoop` undoes
   a close.
-- `waiting_on_user` loops are captured automatically when the coordinator ends
-  a turn with `needs: "you"` and `asks` (taking each ask's `action`, `why`,
-  `options` and the turn's event `seq`), deduplicated by normalized title, and
-  can also be opened/updated with `openLoop`/`updateLoop`. Answering an ask on
-  the composer card (`answers`) closes its matching `waiting_on_user` loop;
-  sending an unrelated message leaves earlier loops open.
+- A `waiting_on_user` loop is the legacy backing record for an ask without a
+  matching task. An ask can also bind to an existing decision task. Both appear
+  as one decision on the Tasks board. A legacy `openLoop` or `updateLoop`
+  still reads and writes its loop. Replying on the composer card with
+  `answers` updates the matching decision. An unrelated message leaves it open.
 - The desktop's Open loops pane doesn't draw `waiting_on_user` loops. It
   mirrors the coordinator thread's live `asks` instead, one read-only row each
   that takes you to the Needs you card, where they're answered. The loops stay
   in the registry for the coordinator's own context.
 - `coordinators.replyLoop` sends the user's reply to the coordinator thread
   referencing the loop's title (refused while paused). For `waiting_on_user`
-  (default `close: true`) it closes the loop; for `user_question` (`close: false`,
-  follow-up) it moves the loop back to `open`.
+  (default `close: true`) it records the answer and closes the loop. A Not now
+  reply postpones it until tomorrow at 9 a.m. local time. For `user_question`
+  (`close: false`, follow-up) it moves the loop back to `open`.
 
 The runner stores the registry outside the model's context, including briefs,
 helper session identities and checkpoints. Each execution has its own run
@@ -780,6 +780,55 @@ waits for helpers to finish, retains the charter and rereads canonical project
 records after compaction.
 
 ### Tasks and work items
+
+The coordinator tool adds `addWorkItem`, `updateWorkItem`, `removeWorkItem`,
+`addWorkTask`, `updateWorkTask`, `moveWorkTask`, and `postponeTask`. Use
+`taskId` or `workItemId` to select a row. Task edits accept `title`,
+`doneWhen`, `kind`, `owner`, `state`, `now`, `due`, `workItemId`,
+`parentTaskId`, `decisionOptions` (objects with `label` and optional `does`),
+and `recommendation` (the recommended option's label). Omitted edit fields
+keep their values. Pass null to clear `now`, `due`, decision options or the
+recommendation, or to move a task out of a group or parent. Setting
+`state: "postponed"` takes a trigger in `due`. Moving a task under a
+parent inherits its group. Removing a work item moves its tasks out of
+the group. Update a work item with `beforeWorkItemId` to reorder it. Null
+moves it to the end.
+
+The Tasks tab and Highlights use these local runner RPCs. Each returns
+`{ coordinator }` with the updated board, plus `workItemId` on creation.
+The same methods are available over the runner's normal RPC transports.
+
+| Method | Params |
+| --- | --- |
+| `coordinators.addWorkItem` | `{ projectId, title }` |
+| `coordinators.updateWorkItem` | `{ projectId, workItemId, title?, collapsed?, beforeWorkItemId? }` |
+| `coordinators.removeWorkItem` | `{ projectId, workItemId }` |
+| `coordinators.answerDecision` | `{ projectId, taskId, answer, asksSeq? }` |
+| `coordinators.postponeTask` | `{ projectId, taskId, due, asksSeq? }` |
+| `coordinators.markTaskDone` | `{ projectId, taskId }` |
+| `coordinators.closeTask` | `{ projectId, taskId }` |
+| `coordinators.reopenTask` | `{ projectId, taskId }` |
+| `coordinators.addToCoordinator` | `{ projectId, text }` |
+
+Input `due` is `{ type: "tomorrow" }`, `{ type: "date", date: "YYYY-MM-DD" }`,
+`{ type: "after_task", taskId }`, or `{ type: "at", at }`. A decision in
+a Needs you card carries `taskId` in its ask. Both surfaces answer or
+postpone that ID. The board exposes `needsYou: true` for published, active
+decisions and `canReopen: true` for confirmations that support Undo. Card
+clients may send `asksSeq` to reject a stale card. The runner records the
+answer and marks the decision done, then wakes the coordinator to act on the
+answer. Use a separate action task for remaining work. Postponing clears the
+current ask. When the trigger is due, the runner wakes the coordinator to
+reconsider and ask again with the same ID. Legacy replies keep the
+`answers: [{ action, answer }]` shape. An ordinary reply can answer a decision
+when it matches a choice on one active ask. Convex continues to mirror the
+legacy card fields.
+
+`markTaskDone` marks a user-owned action done. `closeTask` confirms an
+agent-owned action that is ready to close, including a substantive question
+the coordinator has answered. `reopenTask` undoes that confirmation and
+returns the task to ready to close. `addToCoordinator` takes a free-text
+request and hands it to the coordinator to organize into work.
 
 Coordinator responses and `coordinators.updated` can include `taskBoard`.
 Existing clients and coordinator tools can keep reading `tasks`, `loops`,

@@ -34,7 +34,7 @@ const isoTime = z.iso.datetime({ offset: true });
 const atDue = z.object({ type: z.literal('at'), at: isoTime, preset: z.enum(['tomorrow', 'date']).optional() });
 const afterDue = z.object({ type: z.literal('after_task'), taskId: idSchema });
 const dueSchema = z.discriminatedUnion('type', [atDue, afterDue]);
-const dueInputSchema = z.discriminatedUnion('type', [
+export const dueInputSchema = z.discriminatedUnion('type', [
   atDue, afterDue,
   z.object({ type: z.literal('tomorrow') }),
   z.object({ type: z.literal('date'), date: z.iso.date() }),
@@ -49,7 +49,7 @@ export function resolveTaskDue(input: TaskDueInput, now: number): TaskDue {
   return { type: 'at', at, preset: due.type };
 }
 
-const ownerSchema = z.discriminatedUnion('kind', [
+export const ownerSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('user') }),
   z.object({ kind: z.literal('agent') }),
   z.object({ kind: z.literal('person'), name: nonblank.max(200) }),
@@ -57,7 +57,7 @@ const ownerSchema = z.discriminatedUnion('kind', [
 const sourceSchema = z.object({
   threadId: idSchema.optional(), runId: idSchema.optional(), seq: z.number().int().nonnegative().optional(),
 });
-const optionSchema = z.object({ label: nonblank.max(240), does: nonblank.max(1000).optional() });
+export const optionSchema = z.object({ label: nonblank.max(240), does: nonblank.max(1000).optional() });
 const decisionSchema = z.object({
   options: z.array(optionSchema).max(4).optional(),
   recommendation: nonblank.max(1000).optional(),
@@ -77,8 +77,11 @@ export type TaskDetails = z.infer<typeof taskDetailsSchema>;
 
 export const workItemSchema = z.object({ id: idSchema, title: nonblank.max(200), collapsed: z.boolean().default(false) });
 export type WorkItem = z.infer<typeof workItemSchema>;
+const askedSchema = z.object({ seq: z.number().int().nonnegative(), action: nonblank });
+const registryTaskFields = { asked: askedSchema.optional(), designReviewId: z.string().optional() };
 const legacyTaskSchema = z.object({ id: z.string(), title: z.string(), doneWhen: z.string(), state: z.enum(taskStates) });
 const storedTaskSchema = legacyTaskSchema.partial({ state: true }).extend({
+  ...registryTaskFields, reviewNoted: z.string().optional(), closedByUser: z.literal(true).optional(),
   run: runSchema.passthrough().optional(), work: taskDetailsSchema.optional(),
   createdAt: z.string().optional(), updatedAt: z.string().optional(),
 }).passthrough().transform((t) => ({
@@ -97,7 +100,7 @@ const loopSchema = z.object({
   updatedAt: z.string(),
   closedAt: z.string().optional(),
 });
-const storedLoopSchema = loopSchema.extend({ work: taskDetailsSchema.optional() }).passthrough();
+const storedLoopSchema = loopSchema.extend({ ...registryTaskFields, closedByUser: z.literal(true).optional(), work: taskDetailsSchema.optional() }).passthrough();
 export type CoordinatorLoop = z.infer<typeof storedLoopSchema>;
 const eventSchema = z.object({ key: z.string(), text: z.string(), taskWake: z.string().optional() }).passthrough();
 const recordSchema = z.object({
@@ -247,12 +250,19 @@ export type WorkTask = {
   createdAt?: string;
   updatedAt?: string;
   closedAt?: string;
+  canReopen?: true;
+  needsYou?: true;
 };
 
 export function workTaskView(record: BackingTask, threadId: string): WorkTask {
   const work = getTaskDetails(record);
   const { state: postponed, openState, doneWhen, now, source, ...details } = work;
-  const base = { ...details, id: record.id, title: record.title, state: postponed ?? openState ?? states[record.state] };
+  const state = postponed ?? openState ?? states[record.state];
+  const base = {
+    ...details, id: record.id, title: record.title, state,
+    ...(record.closedByUser && state === 'done' ? { canReopen: true as const } : {}),
+    ...(record.asked && work.kind === 'decision' && work.owner.kind === 'user' && state !== 'done' && state !== 'postponed' ? { needsYou: true as const } : {}),
+  };
   if (isLoop(record)) {
     return {
       ...base, createdAt: record.createdAt, updatedAt: record.updatedAt, closedAt: record.closedAt, doneWhen,

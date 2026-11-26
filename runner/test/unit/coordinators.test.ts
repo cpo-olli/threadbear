@@ -10,6 +10,8 @@ import { nullLogger } from '../../src/log.ts';
 import { makeHarness, tick, tmpDir, FakeAccounts, FakeAdapter, withCodex } from '../helpers/fakes.ts';
 import { Runner } from '../../src/runner.ts';
 import { ThreadStore } from '../../src/store.ts';
+import { toPhoneAsk } from '../../src/sync.ts';
+import { makePng } from '../helpers/png.ts';
 import { CallerGate } from '../../src/rpc-gate.ts';
 import type { Account, Schedule, ThreadSummary } from '../../src/protocol.ts';
 import type { Settings } from '../../src/settings.ts';
@@ -66,17 +68,17 @@ function recoverFresh(h: ReturnType<typeof setup>['h'], home: string, before?: (
   return { host, adapter, codex, antigravity, c: replacement };
 }
 
-test('the coordinator keeps every open item as a to-do, and is told when its To-dos is empty', async () => {
+test('the coordinator sees its open work and knows when its board is empty', async () => {
   const { c, project } = setup();
   const { coordinator } = c.create({ projectId: project.id });
   const ctx = () => c.context(coordinator.threadId)!;
-  assert.match(ctx(), /To-dos tab is the user’s list of everything still to do/);
-  assert.match(ctx(), /To-dos is empty/);
+  assert.match(ctx(), /Group related work under Work items/);
+  assert.match(ctx(), /No open tasks/);
   c.addTask(project.id, 'Choose the hotel', 'Mike has picked one');
-  assert.doesNotMatch(ctx(), /To-dos is empty/);
+  assert.doesNotMatch(ctx(), /No open tasks/);
   const task = c.get(project.id).tasks[0]!;
   c.completeTask(project.id, task.id);
-  assert.match(ctx(), /To-dos is empty/);
+  assert.match(ctx(), /No open tasks/);
   c.stop();
 });
 
@@ -2412,14 +2414,11 @@ test('the turn desk shows postpone triggers and legacy completion and drop wait 
   c.postponeTask(project.id, task.id, due);
   c.postponeTask(project.id, loopId, loopDue);
 
-  const deskJson = c.context(coordinator.threadId)?.match(/Open loops, tasks and helper questions:\n([^\n]+)/)?.[1];
-  assert.ok(deskJson);
-  const desk = JSON.parse(deskJson);
-  assert.deepEqual(desk.tasks.find((entry: { id: string }) => entry.id === task.id), {
-    id: task.id, title: task.title, state: 'postponed', due, doneWhen: task.doneWhen,
-  });
-  assert.deepEqual(desk.loops.find((entry: { id: string }) => entry.id === loopId)?.due, loopDue);
-  assert.equal(desk.loops.find((entry: { id: string }) => entry.id === loopId)?.state, 'postponed');
+  const context = c.context(coordinator.threadId)!;
+  assert.match(context, /"Reserve the room".*postponed.*action.*agent.*after /);
+  assert.ok(context.includes(blocker.id));
+  assert.match(context, /"Confirm the dates".*postponed.*decision.*user/);
+  assert.ok(context.includes(loopDue.at));
 
   const wait = /postponed.*wait for its wake/i;
   assert.throws(() => c.completeTask(project.id, task.id), wait);
@@ -2477,4 +2476,262 @@ test('a loop-backed entry cannot become a child that blocks its parent from arch
   c.completeTask(project.id, task.id);
   c.archiveTask(project.id, task.id);
   assert.deepEqual(c.get(project.id).taskBoard.tasks.map(({ id }) => id), [loopId]);
+});
+
+test('the scoped coordinator tool organizes work, decisions and one level of sub-tasks', async (t) => {
+  const { c, h, project } = setup();
+  t.after(() => c.stop());
+  const { coordinator } = c.create({ projectId: project.id });
+  const tool = buildThreadbearTools(h.runner, coordinator.threadId, () => h.clock.now(), undefined, undefined, undefined, { coordinators: () => c })
+    .find((item) => item.name === 'coordinator')!;
+  const call = (p: Record<string, unknown>) => tool.handler(p as never, {});
+  await call({ action: 'addWorkItem', title: 'The venue' });
+  const workItemId = c.get(project.id).taskBoard.workItems[0]!.id;
+  await call({ action: 'addWorkTask', title: 'Inspect the venues', doneWhen: 'Capacity confirmed', workItemId, owner: { kind: 'person', name: 'Lee' }, now: 'Waiting for a callback', state: 'waiting' });
+  const parentTaskId = c.get(project.id).taskBoard.tasks[0]!.id;
+  await call({ action: 'addWorkTask', title: 'Which room?', doneWhen: 'A room is chosen', kind: 'decision', owner: { kind: 'user' }, parentTaskId, decisionOptions: [{ label: 'Blue room', does: 'Seats 30' }, { label: 'Red room' }], recommendation: 'Blue room' });
+  const taskId = c.get(project.id).taskBoard.tasks[1]!.id;
+  const badMove = await call({ action: 'moveWorkTask', taskId: parentTaskId, parentTaskId: taskId });
+  assert.equal(badMove.isError, true);
+  await call({ action: 'updateWorkTask', taskId: parentTaskId, now: 'Lee called', state: 'working', due: { type: 'tomorrow' } });
+  const board = c.get(project.id).taskBoard;
+  assert.equal(board.tasks[0]!.now, 'Lee called');
+  assert.equal(board.tasks[0]!.state, 'working');
+  assert.deepEqual(board.tasks[0]!.owner, { kind: 'person', name: 'Lee' });
+  assert.equal(board.tasks[0]!.due?.type, 'at');
+  assert.equal(board.tasks[1]!.workItemId, workItemId);
+  assert.equal(board.tasks[1]!.decision?.recommendation, 'Blue room');
+  assert.match(c.context(coordinator.threadId)!, /The venue.*\n.*Inspect the venues.*working.*Lee called.*\n.*Which room\?/);
+});
+
+test('a published decision has one id through the card, postponement, wake and answer', async (t) => {
+  const { c, h, project, claude } = setup();
+  t.after(() => c.stop());
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  const taskId = c.addWorkTask(project.id, {
+    title: 'Which room?', doneWhen: 'A room is chosen',
+    work: { kind: 'decision', owner: { kind: 'user' }, decision: { options: [{ label: 'Blue room', does: 'Seats 30' }, { label: 'Red room' }], recommendation: 'Blue room' } },
+  }).taskId;
+  const emitAsk = (itemId: string) => {
+    const session = claude.sessions.findLast((candidate) => candidate.opts.threadId === coordinator.threadId)!;
+    session.out({ kind: 'event', event: { type: 'tool.call', itemId, name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'you', asks: [{ question: 'Which room?', taskId }] } } });
+    session.result('completed');
+  };
+  emitAsk('ask-one');
+  await tick();
+  const first = h.runner.get(coordinator.threadId);
+  assert.equal(first.asks?.[0]?.taskId, taskId);
+  assert.equal('taskId' in toPhoneAsk(first.asks![0]!), false, 'the existing Convex validator accepts the mapped card');
+  assert.deepEqual(first.asks?.[0]?.options, ['Blue room', 'Red room', 'Not now']);
+  assert.equal(c.get(project.id).taskBoard.tasks.length, 1);
+  const rpc = coordinatorMethods(c);
+  rpc['coordinators.postponeTask']({ projectId: project.id, taskId, asksSeq: first.asksSeq, due: { type: 'tomorrow' } });
+  const postponed = c.get(project.id).taskBoard.tasks[0]!;
+  assert.equal(postponed.state, 'postponed');
+  assert.equal(h.runner.get(coordinator.threadId).asks?.length ?? 0, 0);
+  assert.equal(postponed.due?.type, 'at');
+  const at = postponed.due?.type === 'at' ? new Date(postponed.due.at) : new Date(0);
+  assert.equal(at.getHours(), 9);
+  h.clock.advance(at.getTime() - h.clock.now());
+  await tick();
+  assert.match(claude.sessions.at(-1)?.sent.at(-1)?.text ?? '', /postponed task is due/);
+  assert.equal(h.runner.get(coordinator.threadId).asks?.length ?? 0, 0);
+  emitAsk('ask-again');
+  await tick();
+  const next = h.runner.get(coordinator.threadId);
+  assert.equal(next.asks?.[0]?.taskId, taskId);
+  assert.throws(() => rpc['coordinators.answerDecision']({ projectId: project.id, taskId, asksSeq: first.asksSeq, answer: 'Red room' }), /card/i);
+  rpc['coordinators.answerDecision']({ projectId: project.id, taskId, asksSeq: next.asksSeq, answer: 'Blue room' });
+  assert.equal(c.get(project.id).taskBoard.tasks[0]?.decision?.answer, 'Blue room');
+  assert.equal(c.get(project.id).taskBoard.tasks[0]?.state, 'done');
+  assert.equal(h.runner.get(coordinator.threadId).asks?.length ?? 0, 0);
+});
+
+test('the legacy card Not now reply postpones the decision and its date survives a restart', async (t) => {
+  const { c, h, project, claude, home } = setup();
+  t.after(() => c.stop());
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  const { threadId } = coordinator;
+  await tick();
+  const session = claude.sessions.at(-1)!;
+  session.out({
+    kind: 'event', event: {
+      type: 'tool.call', itemId: 'legacy', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn',
+      input: { needs: 'you', asks: [{ action: 'Choose a room', why: 'Both are open', options: ['Blue room', 'Red room', 'Not now'], suggested: 0 }] },
+    },
+  });
+  session.result('completed');
+  await tick();
+  const before = h.runner.get(threadId);
+  const id = before.asks?.[0]?.taskId;
+  assert.ok(id);
+  assert.equal(c.get(project.id).loops[0]?.id, id);
+  h.runner.send(threadId, 'Not now', [], { answers: [{ action: 'Choose a room', answer: 'Not now' }] });
+  await tick();
+  const current = c.get(project.id).taskBoard.tasks[0]!;
+  assert.equal(current.state, 'postponed');
+  assert.equal(current.decision?.recommendation, 'Blue room');
+  assert.equal(current.decision?.answer, undefined);
+  const date = new Date(h.clock.now() + 3 * 86_400_000);
+  const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  coordinatorMethods(c)['coordinators.postponeTask']({ projectId: project.id, taskId: id, due: { type: 'date', date: day } });
+  date.setHours(9, 0, 0, 0);
+  h.runner.flush();
+  c.stop();
+  const sent: string[] = [];
+  const fresh = recoverFresh(h, home, (host) => {
+    const send = host.send.bind(host);
+    host.send = (thread, message, ...rest) => {
+      if (thread === threadId && message.includes('postponed task is due')) sent.push(message);
+      return send(thread, message, ...rest);
+    };
+  });
+  t.after(() => fresh.c.stop());
+  (fresh.host.clock as FakeClock).advance(date.getTime() - h.clock.now() - 1);
+  assert.equal(sent.length, 0);
+  (fresh.host.clock as FakeClock).advance(1);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!, new RegExp(id));
+  assert.equal(fresh.c.get(project.id).taskBoard.tasks[0]?.state, 'todo');
+  assert.equal(fresh.host.get(threadId).asks?.length ?? 0, 0);
+});
+
+test('a phone reply can answer one published choice and a thread-key send has agent provenance', async (t) => {
+  const { c, h, project, claude } = setup();
+  t.after(() => c.stop());
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  const other = h.runner.create({ text: 'Other work', accountId: 'claude-3', permissionMode: 'full' }).thread;
+  await tick();
+  const coordinatorSession = claude.sessions.find((session) => session.opts.threadId === coordinator.threadId)!;
+  coordinatorSession.out({ kind: 'event', event: { type: 'tool.call', itemId: 'card', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn',
+    input: { needs: 'you', asks: [{ question: 'Which room?', options: [{ label: 'Blue room' }, { label: 'Red room' }], suggested: 0 }] },
+  } });
+  coordinatorSession.result('completed');
+  await tick();
+  const gate = new CallerGate({ runner: h.runner });
+  const picked = { threadId: coordinator.threadId, text: 'Blue room', answers: [{ action: 'Which room?', answer: 'Blue room' }] };
+  const fromAgent = gate.check(other.id, 'threads.send', picked);
+  assert.equal(fromAgent.answers, undefined);
+  h.runner.send(coordinator.threadId, fromAgent.text as string);
+  await tick();
+  assert.equal(c.get(project.id).taskBoard.tasks[0]?.state, 'todo');
+  h.runner.send(coordinator.threadId, 'Red room.', [], { origin: 'phone' });
+  await tick();
+  const result = c.get(project.id).taskBoard.tasks[0]!;
+  assert.equal(result.state, 'done');
+  assert.equal(result.decision?.answer, 'Red room.');
+  assert.throws(() => gate.check(other.id, 'coordinators.answerDecision', {}), /user's to do/);
+});
+
+test('Tasks RPCs confirm an agent answer, undo it and mark an offline user action done', (t) => {
+  const { c, h, project } = setup();
+  t.after(() => c.stop());
+  const { coordinator } = c.create({ projectId: project.id });
+  const projectId = project.id;
+  const rpc = coordinatorMethods(c);
+  const { workItemId } = rpc['coordinators.addWorkItem']({ projectId, title: 'Tickets' }) as { workItemId: string };
+  const other = c.addWorkItem(projectId, 'Car hire').workItemId;
+  rpc['coordinators.updateWorkItem']({ projectId, workItemId: other, collapsed: true, beforeWorkItemId: workItemId });
+  assert.deepEqual(c.get(projectId).taskBoard.workItems.map(({ id, collapsed }) => [id, collapsed]), [[other, true], [workItemId, false]]);
+  const question = c.addBoardTask(projectId, { title: 'Do tickets include checked bags?', doneWhen: 'Baggage rules and limits confirmed', workItemId }).taskId;
+  const offline = c.addBoardTask(projectId, { title: 'Check the bag fits', doneWhen: 'Bag fits the carry-on limit', owner: { kind: 'user' } }).taskId;
+  const decision = c.addBoardTask(projectId, { title: 'Should I check the bag?', doneWhen: 'Baggage chosen', kind: 'decision', decisionOptions: [{ label: 'Check it' }, { label: 'Carry it on' }], recommendation: 'Check it', workItemId }).taskId;
+  const task = (id: string) => c.get(projectId).taskBoard.tasks.find((row) => row.id === id)!;
+  assert.throws(() => rpc['coordinators.closeTask']({ projectId, taskId: question }), /ready to close/);
+  c.updateBoardTask(projectId, question, { state: 'ready_to_close', now: 'One 23 kg checked bag is included' });
+  rpc['coordinators.closeTask']({ projectId, taskId: question });
+  assert.equal(task(question).state, 'done');
+  assert.equal(task(question).canReopen, true);
+  rpc['coordinators.reopenTask']({ projectId, taskId: question });
+  assert.equal(task(question).state, 'ready_to_close');
+  assert.equal(task(question).canReopen, undefined);
+  assert.throws(() => rpc['coordinators.markTaskDone']({ projectId, taskId: decision }), /owned by the user/);
+  rpc['coordinators.postponeTask']({ projectId, taskId: decision, due: { type: 'after_task', taskId: offline } });
+  assert.equal(task(decision).state, 'postponed');
+  rpc['coordinators.markTaskDone']({ projectId, taskId: offline });
+  assert.equal(task(decision).state, 'todo');
+  const outgoing = c.forThread(coordinator.threadId)!.events;
+  assert.ok(outgoing.some((event) => event.taskWake === decision));
+  assert.ok(outgoing.some((event) => event.text.includes('marked their action done')));
+  rpc['coordinators.addToCoordinator']({ projectId, text: 'Find out if we can bring a second carry-on' });
+  assert.ok(outgoing.some((event) => event.text.includes('bring a second carry-on')));
+  rpc['coordinators.removeWorkItem']({ projectId, workItemId });
+  assert.equal(task(question).workItemId, undefined);
+  h.clock.advance(0);
+});
+
+test('end_turn nudges about a finished helper once per run and requires a real decision card', async (t) => {
+  const { c, h, project, claude, home } = setup();
+  t.after(() => c.stop());
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  const tool = buildThreadbearTools(h.runner, coordinator.threadId, () => h.clock.now(), undefined, undefined, undefined, { coordinators: () => c, provider: 'codex', plainCardNote: false })
+    .find((item) => item.name === 'end_turn')!;
+  const call = (input: Record<string, unknown>) => tool.handler(input as never, {});
+  const message = (result: Awaited<ReturnType<typeof call>>) => result.content.find((part) => part.type === 'text')?.text ?? '';
+  const start = c.startHelper(project.id, { title: 'Compare rooms', doneWhen: 'Prices verified', brief: 'Check prices' });
+  await tick();
+  claude.sessions.find((session) => session.opts.threadId === start.helperId)!.result('completed');
+  await tick();
+  const refused = await call({ needs: 'nothing', summary: ['Room prices are in'] });
+  assert.equal(refused.isError, true);
+  assert.match(message(refused), /helper finished.*Compare rooms.*do it for them/);
+  assert.equal(c.reviewsToNote(coordinator.threadId).length, 0);
+  assert.equal(JSON.stringify(c.get(project.id)).includes('reviewNoted'), false);
+  const second = await call({ needs: 'nothing', summary: ['Room prices are in'] });
+  assert.ok(!second.isError);
+  const invalid = await call({ needs: 'you', asks: [{ action: 'Which room?', why: 'Both are available' }] });
+  assert.equal(invalid.isError, true);
+  assert.match(message(invalid), /concrete options.*recommendation/);
+  c.addBoardTask(project.id, { title: 'Which room?', doneWhen: 'Room chosen', kind: 'decision', decisionOptions: [{ label: 'Blue' }, { label: 'Red' }], recommendation: 'Blue' });
+  const unpublished = await call({ needs: 'nothing', summary: ['Room prices are in'] });
+  assert.equal(unpublished.isError, true);
+  assert.match(message(unpublished), /Put "Which room\?" to the user/);
+  const correct = await call({ needs: 'you', asks: [{ action: 'Which room?', why: 'Both are available' }] });
+  assert.ok(!correct.isError, JSON.stringify(correct));
+  h.runner.flush();
+  c.stop();
+  const fresh = recoverFresh(h, home);
+  t.after(() => fresh.c.stop());
+  assert.deepEqual(fresh.c.reviewsToNote(coordinator.threadId), []);
+});
+
+test('a linked design review can be postponed and answered from its decision task', async (t) => {
+  const { c, h, project, claude, home } = setup();
+  t.after(() => c.stop());
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  const { threadId } = coordinator;
+  await tick();
+  const source = path.join(home, 'choice.png');
+  fs.writeFileSync(source, makePng(40, 40));
+  const { review } = h.runner.createReview(threadId, {
+    title: 'Room layout', recommended: 'L', options: [
+      { id: 'L', title: 'Long tables', path: source },
+      { id: 'R', title: 'Round tables', path: source },
+    ],
+  });
+  const session = claude.sessions.find((item) => item.opts.threadId === threadId)!;
+  session.out({
+    kind: 'event', event: {
+      type: 'tool.call', itemId: 'review-ask', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn',
+      input: { needs: 'you', asks: [{ question: 'Which room layout?', links: [{ title: 'Compare layouts', url: `review:${review.id}` }] }] },
+    },
+  });
+  session.result('completed');
+  await tick();
+  const id = h.runner.get(threadId).asks?.[0]?.taskId;
+  assert.ok(id);
+  const task = () => c.get(project.id).taskBoard.tasks.find((item) => item.id === id)!;
+  assert.equal(task().decision?.recommendation, 'Long tables');
+  const rpc = coordinatorMethods(c);
+  rpc['coordinators.postponeTask']({ projectId: project.id, taskId: id, due: { type: 'tomorrow' } });
+  assert.equal(h.runner.get(threadId).pendingReviews, undefined);
+  assert.equal(h.runner.get(threadId).asks?.length ?? 0, 0);
+  rpc['coordinators.answerDecision']({ projectId: project.id, taskId: id, answer: 'Round tables' });
+  await tick();
+  assert.equal(task().decision?.answer, 'Round tables');
+  assert.equal(task().state, 'done');
+  assert.equal(h.runner.getReview(threadId, review.id).review.response?.pickedId, 'R');
+  assert.equal(c.forThread(threadId)!.events.filter((event) => event.text.includes('answered a decision')).length, 0);
 });

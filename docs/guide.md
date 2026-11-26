@@ -1257,10 +1257,11 @@ you can take and decisions you still have to make are on it too. The
 Highlights pane beside the chat has three parts: sticky **Open loops** at
 the top (questions you asked it, staying until you close them, plus a line for
 each decision on its Needs you card; you answer those on the card, and clicking
-the line takes you there), the scrollable **Project brief** (state,
-goals, active work and links), and a collapsed **Agent memory** drawer at the
-bottom for technical notes read and written by the coordinator and its helpers.
-You can edit the brief or open Agent memory to edit the raw notes directly; if
+the line takes you there), the scrollable **Project brief** (state, goals,
+active work and links), and a collapsed **Agent memory** drawer at the bottom
+for technical notes read and written by the coordinator and its helpers. A
+coordinator card's **Not now** answer puts the decision off until 9 a.m.
+tomorrow, when the coordinator can ask again. You can edit the brief or open Agent memory to edit the raw notes directly; if
 another thread changed a field while you were editing, your draft stays open so
 you can merge it. Helpers report to the coordinator, which checks their results
 and brings you decisions it cannot settle. Ask it for a side job that isn't part of the

@@ -11,7 +11,7 @@ import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-
 import { z } from 'zod';
 import type { Runner } from './runner.ts';
 import { diffLines, splitLines } from './diff.ts';
-import type { Account, EffortLevel, ImageRef, PermissionMode, PersistedEvent, Project, Schedule, ThreadSummary } from './protocol.ts';
+import type { Ask, Account, EffortLevel, ImageRef, PermissionMode, PersistedEvent, Project, Schedule, ThreadSummary } from './protocol.ts';
 import type { ToolApprovalAnswer } from './adapters/types.ts';
 import { cardInput, tooLongForCard } from './tools.ts';
 import { resetTime, usageLine } from './usage.ts';
@@ -24,13 +24,14 @@ import { MAX_CHECK_TIMEOUT_SECS } from './schedule-check.ts';
 import { checkCardProblem, checkDigest, type CheckCard } from './patch-trust.ts';
 import { applyNoteEdits, type Projects } from './projects.ts';
 import type { Coordinators } from './coordinators.ts';
+import { workTaskEditShape } from './coordinator-task-edits.ts';
 import { COORDINATOR_THREADBEAR_TOOLS, COORDINATOR_WORKER_PROMPT, HELPER_THREADBEAR_TOOLS } from './coordinator-policy.ts';
 import { parseWhen, relativeFuture, relativeTime } from './when.ts';
 import { SAID_MAX } from './wake-when.ts';
 
 export { parseWhen, relativeFuture, relativeTime };
 import { RUNNER_VERSION, expandHome } from './config.ts';
-import { askWhenFromTool, jobsNudge, jobsNudged, heldNudge, heldNudged, droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, strayAskFields, strayAskProblem, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, handsOverAStep, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, projectStepNudge, projectStepNudged, unansweredItems, deadEndNudge, deadEndNudged, hasDeadEnd, plainCardNudge, plainCardNudged, wantsPlainCard, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
+import { askWhenFromTool, jobsNudge, jobsNudged, heldNudge, heldNudged, droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, strayAskFields, strayAskProblem, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, handsOverAStep, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, projectStepNudge, projectStepNudged, reviewNudge, unansweredItems, deadEndNudge, deadEndNudged, hasDeadEnd, plainCardNudge, plainCardNudged, wantsPlainCard, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
 
 // end_turn's needs, both forms: "done" meant this turn's step until 11 Nov
 // 2026, when thread 0222c475 said nothing with three draft PRs unmerged in
@@ -434,6 +435,25 @@ export function buildThreadbearTools(
     if (!live.length) return undefined;
     markNoted('project', events);
     return projectStepNudge(live, unansweredItems(await recentEvents(), next ?? []));
+  };
+
+  const coordinatorNote = async (needs: string, asks: Ask[], events: PersistedEvent[]): Promise<string | undefined> => {
+    const desk = opts.coordinators?.();
+    if (!desk?.forThread(selfId)) return undefined;
+    const reviews = needs === 'nothing' ? desk.reviewsToNote(selfId) : [];
+    const gaps = needs === 'you'
+      ? desk.askProblems(selfId, asks)
+      : desk.unpublishedDecisions(selfId).map(({ title }) => `Put ${JSON.stringify(title)} to the user with end_turn, or postpone it if they asked to wait.`);
+    if ((!reviews.length && !gaps.length) || (!codex && !(await replied()).landed)) return undefined;
+    const prefix = 'Not ended: coordinator decisions belong on the Needs you card.';
+    if (needs === 'you' && gaps.length) return `${prefix} ${gaps.join(' ')}`;
+    if (gaps.length && !alreadyNoted('coordinatorDecision', events, events.some((event) => event.type === 'tool.result' && event.text.includes(prefix)))) {
+      markNoted('coordinatorDecision', events);
+      return `${prefix} ${gaps.join(' ')}`;
+    }
+    if (!reviews.length) return undefined;
+    desk.markReviewsNoted(selfId, reviews);
+    return reviewNudge(reviews);
   };
 
   // Whether the turn has replied to Mike (needs.ts, turnReply). The SDK
@@ -1847,6 +1867,7 @@ export function buildThreadbearTools(
         asks: z
           .array(
             z.object({
+              ...(isCoordinator ? { taskId: z.string().max(100).optional().describe('The existing user-owned decision to put to the user.') } : {}),
               question: z.string().min(1).describe('One sentence, at most 160 characters: the question, or the step for them to take, naming the thing ("Deploy the billing-api fix to production?"). It shows right under your reply, so no background.'),
               options: z
                 .array(
@@ -1913,7 +1934,7 @@ export function buildThreadbearTools(
           throw new Error(signInNudge(missing));
         }
         // Sign-ins the turn needs and Restart to Update are the user's to do.
-        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks, signIns).filter((a) => !asksForAppRestart([a]))) && !alreadyNoted('tryFirst', events, triedFirstNudged(events))) {
+        if (opts.tryFirstNote !== false && needs === 'you' && !opts.coordinators?.()?.forThread(selfId) && handsOverAStep(notSignIns(asks, signIns).filter((a) => !asksForAppRestart([a]))) && !alreadyNoted('tryFirst', events, triedFirstNudged(events))) {
           markNoted('tryFirst', events);
           throw new Error(tryFirstNudge());
         }
@@ -1927,7 +1948,7 @@ export function buildThreadbearTools(
           throw new Error(plainCardNudge());
         }
         await checkJobs(input, needs, events);
-        const projectNote = await projectStepNote(input, needs, parsed?.next, events);
+        const projectNote = (await coordinatorNote(needs, asks, events)) ?? (await projectStepNote(input, needs, parsed?.next, events));
         if (projectNote) throw new Error(projectNote);
         let restart = '';
         if (needs === 'you' && appRestarts && asksForAppRestart(asks)) {
@@ -1976,6 +1997,7 @@ export function buildThreadbearTools(
             z.object({
               // No where: the paragraph says it (docs/protocol/needs-you.md, "Needs
               // you"). The runner still takes one from older sessions.
+              ...(isCoordinator ? { taskId: z.string().max(100).optional().describe('The existing user-owned decision to put to the user.') } : {}),
               action: z.string().min(1).describe('The ask\'s first sentence: one concrete thing for the user to do, or the question, e.g. "Add your Claude login to the Claude pool in Settings › Pools." The card shows it with why as one paragraph; Highlights and notifications show it alone, so keep it to a sentence.'),
               reply: z.string().optional().describe('The exact words to send back when it is done, e.g. "done" or "key set". Leave it out when the reply is their own answer (a decision, a choice).'),
               why: z.string().min(1).describe('The rest of the ask\'s paragraph, read straight after action: what this is about and what you want back, in a sentence or two, so it makes sense without your message: "Your Slack draft to Emily names the automation guy Hayden; he\'s Pete. Say if I should fix it and send it." Never just a place. When the ask is several questions, end it with them as a short markdown list, one per line; the card draws the list. Don\'t list the options here: they are the buttons, and suggested marks your pick.'),
@@ -2059,7 +2081,7 @@ export function buildThreadbearTools(
           markNoted('signIn', events);
           throw new Error(signInNudge(missing));
         }
-        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks ?? [], signIns).filter((a) => !asksForAppRestart([a]))) && !alreadyNoted('tryFirst', events, triedFirstNudged(events))) {
+        if (opts.tryFirstNote !== false && needs === 'you' && !opts.coordinators?.()?.forThread(selfId) && handsOverAStep(notSignIns(asks ?? [], signIns).filter((a) => !asksForAppRestart([a]))) && !alreadyNoted('tryFirst', events, triedFirstNudged(events))) {
           markNoted('tryFirst', events);
           throw new Error(tryFirstNudge());
         }
@@ -2073,7 +2095,7 @@ export function buildThreadbearTools(
           throw new Error(plainCardNudge());
         }
         await checkJobs(args, needs, events);
-        const projectNote = await projectStepNote(args, needs, parsed?.next, events);
+        const projectNote = (await coordinatorNote(needs, asks ?? [], events)) ?? (await projectStepNote(args, needs, parsed?.next, events));
         if (projectNote) throw new Error(projectNote);
         // Asking Mike to Restart to Update means wanting to know when he
         // has, to check the change in the running app: the same as
@@ -2181,14 +2203,15 @@ export function buildThreadbearTools(
     endTurn(),
     ...(isCoordinator ? [tool(
       'coordinator',
-      'Read your durable project desk, add/select/complete/archive bounded jobs (dropTask, with a summary of why, for a to-do no longer needed), start or resume a hidden implementation helper (startHelper / resumeHelper), manage durable open loops (openLoop / updateLoop / closeLoop for user questions and decisions waiting on the user), update your charter/interests or wake time, or record an answer to a helper question. Keep shared project goals/state concise as the user brief and put technical details in project notes (Agent memory) with update_project.',
+      'Read your project Tasks board, group work under Work items and manage actions or decisions. Delegate implementation with startHelper / resumeHelper. Put decisions to the user via end_turn with the taskId if already on the board.',
       {
-        action: z.enum(['get', 'addTask', 'selectTask', 'completeTask', 'archiveTask', 'dropTask', 'startHelper', 'resumeHelper', 'openLoop', 'updateLoop', 'closeLoop', 'update', 'answer']),
+        action: z.enum(['get', 'addWorkItem', 'updateWorkItem', 'removeWorkItem', 'addWorkTask', 'updateWorkTask', 'moveWorkTask', 'postponeTask', 'addTask', 'selectTask', 'completeTask', 'archiveTask', 'dropTask', 'startHelper', 'resumeHelper', 'openLoop', 'updateLoop', 'closeLoop', 'update', 'answer']),
+        ...workTaskEditShape,
         taskId: z.string().optional(),
+        collapsed: z.boolean().optional(),
+        beforeWorkItemId: z.string().max(100).nullish().describe('Move a work item before this one. Null moves it to the end.'),
         helperId: z.string().optional(),
         brief: z.string().max(16_000).optional(),
-        title: z.string().max(240).optional(),
-        doneWhen: z.string().max(1000).optional(),
         cwd: z.string().max(1000).optional(),
         model: z.string().max(200).optional(),
         effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional(),
@@ -2210,7 +2233,21 @@ export function buildThreadbearTools(
         const service = opts.coordinators?.();
         const own = service?.forThread(selfId);
         if (!service || !own) throw new Error('This session has no coordinator desk.');
-        if (p.action === 'addTask') service.addTask(own.projectId, p.title ?? '', p.doneWhen ?? '');
+        if (p.action === 'addWorkItem') return JSON.stringify(service.addWorkItem(own.projectId, p.title ?? ''));
+        if (p.action === 'addWorkTask') return JSON.stringify(service.addBoardTask(own.projectId, p));
+        if (p.action === 'updateWorkItem') service.updateWorkItem(own.projectId, p.workItemId ?? '', {
+          ...(p.title === undefined ? {} : { title: p.title }),
+          ...(p.collapsed === undefined ? {} : { collapsed: p.collapsed }),
+          ...(p.beforeWorkItemId === undefined ? {} : { beforeWorkItemId: p.beforeWorkItemId }),
+        });
+        else if (p.action === 'removeWorkItem') service.removeWorkItem(own.projectId, p.workItemId ?? '');
+        else if (p.action === 'updateWorkTask') service.updateBoardTask(own.projectId, p.taskId ?? '', p);
+        else if (p.action === 'moveWorkTask') service.updateBoardTask(own.projectId, p.taskId ?? '', { workItemId: p.workItemId, parentTaskId: p.parentTaskId });
+        else if (p.action === 'postponeTask') {
+          if (!p.due) throw new Error('postponeTask needs a due trigger.');
+          service.postponeTask(own.projectId, p.taskId ?? '', p.due);
+        }
+        else if (p.action === 'addTask') service.addTask(own.projectId, p.title ?? '', p.doneWhen ?? '');
         else if (p.action === 'update') service.update(own.projectId, p);
         else if (p.action === 'answer') service.answer(own.projectId, p.questionId ?? '', p.answer ?? '');
         else if (p.action === 'completeTask') service.completeTask(own.projectId, p.taskId ?? '');
