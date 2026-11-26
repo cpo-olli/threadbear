@@ -700,7 +700,11 @@ Run states are `queued`, `running`, `interrupted`, `completed`, `failed`, `stopp
 One transition function owns the allowed moves. Starting or resuming a helper
 reserves the run and starts a hidden runner-owned helper session (inheriting the
 coordinator's pool/model or overriding them). Its turn outcome updates the run
-and wakes the coordinator. Tasks are the user's list of all open work, not only helper
+and wakes the coordinator. A turn that ends with background work still going
+that the CLI wakes for (a shell, a monitor, a subagent: Claude, not Codex)
+doesn't end the run: the turn that work wakes carries it on, tools and all, and
+its end is what the coordinator hears; if none comes once the work is done and
+the wake grace has passed, or the CLI goes, the held turn's result is. Tasks are the user's list of all open work, not only helper
 jobs: the coordinator is told to add one for each open step or decision (the user's
 own included, done with `completeTask`), and its desk says so when none are open. The UI does not manually mark running work done.
 Questions have `{ id, agentId, questions, state, answer? }`.
@@ -743,11 +747,33 @@ done, and refused while a helper is working on it or once it's done. A session
 whose tool list predates `dropTask` drops it with `archiveTask` and a `summary`.
 `read_thread` reaches a coordinator's own hidden helpers by short id too;
 `send_message` refuses any helper (its coordinator uses `resumeHelper`). These actions use the scoped coordinator tool,
-with `taskId`, rather than a manual running-task checkbox. Restart marks
-unfinished execution interrupted and does not auto-resume hidden helpers; the next
-coordinator turn reconciles them rather than blindly replaying work. A known
-helper may be resumed explicitly with `resumeHelper`. Otherwise a new helper
-starts from its saved checkpoint. Compaction (on CLIs that support `/compact`)
+with `taskId`, rather than a manual running-task checkbox.
+
+**Restarts.** A runner update (a handover or a plain restart), a crash or a
+reboot cuts off a helper mid-turn: its CLI is one of the coordinator's sessions, which never stay
+on a draining runner, as `coordinators.json` has one writer. The run is saved
+`interrupted` and marked in the registry (not in `Run`) to be carried on, and
+the next runner does that by itself once it's listening (beside its own
+carry-on of threads stopped mid-turn, which leaves helpers alone): the same helper session gets
+the runner's message, as a new run generation like `resumeHelper`, saying the
+runner restarted partway through its turn and to check what's already done
+rather than repeat a send, merge, release or deploy. The coordinator isn't woken
+and nothing is added to its conversation (the helper's Activity row says it's
+working again); it hears as usual when the helper's turn ends. Before 26 Nov
+2026 every update woke the coordinator, which then told the user it had started
+the helper again. When the runner can't carry a helper on, it wakes the
+coordinator to reconcile it instead, once: the helper has no session to resume,
+another helper is working, the run was cut off more than 12 hours ago, the
+runner went down without stopping cleanly (a crash or a power cut, not an
+update or a SIGTERM) during a turn it had carried on after the last such crash, it has carried this run on 10 times, or the send is refused. A
+paused coordinator's helpers aren't carried on, and Pause or Resume drops the
+marks, so Resume's wake leaves them to the coordinator; with coordinators off
+nothing happens. That wake is the restart report, saved in the same write
+that drops the run's mark and delivered like a helper's report (kept until a
+coordinator turn that has it finishes), so a refused send or a crash doesn't
+lose it. A known helper may be
+resumed explicitly with `resumeHelper`. Otherwise a new helper starts from its
+saved checkpoint. Compaction (on CLIs that support `/compact`)
 waits for helpers to finish, retains the charter and rereads canonical project
 records after compaction.
 

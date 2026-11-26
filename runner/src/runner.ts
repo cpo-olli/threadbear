@@ -536,6 +536,12 @@ export type Runtime = {
   // it's in and opens none, so once the wake grace passes with no turn
   // (or the CLI exits) it finishes after all (settlePendingFinish).
   finishPending?: { seq: number; turnId: string; lastText?: string; next: boolean; owed?: { turnId: string; seq?: number; reply?: string } };
+  // A coordinator's helper whose turn ended with background work still
+  // going (a shell, a monitor, a subagent), which the CLI wakes for: the
+  // run isn't over, so its coordinator hears when the turn that wake opens
+  // ends, or this turn's result once nothing more is coming
+  // (settleHelperPending).
+  helperPending?: { outcome: 'completed' | 'failed'; text: string; turnId: string };
   activeAt: number; // last turn start or end, for picking which CLI to release
   approvals: Map<string, PendingApproval>;
   // Calls the card reviewer is deciding on (runner/card-review.ts), which
@@ -1386,9 +1392,16 @@ export class Runner {
       }
       rec.pendingApprovals = [];
       rec.queue = [];
-      // Its coordinator reconciles it now, so no carry-on of its own.
+      // Its coordinator's registry carries it on (coordinators.ts,
+      // carryOnAfterRestart), so no carry-on of its own: not the network's,
+      // and not carryOnStopped's, which a clean stop's stopTurn asks for.
+      // That one ran outside the registry's run, and its result went nowhere
+      // (Codex's review, 26 Nov 2026).
       delete rec.waitingForNetwork;
       delete rec.netCarryOn;
+      delete rec.stoppedMidTurn;
+      // Nor tellStoppedWork's message: the carry-on says to check what's done.
+      delete rec.stoppedWork;
       this.markDirty(st);
       return false;
     }
@@ -3236,8 +3249,12 @@ export class Runner {
       rt.wakeTimer = undefined;
       rt.finished = [];
       this.markDirty(st);
-      // No turn came to read the result: a done card held back for one stands.
-      if (!rt.turn) this.settlePendingFinish(st);
+      // No turn came to read the result: a done card held back for one
+      // stands, and a helper's held turn ends its run.
+      if (!rt.turn) {
+        this.settlePendingFinish(st);
+        this.settleHelperPending(st);
+      }
       // Mike's turn is running: the CLI may read the result after it, so it
       // counts as ended in that turn, and the grace starts again at its end
       // (Codex's review, 22 Nov 2026).
@@ -3474,7 +3491,15 @@ export class Runner {
           this.armRoomTimer();
           this.markDirty(st);
         }
-        this.coordinators?.onHelperTurn(rec.id, outcome, turn.lastText || r.error || '', turn.turnId);
+        // Background work the CLI will wake for: the helper said it's
+        // waiting on it, and finishing the run now refused every tool call
+        // of the turn that read its result, whose words never reached the
+        // coordinator (the Convex AI guidance coordinator, 26 Nov 2026).
+        if (this.wakes(st) && runningSession(rt) && !this.stopping && (rt.tasks.length > 0 || rt.wakeTimer)) {
+          rt.helperPending = { outcome: outcome === 'completed' ? 'completed' : 'failed', text: turn.lastText || r.error || '', turnId: turn.turnId };
+        } else {
+          this.coordinators?.onHelperTurn(rec.id, outcome, turn.lastText || r.error || '', turn.turnId);
+        }
       }
       return;
     }
@@ -3759,7 +3784,22 @@ export class Runner {
   // coordinator never dispatched, whose end it otherwise threw away as
   // stale, leaving the run "running" for good (Codex's review, 26 Nov 2026).
   private noteHelperStart(st: ThreadState, turnId: string): void {
-    if (st.rec.coordinatorHelperFor) this.coordinators?.noteHelperTurn(st.rec.id, turnId);
+    if (!st.rec.coordinatorHelperFor) return;
+    // The turn its background work woke carries the run on.
+    st.rt.helperPending = undefined;
+    this.coordinators?.noteHelperTurn(st.rec.id, turnId);
+  }
+
+  // A helper turn held for its background work (helperPending): once no
+  // turn has come for it (the grace passed, or the CLI went), the run ends
+  // on that turn's result, as it would have then.
+  settleHelperPending(st: ThreadState): void {
+    const { rec, rt } = st;
+    const p = rt.helperPending;
+    if (!p || rt.turn || this.stopping) return;
+    if (runningSession(rt) && (rt.tasks.length > 0 || rt.wakeTimer)) return;
+    rt.helperPending = undefined;
+    this.coordinators?.onHelperTurn(rec.id, p.outcome, p.text, p.turnId);
   }
 
   failTurn(st: ThreadState, message: string): void {
@@ -3879,8 +3919,11 @@ export class Runner {
     rt.wakeTimer?.cancel();
     rt.wakeTimer = undefined;
     // No CLI to open a turn reading a background result: a done card held
-    // back for one stands.
-    if (!rt.turn) this.settlePendingFinish(st);
+    // back for one stands, and a helper's held turn ends its run.
+    if (!rt.turn) {
+      this.settlePendingFinish(st);
+      this.settleHelperPending(st);
+    }
     rt.idleTimer?.cancel();
     rt.idleTimer = undefined;
     this.log.info('session ended', { threadId: rec.id, error: err?.message });

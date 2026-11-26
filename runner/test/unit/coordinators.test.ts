@@ -14,6 +14,7 @@ import { CallerGate } from '../../src/rpc-gate.ts';
 import type { Account, Schedule, ThreadSummary } from '../../src/protocol.ts';
 import type { Settings } from '../../src/settings.ts';
 import { buildThreadbearTools, type ProjectControl } from '../../src/threadbear-mcp.ts';
+import { CARRY_ON_HELPER_RESTART } from '../../src/runner/carry-on.ts';
 
 const ANTIGRAVITY_ACCOUNT: Account = {
   id: 'antigravity-main',
@@ -45,7 +46,7 @@ function setup(home = tmpDir(), enabled = () => true) {
   return { h, projects, c, project, home, claude, codex, antigravity };
 }
 
-function recoverFresh(h: ReturnType<typeof setup>['h'], home: string) {
+function recoverFresh(h: ReturnType<typeof setup>['h'], home: string, before?: (host: Runner) => void) {
   const clock = new FakeClock(h.clock.now());
   const projects = new Projects({ home, clock, log: nullLogger });
   const adapter = new FakeAdapter();
@@ -56,7 +57,11 @@ function recoverFresh(h: ReturnType<typeof setup>['h'], home: string) {
   const replacement = new Coordinators({ home, host, projects, clock, enabled: () => true, log: nullLogger });
   host.coordinators = replacement;
   host.start();
+  before?.(host);
   replacement.start();
+  // As main.ts does once listening.
+  host.carryOnStopped();
+  replacement.carryOnAfterRestart();
   return { host, adapter, codex, antigravity, c: replacement };
 }
 
@@ -520,6 +525,7 @@ test('the restart wake survives a crash before its thread is saved, and goes onc
   host.coordinators = dying;
   host.start();
   dying.start();
+  dying.carryOnAfterRestart();
   await tick();
   assert.ok(crashed, 'the crash happened');
   assert.ok(dying.forThread(coordinator.threadId)!.reports?.some((r) => r.id.startsWith('restart:')), 'kept until a turn that has it finishes');
@@ -647,7 +653,7 @@ test('a coordinator keeps at most 50 undelivered helper reports', async () => {
   c.stop();
 });
 
-test('a helper waiting for the network when the runner restarts does not carry on by itself; its coordinator reconciles it', async () => {
+test('a helper waiting for the network when the runner restarts is carried on once, by the restart', async () => {
   const { h, c, project, antigravity, home } = setup();
   const { coordinator } = c.create({ projectId: project.id, accountId: 'antigravity-main', model: 'gemini-4-neon' });
   await tick();
@@ -655,7 +661,9 @@ test('a helper waiting for the network when the runner restarts does not carry o
   await tick();
   const started = c.startHelper(project.id, { title: 'Build triage', doneWhen: 'Deployed', brief: 'Build it' });
   await tick();
-  antigravity.sessions.find((s) => s.opts.threadId === started.helperId)!.result('failed', undefined, 'fetch failed', { errorKind: 'network' });
+  const helperSession = antigravity.sessions.find((s) => s.opts.threadId === started.helperId)!;
+  helperSession.init('helper-session');
+  helperSession.result('failed', undefined, 'fetch failed', { errorKind: 'network' });
   await tick();
   assert.ok(h.store.load(started.helperId)!.waitingForNetwork, 'waiting for the network');
   c.stop();
@@ -664,9 +672,10 @@ test('a helper waiting for the network when the runner restarts does not carry o
   assert.equal(h.store.load(started.helperId)!.waitingForNetwork, undefined, 'the wait went with the runner');
   (fresh.host.clock as FakeClock).advance(60_000);
   await tick();
-  assert.equal(fresh.antigravity.sessions.filter((s) => s.opts.threadId === started.helperId).length, 0, 'no carry-on started before the coordinator reconciled');
-  assert.equal(fresh.c.get(project.id).tasks[0].run?.status, 'interrupted');
-  assert.equal(fresh.c.helpersWorking(coordinator.threadId), 0);
+  assert.equal(fresh.antigravity.sessions.filter((s) => s.opts.threadId === started.helperId).length, 1, 'carried on once, by the restart');
+  assert.equal(fresh.c.get(project.id).tasks[0].run?.status, 'running');
+  assert.equal(fresh.c.helpersWorking(coordinator.threadId), 1);
+  assert.equal(fresh.antigravity.sessions.filter((s) => s.opts.threadId === coordinator.threadId).length, 0, 'no coordinator turn');
   fresh.c.stop();
 });
 
@@ -799,10 +808,331 @@ test('a runner handover ends coordinator and helper sessions and prevents the dr
   assert.equal(c.get(project.id).tasks[0].run?.status, 'interrupted');
   const saved = fs.readFileSync(path.join(home, 'coordinators.json'), 'utf8');
   c.onHelperTurn(started.helperId, 'completed', 'Late finish');
+  // Nor when the draining runner stops for good.
+  c.stop({ graceful: true });
   assert.equal(fs.readFileSync(path.join(home, 'coordinators.json'), 'utf8'), saved);
   const replacement = new Coordinators({ home, host: h.runner, projects, clock: h.clock, enabled: () => true, log: nullLogger });
   assert.equal(replacement.get(project.id).tasks[0].run?.status, 'interrupted');
   replacement.stop();
+});
+
+// A helper at work on the runner, whose session has an id to resume.
+async function workingHelper() {
+  const s = setup();
+  const { coordinator } = s.c.create({ projectId: s.project.id, accountId: 'claude-3' });
+  await tick();
+  const coordSession = s.claude.sessions.find((x) => x.opts.threadId === coordinator.threadId)!;
+  coordSession.init('coord-session');
+  coordSession.result('completed');
+  await tick();
+  const started = s.c.startHelper(s.project.id, { title: 'Deploy', doneWhen: 'Deployed', brief: 'Deploy it' });
+  await tick();
+  const helperSession = s.claude.sessions.find((x) => x.opts.threadId === started.helperId)!;
+  helperSession.init('helper-session');
+  await tick();
+  const said = () => s.h.runner.events(coordinator.threadId, { limit: 10_000 }).events.filter((e) => e.type === 'user.message').length;
+  return { ...s, coordinator, started, helperSession, saidBefore: said() };
+}
+const userMessages = (host: Runner, threadId: string) => host.events(threadId, { limit: 10_000 }).events.filter((e) => e.type === 'user.message').length;
+const editRegistry = (home: string, edit: (rows: { state: string; tasks: { run?: Record<string, unknown> }[] }[]) => void) => {
+  const file = path.join(home, 'coordinators.json');
+  const rows = JSON.parse(fs.readFileSync(file, 'utf8'));
+  edit(rows);
+  fs.writeFileSync(file, JSON.stringify(rows));
+};
+
+test('a runner update carries a working helper on by itself, with no coordinator turn, and its coordinator hears once when it finishes (Omi, 26 Nov)', async () => {
+  const { c, h, project, home, coordinator, started, saidBefore } = await workingHelper();
+  const oldRunId = c.get(project.id).tasks[0].run!.nativeRunId!;
+  await c.handover();
+  const fresh = recoverFresh(h, home);
+  await tick();
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === coordinator.threadId).length, 0, 'no coordinator turn');
+  assert.equal(userMessages(fresh.host, coordinator.threadId), saidBefore, 'nothing new in the coordinator conversation');
+  const resumed = fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId);
+  assert.equal(resumed.length, 1);
+  assert.equal(resumed[0]!.opts.sessionId, 'helper-session', 'the same helper session');
+  assert.ok(resumed[0]!.sent[0]?.text.endsWith(CARRY_ON_HELPER_RESTART), 'told the runner restarted partway through');
+  const task = fresh.c.get(project.id).tasks[0];
+  assert.equal(task.run?.status, 'running');
+  assert.equal(task.state, 'working');
+  assert.equal(fresh.c.helpersWorking(coordinator.threadId), 1);
+  assert.equal(fresh.host.get(coordinator.threadId).subagents?.find((a) => a.id === started.helperId)?.status, 'running', 'Activity shows it working');
+  // A late result from the execution the update cut off can't finish it.
+  fresh.c.onHelperTurn(started.helperId, 'completed', 'Stale result', oldRunId);
+  assert.equal(fresh.c.get(project.id).tasks[0].run?.status, 'running');
+  resumed[0]!.text('m2', 'Deployed.');
+  resumed[0]!.result('completed');
+  await tick();
+  assert.equal(fresh.c.get(project.id).tasks[0].run?.status, 'completed');
+  const coordSessions = fresh.adapter.sessions.filter((s) => s.opts.threadId === coordinator.threadId);
+  const wakes = coordSessions.flatMap((s) => s.sent).filter((m) => m.text.includes('A helper turn finished'));
+  assert.equal(wakes.length, 1, 'woken once, when the helper finished');
+  assert.match(wakes[0]!.text, /Deployed\./);
+  assert.ok(!coordSessions.flatMap((s) => s.sent).some((m) => m.text.includes('interrupted helper work')));
+  fresh.c.stop();
+});
+
+test('an update with a helper working posts no "Moved to Hibernating" note in a coordinator with a check-in booked', async () => {
+  const { c, h, project, claude } = setup();
+  const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  h.runner.schedulesFor = () => [{ id: 's1', title: 'Check', text: 'look', whenText: 'today', threadId: coordinator.threadId, nextRunAt: '2099-01-01T00:00:00Z' } as Schedule];
+  const started = c.startHelper(project.id, { title: 'Deploy', doneWhen: 'Deployed', brief: 'Deploy it' });
+  const coordSession = claude.sessions.find((s) => s.opts.threadId === coordinator.threadId)!;
+  coordSession.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e1', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
+  coordSession.result('completed');
+  await tick();
+  claude.sessions.find((s) => s.opts.threadId === started.helperId)!.init('helper-session');
+  await tick();
+  assert.equal(h.runner.get(coordinator.threadId).waitState, 'job');
+  const notes = () => h.runner.events(coordinator.threadId, { limit: 10_000 }).events.filter((e) => e.type === 'system.note' && e.text.startsWith('Moved to Hibernating')).length;
+  const before = notes();
+  await c.handover();
+  await tick();
+  h.runner.flush();
+  await tick();
+  assert.equal(h.runner.get(coordinator.threadId).waitState, 'job', 'still waiting on its helper');
+  assert.equal(notes(), before);
+});
+
+test('a crash carries a working helper on; one that stops the runner again during that turn goes to its coordinator', async () => {
+  const { c, h, project, home, coordinator, started } = await workingHelper();
+  // No handover: the runner just went.
+  c.stop();
+  const fresh = recoverFresh(h, home);
+  await tick();
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === coordinator.threadId).length, 0, 'no coordinator turn');
+  const resumed = fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId);
+  assert.equal(resumed.length, 1);
+  assert.equal(resumed[0]!.opts.sessionId, 'helper-session');
+  assert.ok(resumed[0]!.sent[0]?.text.endsWith(CARRY_ON_HELPER_RESTART), 'told the runner restarted partway through');
+  assert.equal(fresh.c.get(project.id).tasks[0].run?.status, 'running');
+  fresh.c.stop();
+  // It crashed again during the turn it carried on: not a third time.
+  const again = recoverFresh(h, home);
+  await tick();
+  assert.equal(again.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 0);
+  const run = again.c.get(project.id).tasks[0].run!;
+  assert.equal(run.status, 'interrupted');
+  assert.match(run.summary ?? '', /couldn’t carry it on/);
+  const coord = again.adapter.sessions.filter((s) => s.opts.threadId === coordinator.threadId);
+  assert.ok(coord.flatMap((s) => s.sent).some((m) => m.text.includes('interrupted helper work')), 'its coordinator reconciles it');
+  coord.at(-1)!.result('completed');
+  await tick();
+  again.c.stop();
+  // Told once: its turn finished.
+  const third = recoverFresh(h, home);
+  await tick();
+  assert.ok(!third.adapter.sessions.flatMap((s) => s.sent).some((m) => m.text.includes('interrupted helper work')));
+  assert.equal(third.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 0);
+  third.c.stop();
+});
+
+test('plain restarts in a row (an update with only a helper busy) carry the helper on each time, never waking its coordinator', async () => {
+  const { c, h, project, home, coordinator, started } = await workingHelper();
+  // A restart with only hidden helpers at work doesn't hand over: it stops.
+  c.stop({ graceful: true });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'coordinators.json'), 'utf8'))[0].tasks[0].run.restart, 'update');
+  const fresh = recoverFresh(h, home);
+  await tick();
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 1);
+  fresh.c.stop({ graceful: true });
+  const again = recoverFresh(h, home);
+  await tick();
+  assert.equal(again.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 1, 'carried on again');
+  assert.equal(again.adapter.sessions.filter((s) => s.opts.threadId === coordinator.threadId).length, 0, 'no coordinator turn');
+  assert.equal(again.c.get(project.id).tasks[0].run?.status, 'running');
+  again.c.stop();
+});
+
+test('a paused coordinator’s helper is not carried on after a restart, nor after Resume', async () => {
+  const { c, h, project, home, coordinator, started } = await workingHelper();
+  await c.handover();
+  editRegistry(home, (rows) => { rows[0]!.state = 'paused'; });
+  const fresh = recoverFresh(h, home);
+  await tick();
+  assert.equal(fresh.adapter.sessions.length, 0, 'neither the helper nor the coordinator starts');
+  assert.equal(fresh.c.get(project.id).tasks[0].run?.status, 'interrupted');
+  await fresh.c.pause(project.id, false);
+  await tick();
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 0, 'Resume leaves the helper to its coordinator');
+  assert.ok(fresh.adapter.sessions.filter((s) => s.opts.threadId === coordinator.threadId).flatMap((s) => s.sent).some((m) => m.text.includes('Resumed by the user')));
+  fresh.c.stop();
+  const again = recoverFresh(h, home);
+  await tick();
+  assert.equal(again.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 0, 'nor on a later restart');
+  again.c.stop();
+});
+
+test('a helper the runner cannot carry on after a restart wakes its coordinator instead', async () => {
+  // Its carry-on refused.
+  {
+    const { c, h, project, home, coordinator, started } = await workingHelper();
+    await c.handover();
+    const fresh = recoverFresh(h, home, (host) => {
+      const send = host.send.bind(host);
+      host.send = (id, ...rest) => {
+        if (id === started.helperId) throw new Error('Launch refused');
+        return send(id, ...rest);
+      };
+    });
+    await tick();
+    const run = fresh.c.get(project.id).tasks[0].run!;
+    assert.equal(run.status, 'interrupted');
+    assert.match(run.summary ?? '', /Launch refused/);
+    assert.equal(fresh.c.get(project.id).tasks[0].state, 'blocked');
+    assert.ok(fresh.adapter.sessions.filter((s) => s.opts.threadId === coordinator.threadId).flatMap((s) => s.sent).some((m) => m.text.includes('interrupted helper work')));
+    fresh.c.stop();
+  }
+  // No session to resume.
+  {
+    const { h, c, project, home, claude } = setup();
+    const { coordinator } = c.create({ projectId: project.id, accountId: 'claude-3' });
+    await tick();
+    claude.sessions.at(-1)!.result('completed');
+    await tick();
+    const started = c.startHelper(project.id, { brief: 'Deploy it' });
+    await tick();
+    // A clean stop, whose stopTurn asks carryOnStopped to carry the helper on.
+    c.stop({ graceful: true });
+    await h.runner.shutdown();
+    assert.ok(h.store.load(started.helperId)!.stoppedMidTurn);
+    const fresh = recoverFresh(h, home);
+    await tick();
+    assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 0, 'nor carried on outside the registry');
+    assert.ok(fresh.adapter.sessions.filter((s) => s.opts.threadId === coordinator.threadId).flatMap((s) => s.sent).some((m) => m.text.includes('interrupted helper work')));
+    fresh.c.stop();
+  }
+});
+
+test('a helper turn that ends with a background job still going keeps its run until the turn that job wakes ends (Convex AI guidance, 26 Nov)', async () => {
+  const { c, project, claude, coordinator, started, helperSession } = await workingHelper();
+  const coordWakes = () => claude.sessions.filter((s) => s.opts.threadId === coordinator.threadId).flatMap((s) => s.sent).filter((m) => m.text.includes('A helper turn finished'));
+  helperSession.out({ kind: 'tasks', tasks: [{ id: 'b1', type: 'local_bash', kind: 'shell', description: 'Second review' }] });
+  helperSession.text('m1', 'First review clean; waiting on the second review.');
+  helperSession.result('completed');
+  await tick();
+  assert.equal(c.get(project.id).tasks[0].run?.status, 'running', 'not finished on a turn waiting for its job');
+  assert.equal(coordWakes().length, 0);
+  // The job ends and the CLI opens a turn to read it: its tools still work.
+  helperSession.out({ kind: 'tasks', tasks: [] });
+  helperSession.out({ kind: 'cliTurn' });
+  await tick();
+  assert.equal(c.session(started.helperId)!.checkTool({ name: 'Read', input: {} }), undefined);
+  helperSession.text('m2', 'Second review clean too. Done.');
+  helperSession.result('completed');
+  await tick();
+  assert.equal(c.get(project.id).tasks[0].run?.status, 'completed');
+  assert.equal(coordWakes().length, 1, 'its coordinator hears once');
+  assert.match(coordWakes()[0]!.text, /Second review clean too/);
+  c.stop();
+});
+
+test('a held helper turn whose background job wakes nothing ends the run on that turn once the grace passes', async () => {
+  const { c, h, project, claude, coordinator, helperSession } = await workingHelper();
+  helperSession.out({ kind: 'tasks', tasks: [{ id: 'b1', type: 'local_bash', kind: 'shell', description: 'Build' }] });
+  helperSession.text('m1', 'Built; the job finishes by itself.');
+  helperSession.result('completed');
+  await tick();
+  assert.equal(c.get(project.id).tasks[0].run?.status, 'running');
+  helperSession.out({ kind: 'tasks', tasks: [] });
+  await tick();
+  assert.equal(c.get(project.id).tasks[0].run?.status, 'running', 'the CLI may still open a turn');
+  h.clock.advance(20_000);
+  await tick();
+  assert.equal(c.get(project.id).tasks[0].run?.status, 'completed');
+  const wakes = claude.sessions.filter((s) => s.opts.threadId === coordinator.threadId).flatMap((s) => s.sent).filter((m) => m.text.includes('A helper turn finished'));
+  assert.equal(wakes.length, 1);
+  assert.match(wakes[0]!.text, /Built; the job finishes/);
+  c.stop();
+});
+
+test('a refused carry-on whose fallback wake also fails is told next start, without trying the helper again', async () => {
+  const { c, h, project, home, coordinator, started } = await workingHelper();
+  await c.handover();
+  const refused = recoverFresh(h, home, (host) => {
+    const send = host.send.bind(host);
+    host.send = (id, ...rest) => {
+      if (id === started.helperId || id === coordinator.threadId) throw new Error('Refused');
+      return send(id, ...rest);
+    };
+  });
+  await tick();
+  assert.equal(refused.adapter.sessions.length, 0);
+  refused.c.stop();
+  const fresh = recoverFresh(h, home);
+  await tick();
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 0, 'not tried again');
+  const wakes = fresh.adapter.sessions.filter((s) => s.opts.threadId === coordinator.threadId).flatMap((s) => s.sent).filter((m) => m.text.includes('interrupted helper work'));
+  assert.equal(wakes.length, 1);
+  assert.equal(fresh.c.get(project.id).tasks[0].run?.status, 'interrupted');
+  fresh.c.stop();
+});
+
+test('a handover that is the restart after an uncaught error counts as a crash for its helpers', async () => {
+  const { c, h, home, coordinator, started } = await workingHelper();
+  await c.handover({ afterError: true });
+  const fresh = recoverFresh(h, home);
+  await tick();
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 1, 'carried on once');
+  fresh.c.stop();
+  const again = recoverFresh(h, home);
+  await tick();
+  assert.equal(again.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 0, 'not after a second crash');
+  assert.ok(again.adapter.sessions.filter((s) => s.opts.threadId === coordinator.threadId).flatMap((s) => s.sent).some((m) => m.text.includes('interrupted helper work')));
+  again.c.stop();
+});
+
+test('a helper an older runner’s update cut off is carried on once by the first runner with restart marks', async () => {
+  const { c, h, home, coordinator, started } = await workingHelper();
+  await c.handover();
+  const legacy = (rows: { state: string; tasks: { run?: Record<string, unknown> }[] }[]) => {
+    const run = rows[0]!.tasks[0]!.run!;
+    delete run.restart;
+    run.summary = 'The runner updated. Reconcile the saved work before resuming.';
+  };
+  editRegistry(home, legacy);
+  const fresh = recoverFresh(h, home);
+  await tick();
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === coordinator.threadId).length, 0);
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 1);
+  fresh.c.stop();
+});
+
+test('an older runner’s cut-off helper under a paused coordinator is left to it after Resume, and its old summary never matches again', async () => {
+  const { c, h, project, home, started } = await workingHelper();
+  await c.handover();
+  editRegistry(home, (rows) => {
+    rows[0]!.state = 'paused';
+    const run = rows[0]!.tasks[0]!.run!;
+    delete run.restart;
+    run.summary = 'The runner updated. Reconcile the saved work before resuming.';
+  });
+  const fresh = recoverFresh(h, home);
+  await tick();
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 0);
+  await fresh.c.pause(project.id, false);
+  assert.doesNotMatch(fresh.c.get(project.id).tasks[0].run?.summary ?? '', /Reconcile the saved work/, 'Resume replaced the old summary');
+  fresh.c.stop();
+  const again = recoverFresh(h, home);
+  await tick();
+  assert.equal(again.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 0, 'not carried on later');
+  again.c.stop();
+});
+
+test('a crash after an update’s carry-on is still carried on', async () => {
+  const { c, h, project, home, started } = await workingHelper();
+  await c.handover();
+  const fresh = recoverFresh(h, home);
+  await tick();
+  assert.equal(fresh.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 1);
+  fresh.c.stop(); // a crash: no clean stop
+  const again = recoverFresh(h, home);
+  await tick();
+  assert.equal(again.adapter.sessions.filter((s) => s.opts.threadId === started.helperId).length, 1, 'carried on after the crash');
+  assert.equal(again.c.get(project.id).tasks[0].run?.status, 'running');
+  again.c.stop();
 });
 
 test('helper approval and question cards never reach the user; they record on the coordinator and resume cleanly', async () => {

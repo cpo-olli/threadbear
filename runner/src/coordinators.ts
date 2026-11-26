@@ -19,6 +19,7 @@ import { scheduledMessageId } from './runner/messages.ts';
 import { loginOk, roomWait } from './pools.ts';
 import { providerName } from './providers.ts';
 import { resetTime } from './usage.ts';
+import { CARRY_ON_HELPER_RESTART, STOPPED_CARRY_ON_MAX_AGE_MS } from './runner/carry-on.ts';
 import { COORDINATOR_TB_REFUSAL, COORDINATOR_THREADBEAR_TOOLS, COORDINATOR_WORKER, COORDINATOR_WORKER_PROMPT, HELPER_REPORT, HELPER_THREADBEAR_TOOLS, threadbearToolName } from './coordinator-policy.ts';
 
 const runStates = ['queued', 'running', 'interrupted', 'completed', 'failed', 'stopped'] as const;
@@ -42,6 +43,14 @@ const runSchema = z.object({
   summary: z.string().optional(),
   brief: z.string(),
   updatedAt: z.string(),
+  // Registry only (not in the view): an interrupted run a runner stop cut
+  // off, for the next runner to carry on by itself (`update`: a handover or a
+  // clean stop; `stop`: a crash or a power cut). See carryOnAfterRestart().
+  restart: z.enum(['update', 'stop']).optional(),
+  // How many times the runner has carried this run on after a restart, and
+  // how many of those in a row came after a crash.
+  restartResumes: z.number().int().nonnegative().optional(),
+  crashResumes: z.number().int().nonnegative().optional(),
 });
 const taskStates = ['todo', 'working', 'blocked', 'review', 'done'] as const;
 type TaskState = typeof taskStates[number];
@@ -94,7 +103,7 @@ function view(row: Coordinator): CoordinatorView {
   const { events: _events, seen: _seen, delivery: _delivery, reports: _reports, tasks, ...rest } = row;
   return structuredClone({ ...rest, tasks: tasks.map(({ run, ...task }) => {
     if (!run) return task;
-    const { brief: _brief, ...publicRun } = run;
+    const { brief: _brief, restart: _restart, restartResumes: _resumes, crashResumes: _crashes, ...publicRun } = run;
     return { ...task, run: publicRun };
   }) });
 }
@@ -176,6 +185,12 @@ const RESUME_WAKE = 'Resumed by the user. Reconcile any interrupted helper befor
 const RESTART_WAKE = 'The runner restarted with interrupted helper work. Inspect the saved records and existing effects before resuming any helper.';
 const RESENT_NOTE = 'Sent again: a restart, pause or failure cut off the turn this came in. You may have seen it already; check before acting on it twice.';
 const COMPACT_MS = 50 * 60_000;
+// Carrying a helper on after restarts: at most this many times for one run.
+const RESTART_RESUMES_MAX = 10;
+// What the registry said of a run a runner before 26 Nov 2026 cut off: read
+// as cut off by an update, once. Every way a run is carried on, resumed or
+// left to its coordinator replaces it (unmark), so it can't match again.
+const OLD_RESTART_SUMMARIES = ['The runner updated. Reconcile the saved work before resuming.', 'The runner restarted. Reconcile the existing work before resuming; do not replay side effects.'];
 
 function real(p: string): string {
   try { return fs.realpathSync(p); } catch { return path.resolve(p); }
@@ -212,15 +227,22 @@ export class Coordinators {
       const saved = z.array(recordSchema).parse(JSON.parse(fs.readFileSync(this.file, 'utf8')));
       for (const row of saved) {
         if (this.rows.has(row.projectId) || [...this.rows.values()].some((r) => r.threadId === row.threadId)) throw Error('Duplicate coordinator identity');
-        let interrupted = Boolean(row.wakeInterrupted);
+        // An earlier build's flag for a restart wake still owed: a report.
+        const owed = Boolean(row.wakeInterrupted);
         delete row.wakeInterrupted;
-        for (const task of row.tasks) if (task.run && ['queued', 'running'].includes(task.run.status)) {
-          task.run.status = runMove(task.run.status, 'interrupted');
-          taskMove(task, 'blocked');
-          task.run.summary = 'The runner restarted. Reconcile the existing work before resuming; do not replay side effects.';
-          interrupted = true;
+        for (const task of row.tasks) {
+          if (task.run && ['queued', 'running'].includes(task.run.status)) {
+            // Still running here: the runner went without stopping cleanly.
+            task.run.status = runMove(task.run.status, 'interrupted');
+            taskMove(task, 'blocked');
+            task.run.summary = 'The runner stopped partway through this helper’s turn without stopping cleanly (a crash or a power cut).';
+            task.run.restart = 'stop';
+          } else if (task.run?.status === 'interrupted' && !task.run.restart && task.state === 'blocked' && OLD_RESTART_SUMMARIES.includes(task.run.summary ?? '')) {
+            // Cut off by a runner from before the restart marks.
+            task.run.restart = 'update';
+          }
         }
-        if (interrupted) this.restartReport(row);
+        if (owed) this.restartReport(row);
         this.rows.set(row.projectId, row);
       }
       this.save();
@@ -257,29 +279,148 @@ export class Coordinators {
       this.deps.log.error('could not start a coordinator', { projectId: row.projectId, error: String(e) });
     }
   }
-  stop(): void {
+  // Once the runner is listening and everything a CLI's tools reach is set
+  // up (main.ts, beside carryOnStopped): starting a Codex helper before
+  // then threw on the tools' sync (Codex's review, 26 Nov 2026).
+  carryOnAfterRestart(): void {
+    for (const row of this.rows.values()) {
+      try {
+        this.afterRestart(row);
+      } catch (e) {
+        this.deps.log.error('could not carry on coordinator helpers after a restart', { projectId: row.projectId, error: String(e) });
+      }
+    }
+  }
+  // Helper runs the last runner's stop cut off carry on by themselves, with
+  // no turn for the coordinator (Omi, 26 Nov 2026: every update woke it, and
+  // it told Mike it had restarted the helper). It hears as usual when the
+  // helper's turn ends. One that can't be carried on wakes it to reconcile,
+  // through the restart report. A paused coordinator's helpers wait for
+  // Resume, which wakes it.
+  private afterRestart(row: Coordinator): void {
+    if (row.state !== 'active' || !this.deps.enabled() || this.stopped) return;
+    let reconcile = false;
+    for (const task of row.tasks) {
+      const run = task.run;
+      if (!run?.restart || run.status !== 'interrupted') continue;
+      // Done since: the coordinator has dealt with it.
+      if (task.state === 'done') { this.unmark(run); this.changed(row); continue; }
+      const kind = run.restart;
+      const why = this.cannotCarryOn(row, task, kind);
+      const failed = why ? undefined : this.carryOn(row, task, kind);
+      if (!why && !failed) continue;
+      const reason = why ?? failed!;
+      // carryOn puts a new run in place. The restart report goes in the
+      // same write as the mark, so a crash between them loses neither, and
+      // it's delivered like any helper report (deliverReports).
+      const now = task.run!;
+      this.unmark(now, `The runner restarted partway through this helper’s turn and couldn’t carry it on (${reason}). Reconcile the existing work before resuming; do not replay side effects.`);
+      this.deps.log.warn('could not carry on a coordinator helper after a restart', { projectId: row.projectId, helperId: now.helperThreadId, reason });
+      this.restartReport(row);
+      reconcile = true;
+    }
+    if (!reconcile) return;
+    this.changed(row);
+    this.deliverReports(row, true);
+  }
+  // Why a run cut off by a restart can't be carried on, or nothing if it can.
+  private cannotCarryOn(row: Coordinator, task: Coordinator['tasks'][number], kind: 'update' | 'stop'): string | undefined {
+    const run = task.run!;
+    const helper = run.helperThreadId ? this.deps.host.threads.get(run.helperThreadId) : undefined;
+    if (!helper) return 'its helper session is gone';
+    // Sent a brief with no session to show for it: the turn may never have started.
+    if (!helper.rec.sessionUsed || !helper.rec.nativeSessionId) return 'its helper had no session yet';
+    if (row.tasks.some((t) => t !== task && t.run && ['queued', 'running'].includes(t.run.status))) return 'another helper is working';
+    const resumes = run.restartResumes ?? 0;
+    // A turn that takes the runner down mustn't loop: the runner went down
+    // again, without stopping cleanly, during the turn it carried on after
+    // the last crash.
+    if (kind === 'stop' && (run.crashResumes ?? 0) >= 1) return 'the runner went down again during the turn it carried on';
+    if (resumes >= RESTART_RESUMES_MAX) return `it was carried on ${RESTART_RESUMES_MAX} times already`;
+    const at = Date.parse(run.updatedAt);
+    if (!(this.deps.clock.now() - at <= STOPPED_CARRY_ON_MAX_AGE_MS)) return 'it was cut off more than 12 hours ago';
+    return undefined;
+  }
+  // Sends the helper's own session the runner's carry-on, as a new run
+  // generation (as resumeHelper does), so a late result from the turn the
+  // restart cut off can't finish it. Says why if the send was refused.
+  private carryOn(row: Coordinator, task: Coordinator['tasks'][number], kind: 'update' | 'stop'): string | undefined {
+    const run = task.run!;
+    const helperId = run.helperThreadId!;
+    const dispatchId = crypto.randomUUID();
+    this.unmark(run);
+    const { summary: _summary, ...kept } = run;
+    task.run = { ...kept, id: dispatchId, nativeRunId: dispatchId, status: runMove(runMove(run.status, 'queued'), 'running'), restartResumes: (run.restartResumes ?? 0) + 1, crashResumes: kind === 'stop' ? (run.crashResumes ?? 0) + 1 : 0, updatedAt: this.now() };
+    taskMove(task, 'working');
+    this.changed(row);
+    const coordSt = this.deps.host.threads.get(row.threadId);
+    if (coordSt) this.deps.host.updateSubagent(coordSt, { id: helperId, itemId: dispatchId, status: 'running', activity: 'Carrying on after a restart' });
+    try {
+      this.deps.host.send(helperId, CARRY_ON_HELPER_RESTART, [], { origin: 'runner', messageId: dispatchId });
+      this.deps.log.info('carried on a coordinator helper after a restart', { projectId: row.projectId, helperId });
+      return undefined;
+    } catch (e) {
+      const why = `the carry-on was refused: ${(e as Error).message || String(e)}`.slice(0, 500);
+      if (task.run.status === 'running') {
+        task.run.status = runMove('running', 'interrupted');
+        task.run.restart = kind;
+        taskMove(task, 'blocked');
+        if (coordSt) this.deps.host.updateSubagent(coordSt, { id: helperId, status: 'stopped', summary: why });
+      }
+      return why;
+    }
+  }
+  // A run's restart mark gone, and an old runner's restart summary with it,
+  // which would otherwise be read as a fresh cut on the next start.
+  private unmark(run: NonNullable<Coordinator['tasks'][number]['run']>, summary?: string): void {
+    delete run.restart;
+    if (summary) run.summary = summary;
+    else if (OLD_RESTART_SUMMARIES.includes(run.summary ?? '')) run.summary = 'The runner restarted partway through this helper’s turn.';
+  }
+  // `graceful`: the runner is stopping on purpose (a restart onto an update
+  // with only helpers busy, which hides them from the restart's wait, a
+  // SIGTERM, the Mac shutting down), not after an uncaught error. Its
+  // helpers are marked as cut off by it, as at a handover, so the next
+  // runner can tell them from a turn that took the runner down (start()).
+  // Only a started registry's writer: a draining runner stopped at its handover.
+  stop(opts: { graceful?: boolean } = {}): void {
+    if (opts.graceful && !this.stopped && this.unlisten) {
+      for (const row of this.rows.values()) if (this.cutRuns(row, 'The runner restarted partway through this helper’s turn.')) this.changed(row);
+    }
     this.stopped = true;
     this.unlisten?.();
     for (const timer of [...this.timers.values(), ...this.compactTimers.values(), ...this.reportTimers.values()]) timer.cancel();
     this.timers.clear(); this.timerAt.clear(); this.compactTimers.clear(); this.reportTimers.clear();
   }
-  async handover(): Promise<void> {
+  // `afterError`: the handover is the restart after an uncaught error, which
+  // may have been a helper's doing, so its helpers count as a crash's.
+  async handover(opts: { afterError?: boolean } = {}): Promise<void> {
     // There is one registry writer. Finish these owned sessions (coordinator
     // and hidden helpers) before a replacement runner loads it; never keep
     // them in the drain.
     this.stop();
+    // The new runner carries cut-off helpers on by itself (start()).
     for (const row of this.rows.values()) {
-      const coordSt = this.deps.host.threads.get(row.threadId);
-      for (const task of row.tasks) if (task.run && ['queued', 'running'].includes(task.run.status)) {
-        task.run.status = runMove(task.run.status, 'interrupted'); taskMove(task, 'blocked');
-        task.run.summary = 'The runner updated. Reconcile the saved work before resuming.';
-        this.restartReport(row);
-        if (coordSt && task.run.helperThreadId) this.deps.host.updateSubagent(coordSt, { id: task.run.helperThreadId, status: 'stopped', summary: task.run.summary });
-      }
+      this.cutRuns(row, opts.afterError ? 'The runner restarted after an error partway through this helper’s turn.' : 'The runner updated partway through this helper’s turn.', opts.afterError ? 'stop' : 'update');
       this.changed(row);
       const sessions = this.ownedSessions(row);
       await Promise.all(sessions.map((s) => s.end({ hard: true })));
     }
+  }
+  // Marks the row's working runs as cut off by a planned stop, for the next
+  // runner to carry on. Says whether there were any.
+  private cutRuns(row: Coordinator, summary: string, kind: 'update' | 'stop' = 'update'): boolean {
+    const coordSt = this.deps.host.threads.get(row.threadId);
+    let cut = false;
+    for (const task of row.tasks) if (task.run && ['queued', 'running'].includes(task.run.status)) {
+      task.run.status = runMove(task.run.status, 'interrupted'); taskMove(task, 'blocked');
+      task.run.summary = summary;
+      task.run.restart = kind;
+      task.run.updatedAt = this.now();
+      if (coordSt && task.run.helperThreadId) this.deps.host.updateSubagent(coordSt, { id: task.run.helperThreadId, status: 'stopped', summary });
+      cut = true;
+    }
+    return cut;
   }
   private now(): string { return new Date(this.deps.clock.now()).toISOString(); }
   on(): boolean { return this.deps.enabled() && !this.stopped; }
@@ -302,9 +443,13 @@ export class Coordinators {
   forThread(threadId: string): Coordinator | undefined { return [...this.rows.values()].find((r) => r.threadId === threadId); }
   // How many of this coordinator thread's helpers are still at work, for its
   // wait state (wait-state.ts): 0 for any other thread.
+  // One a restart cut off, which the next runner carries on, counts too:
+  // the coordinator's wait doesn't change for it, so no "Moved to
+  // Hibernating" note goes in its conversation at every update (Gemini's
+  // review, 26 Nov 2026).
   helpersWorking(threadId: string): number {
     if (!this.deps.enabled()) return 0;
-    return this.forThread(threadId)?.tasks.filter((t) => t.run && ['queued', 'running'].includes(t.run.status)).length ?? 0;
+    return this.forThread(threadId)?.tasks.filter((t) => t.run && (['queued', 'running'].includes(t.run.status) || (t.run.status === 'interrupted' && (t.run.restart === 'update' || t.run.restart === 'stop')))).length ?? 0;
   }
   // Whether a helper thread's run is one its active coordinator still has going.
   helperRunActive(helperThreadId: string): boolean {
@@ -445,6 +590,9 @@ export class Coordinators {
     this.timerAt.delete(projectId);
     this.compactTimers.get(projectId)?.cancel(); this.compactTimers.delete(projectId);
     this.reportTimers.get(projectId)?.cancel(); this.reportTimers.delete(projectId);
+    // A paused coordinator's helpers never carry on by themselves, and on
+    // Resume it reconciles them: a restart's marks would outlive that.
+    for (const task of row.tasks) if (task.run) this.unmark(task.run);
     this.changed(row);
     if (paused) {
       const coordSt = this.deps.host.threads.get(row.threadId);
@@ -687,7 +835,9 @@ export class Coordinators {
     if (!task) throw bad('That task is not in this project.');
     if (task.run && ['queued', 'running'].includes(task.run.status)) throw bad('Inspect the helper result before marking this task done.');
     if (row.questions.some((q) => q.agentId === task.run?.agentId && q.state === 'open')) throw bad('Resolve this helper’s open questions before marking the task done.');
-    taskMove(task, 'done'); this.changed(row); return this.get(projectId);
+    taskMove(task, 'done');
+    if (task.run) this.unmark(task.run);
+    this.changed(row); return this.get(projectId);
   }
 
   selectTask(projectId: string, id: string): CoordinatorView {
@@ -879,8 +1029,10 @@ export class Coordinators {
       });
     }
     const dispatchId = crypto.randomUUID();
+    this.unmark(task.run);
+    const { restartResumes: _resumes, crashResumes: _crashes, ...run } = task.run;
     task.run = {
-      ...task.run,
+      ...run,
       id: dispatchId,
       nativeRunId: dispatchId,
       status: runMove(runMove(task.run.status, 'queued'), 'running'),
@@ -969,7 +1121,7 @@ export class Coordinators {
       helperId: helperThreadId,
       status,
       ...(openQuestions.length ? { openQuestions } : {}),
-      summary: (task.run.summary ?? '').slice(0, 4000),
+      summary: (task.run?.summary ?? '').slice(0, 4000),
     });
     // Saved in the same write as the run's end, so a crash before the wake
     // is queued on the coordinator's thread can't lose it: the next runner
@@ -1305,6 +1457,7 @@ export class Coordinators {
           task.run.status = runMove(task.run.status, 'interrupted'); taskMove(task, 'blocked');
           if (coordSt && task.run.helperThreadId) this.deps.host.updateSubagent(coordSt, { id: task.run.helperThreadId, status: 'stopped', summary: 'Coordinators turned off.' });
         }
+        for (const task of row.tasks) if (task.run) this.unmark(task.run);
         this.changed(row);
       }
       return;

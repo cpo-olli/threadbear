@@ -1853,6 +1853,8 @@ async function main(): Promise<void> {
   step('resume after restart', () => restarter.resumeAfterRestart());
   step('tell stopped work', () => runner.tellStoppedWork());
   step('carry on stopped', () => runner.carryOnStopped());
+  // Coordinators' hidden helpers a restart cut off (coordinators.ts).
+  if (!copyOfReal && !box) step('carry on coordinator helpers', () => coordinators.carryOnAfterRestart());
   // A thread waited on may have finished while the runner was down. Only
   // now: waking one starts its CLI, whose tools need what's set up above.
   runner.holdWaits = false;
@@ -1916,7 +1918,9 @@ async function main(): Promise<void> {
     keepAwake.stop();
     connectors.stop();
     projects.stop();
-    coordinators.stop();
+    // Not after an uncaught error, which may have been a helper's doing
+    // (coordinators.ts, start()).
+    coordinators.stop({ graceful: !leavingAfterError });
     usage.stop();
     spareWeek.stop();
     mailWatch.stop();
@@ -1978,7 +1982,7 @@ async function main(): Promise<void> {
     draining = true;
     log.info('starting the handover', { keeps });
     try {
-      await coordinators.handover();
+      await coordinators.handover({ afterError: leavingAfterError });
       cancelMarkGood();
       updater.stop();
       reinstaller.stop();
