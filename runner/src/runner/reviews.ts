@@ -104,6 +104,16 @@ export const reviewsPart = {
     return {review: structuredClone(next), turnId};
   },
 
+  // A coordinator decision accepted a message already on its way to the
+  // agent. Save the review's answer without sending a second message.
+  recordReviewReply(this: Runner, threadId: string, reviewId: string, reply: ReviewDraft): void {
+    const st = this.mustGet(threadId);
+    const review = this.mustReview(st, reviewId);
+    if (review.status !== 'pending') return;
+    const draft = reviewDraft(review, reply, true);
+    this.persistReview(st, { ...review, draft, response: draft, status: 'answered', revision: review.revision + 1, updatedAt: this.isoNow() });
+  },
+
   cancelReview(this: Runner, threadId: string, reviewId: string, revision: number): {review: DesignReview} {
     const st = this.mustGet(threadId);
     this.checkAccepting();
@@ -123,7 +133,7 @@ export const reviewsPart = {
   supersedeReviews(this: Runner, st: ThreadState, text: string, opts: SendOptions): void {
     if (!fromMike(text, opts)) return;
     for (const review of st.rec.reviews ?? []) {
-      if (review.status !== 'pending') continue;
+      if (review.status !== 'pending' || this.coordinators?.keepsDesignReview(st.rec.id, review.id)) continue;
       this.persistReview(st, {...review, status: 'superseded', revision: review.revision + 1, updatedAt: this.isoNow()});
     }
   },

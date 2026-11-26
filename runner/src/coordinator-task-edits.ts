@@ -26,7 +26,7 @@ export function workTaskEdit(input: WorkTaskEdit, now: number, previous?: Parame
   }
   const state = edit.state ?? (previous ? workTaskView(previous, '').state : 'todo');
   const parentTaskId = edit.parentTaskId === undefined ? old?.parentTaskId : edit.parentTaskId ?? undefined;
-  const workItemId = edit.workItemId === undefined ? (parentTaskId ? undefined : old?.workItemId) : edit.workItemId ?? undefined;
+  const workItemId = parentTaskId ? undefined : edit.workItemId === undefined ? old?.workItemId : edit.workItemId ?? undefined;
   const due = edit.due === undefined ? old?.due : edit.due === null ? undefined : resolveTaskDue(edit.due, now);
   const common = {
     owner: edit.owner ?? old?.owner ?? { kind: kind === 'decision' ? 'user' as const : 'agent' as const },

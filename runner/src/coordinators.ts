@@ -19,7 +19,7 @@ import { loginOk, roomWait } from './pools.ts';
 import { providerName } from './providers.ts';
 import { resetTime } from './usage.ts';
 import { putsOff } from './needs.ts';
-import { askMatches, askTask, decisionCard, decisionChoices, isUserDecision, taskTitleKey, type BoardRecord } from './coordinator-asks.ts';
+import { askMatches, askTask, decisionCard, decisionChoices, decisionReviewAnswer, decisionReviewDraft, isUserDecision, replyChoiceKey, taskTitleKey, type BoardRecord } from './coordinator-asks.ts';
 import { workTaskEdit, type WorkTaskEdit } from './coordinator-task-edits.ts';
 import { CARRY_ON_HELPER_RESTART, STOPPED_CARRY_ON_MAX_AGE_MS } from './runner/carry-on.ts';
 import { COORDINATOR_TB_REFUSAL, COORDINATOR_THREADBEAR_TOOLS, COORDINATOR_WORKER, COORDINATOR_WORKER_PROMPT, HELPER_REPORT, HELPER_THREADBEAR_TOOLS, threadbearToolName } from './coordinator-policy.ts';
@@ -277,7 +277,7 @@ export class Coordinators {
     for (const record of records) {
       // The desk write can reach disk before the turn event. Recover the
       // card from the log, or make an ask interrupted at that point re-askable.
-      if (record.asked && record.asked.seq >= latest && !loggedAsks?.some((ask) => ask.taskId === record.id && record.asked?.seq === latest)) {
+      if (record.asked && !loggedAsks?.some((ask) => ask.taskId === record.id && record.asked?.seq === latest)) {
         if (record.asked.seq === latest && loggedAsks?.some((ask) => !ask.taskId && ask.action === record.asked?.action)) continue;
         delete record.asked;
         dirty = true;
@@ -302,6 +302,13 @@ export class Coordinators {
           loop.asked = { seq: card.seq, action: ask.action };
           if (review) loop.designReviewId = review.id;
         }
+        dirty = true;
+      }
+    }
+    for (const record of records) {
+      const review = this.taskReview(row, record);
+      if (review?.status === 'answered' && review.response && !isTaskDone(record) && isUserDecision(record)) {
+        this.closeUserDecision(row, record, decisionReviewAnswer(review, review.response).slice(0, 4000));
         dirty = true;
       }
     }
@@ -1784,14 +1791,31 @@ export class Coordinators {
     catch { return undefined; }
   }
 
-  askProblems(threadId: string, asks: Ask[]): string[] {
+  private taskReview(row: Coordinator, record?: BoardRecord) {
+    const id = record?.designReviewId;
+    return id ? this.deps.host.threads.get(row.threadId)?.rec.reviews?.find((review) => review.id === id) : undefined;
+  }
+
+  private reviewForAsk(row: Coordinator, ask: Ask, record?: BoardRecord) {
+    if (ask.links?.some(({ url }) => url.startsWith('review:'))) return this.askReview(row, ask);
+    const pending = this.taskReview(row, record);
+    return pending?.status === 'pending' ? pending : undefined;
+  }
+
+  private readyDecision(record: BoardRecord, threadId: string): boolean {
+    if (!isUserDecision(record) || isTaskDone(record) || record.work?.state === 'postponed') return false;
+    const decision = workTaskView(record, threadId).decision;
+    return Boolean(record.asked || (decision?.options?.length && decision.recommendation));
+  }
+
+  askProblems(threadId: string, asks: Ask[], needsCard = true): string[] {
     const row = this.forThread(threadId);
     if (!row || !this.on() || row.state !== 'active') return [];
-    if (!asks.length) return ['Write the step or decision in asks.'];
     const keys = new Set<string>();
     const titles = new Set<string>();
     let newAsks = 0;
     const problems: string[] = [];
+    if (needsCard && !asks.length) problems.push('Write the step or decision in asks.');
     for (const ask of asks) {
       const matches = askMatches(row, ask);
       const record = matches[0];
@@ -1808,7 +1832,7 @@ export class Coordinators {
         problems.push(`Use an open user-owned decision for ${label}. Postponed decisions wait for their trigger.`);
         continue;
       }
-      const review = this.askReview(row, ask);
+      const review = this.reviewForAsk(row, ask, record);
       if (ask.links?.some(({ url }) => url.startsWith('review:')) && review?.status !== 'pending') {
         problems.push(`Use a pending comparison review for ${label}.`);
         continue;
@@ -1817,17 +1841,12 @@ export class Coordinators {
       if (!choices.options.length || !choices.recommendation) problems.push(`Give ${label} concrete options and mark your recommendation. Offer to handle the step where the charter allows.`);
     }
     if (row.loops.filter((loop) => loop.state !== 'closed').length + newAsks > 100) problems.push('Close a resolved legacy loop or use an existing decision task before adding more asks.');
+    for (const record of boardRecords(row)) {
+      if (!keys.has(record.id) && this.readyDecision(record, threadId)) {
+        problems.push(`Put ${JSON.stringify(record.title)} to the user with end_turn, or postpone it if they asked to wait.`);
+      }
+    }
     return problems;
-  }
-
-  unpublishedDecisions(threadId: string): { title: string }[] {
-    const row = this.forThread(threadId);
-    if (!row || !this.on() || row.state !== 'active') return [];
-    return boardRecords(row).filter((record) => {
-      if (!isUserDecision(record) || record.asked || isTaskDone(record) || record.work?.state === 'postponed') return false;
-      const decision = workTaskView(record, threadId).decision;
-      return Boolean(decision?.options?.length && decision.recommendation);
-    });
   }
 
   bindAsks(threadId: string, asks: Ask[], seq: number): Ask[] {
@@ -1841,7 +1860,7 @@ export class Coordinators {
       let record = matches[0];
       if (matches.length > 1 || (ask.taskId && !record)) continue;
       if (record && (used.has(record.id) || !isUserDecision(record) || isTaskDone(record) || record.work?.state === 'postponed')) continue;
-      const review = this.askReview(row, ask);
+      const review = this.reviewForAsk(row, ask, record);
       const choices = decisionChoices(ask, row, record, review);
       // Legacy sessions and prose cards may have no buttons. Keep an
       // actionable completion reply for those cards.
@@ -1870,13 +1889,24 @@ export class Coordinators {
         decision: { options, recommendation },
       };
       record.asked = { seq, action: ask.action };
-      if (review) record.designReviewId = review.id;
+      if (review?.status === 'pending') record.designReviewId = review.id;
       else delete record.designReviewId;
       record.updatedAt = now;
       used.add(record.id);
-      bound.push(decisionCard(ask, record.id, options, recommendation, review?.status === 'pending'));
+      const hasReview = review?.status === 'pending';
+      const cardAsk = hasReview && !ask.links?.some(({ url }) => url.startsWith('review:'))
+        ? { ...ask, links: [...(ask.links ?? []).slice(0, 2), { url: `review:${review.id}`, title: 'Open comparison' }] }
+        : ask;
+      bound.push(decisionCard(cardAsk, record.id, options, recommendation, hasReview));
     }
-    if (bound.length) this.changed(row);
+    let dirty = bound.length > 0;
+    for (const record of boardRecords(row)) {
+      if (record.asked && !used.has(record.id)) {
+        delete record.asked;
+        dirty = true;
+      }
+    }
+    if (dirty) this.changed(row);
     return bound;
   }
 
@@ -1899,6 +1929,11 @@ export class Coordinators {
     if (!row || !this.on()) return true;
     const related = boardRecords(row).filter((record) => record.designReviewId === reviewId);
     return !related.length || related.some((record) => record.asked && !isTaskDone(record) && record.work?.state !== 'postponed');
+  }
+
+  keepsDesignReview(threadId: string, reviewId: string): boolean {
+    const row = this.forThread(threadId);
+    return Boolean(row && this.on() && boardRecords(row).some((record) => record.designReviewId === reviewId && !isTaskDone(record) && isUserDecision(record)));
   }
 
   private closeUserDecision(row: Coordinator, record: BoardRecord, answer: string): void {
@@ -1933,17 +1968,17 @@ export class Coordinators {
     this.checkAskSeq(row, id, asksSeq);
     if (putsOff(answer)) return this.postponeTask(projectId, id, { type: 'tomorrow' });
     if (isTaskDone(record)) throw bad('That decision is already closed.');
-    if (record.designReviewId) {
-      const review = this.deps.host.getReview(row.threadId, record.designReviewId).review;
-      if (review.status !== 'pending') throw bad('Open the review to see its current response.');
-      const option = review.options.find((item) => !item.reference && item.title === answer);
-      this.deps.host.respondReview(row.threadId, review.id, review.revision, option ? { notes: {}, pickedId: option.id } : { notes: {}, reply: answer });
+    const review = this.taskReview(row, record);
+    if (review?.status === 'answered') throw bad('Open the review to see its current response.');
+    if (review?.status === 'pending') {
+      this.deps.host.respondReview(row.threadId, review.id, review.revision, decisionReviewDraft(review, answer));
       if (!isTaskDone(record)) {
         this.closeUserDecision(row, record, answer);
         this.changed(row);
       }
       return this.get(projectId);
     }
+    delete record.designReviewId;
     this.closeUserDecision(row, record, answer);
     this.queueUserTaskEvent(row, { source: 'The user answered a decision', taskId: id, title: record.title, answer });
     return this.get(projectId);
@@ -1972,8 +2007,12 @@ export class Coordinators {
     if (action === 'done' && task.state === 'done') return this.get(projectId);
     this.applyWorkTaskState(row, id, action === 'reopen' ? 'ready_to_close' : 'done');
     if (action === 'close') record.closedByUser = true;
-    if (action === 'done') this.queueUserTaskEvent(row, { source: 'The user marked their action done', taskId: id, title: task.title });
-    else this.changed(row);
+    const source = {
+      done: 'The user marked their action done',
+      close: 'The user confirmed the task is closed',
+      reopen: 'The user reopened the task',
+    }[action];
+    this.queueUserTaskEvent(row, { source, taskId: id, title: task.title });
     return this.get(projectId);
   }
 
@@ -1991,50 +2030,49 @@ export class Coordinators {
 
   private observeUserReply(row: Coordinator, event: Extract<PersistedEvent, { type: 'user.message' }>): void {
     if ((event.origin && event.origin !== 'phone') || sentByAgent(event.text)) return;
-    const card = this.deps.host.threads.get(row.threadId)?.rec.needs;
+    const thread = this.deps.host.threads.get(row.threadId)?.rec;
+    const card = thread?.needs?.seq === thread?.lastTurnCompletedSeq ? thread?.needs : undefined;
     const records = boardRecords(row).filter((record) => !isTaskDone(record) && isUserDecision(record));
+    const current = card?.needs === 'you' ? this.activeAsks(row.threadId, card.asks ?? [], card.seq).flatMap((ask) => {
+      const task = askTask(row, ask);
+      return task?.asked?.seq === card.seq && isUserDecision(task) ? [{ ask, task }] : [];
+    }) : [];
     const answered = new Map<BoardRecord, string>();
     const add = (matches: BoardRecord[], answer: string) => {
       if (matches.length === 1 && answer.trim()) answered.set(matches[0]!, answer.trim().slice(0, 4000));
     };
     if (event.answers?.length) {
       for (const { action, answer } of event.answers) {
-        const key = taskTitleKey(action);
-        const matches = records.filter((record) => {
-          if (record.asked) return taskTitleKey(record.asked.action) === key;
-          const legacy = this.workLoop(row, record.id);
-          return legacy?.sourceSeq !== undefined && card?.seq === legacy.sourceSeq
-            && card.asks?.some((ask) => !ask.taskId && taskTitleKey(ask.action) === key)
-            && taskTitleKey(record.title) === taskTitleKey(action.slice(0, 240));
-        });
-        const current = matches.filter((record) => record.asked?.seq === card?.seq);
-        add(current.length ? current : matches, answer);
+        const matches = current.filter(({ ask }) => taskTitleKey(ask.action) === taskTitleKey(action));
+        add(matches.map(({ task }) => task), answer);
       }
     } else if (event.reviewId) {
       const review = this.deps.host.getReview(row.threadId, event.reviewId).review;
-      const response = event.reviewResponse;
-      const ids = response?.pickedIds ?? (response?.pickedId ? [response.pickedId] : []);
-      const choices = review.options.filter((item) => ids.includes(item.id)).map((item) => item.title);
-      const answer = [...choices, response?.reply].filter(Boolean).join(' · ') || event.text;
+      const answer = event.reviewResponse ? decisionReviewAnswer(review, event.reviewResponse, event.text) : event.text;
       add(records.filter((record) => record.designReviewId === review.id), answer);
-    } else if (card?.needs === 'you' && card.asks?.length) {
-      const current = this.activeAsks(row.threadId, card.asks, card.seq);
-      const key = taskTitleKey(event.text).replace(/[.!?]$/, '');
-      const matching = current.filter((ask) => ask.options?.some((option) => taskTitleKey(option).replace(/[.!?]$/, '') === key));
+    } else {
+      const key = replyChoiceKey(event.text);
+      const matching = current.filter(({ ask, task }) => {
+        const options = workTaskView(task, row.threadId).decision?.options ?? [];
+        return ask.options?.some((option) => replyChoiceKey(option) === key) || options.some(({ label }) => replyChoiceKey(label) === key);
+      });
       const candidates = matching.length ? matching : putsOff(event.text) && current.length === 1 ? current : [];
-      add(candidates.flatMap((ask) => {
-        const task = askTask(row, ask);
-        return task ? [task] : [];
-      }), event.text);
+      add(candidates.map(({ task }) => task), event.text);
     }
     let dirty = false;
     for (const [record, answer] of answered) {
-      if (putsOff(answer)) {
+      if (!event.reviewId && putsOff(answer)) {
         if (record.work?.state !== 'postponed') this.postponeTask(row.projectId, record.id, { type: 'tomorrow' });
-      } else if (!record.designReviewId || event.reviewId) {
-        this.closeUserDecision(row, record, answer);
-        dirty = true;
+        continue;
       }
+      if (!event.reviewId) {
+        const review = this.taskReview(row, record);
+        if (review?.status === 'answered') continue;
+        if (review?.status === 'pending') this.deps.host.recordReviewReply(row.threadId, review.id, decisionReviewDraft(review, answer));
+        else delete record.designReviewId;
+      }
+      this.closeUserDecision(row, record, answer);
+      dirty = true;
     }
     if (dirty) this.changed(row);
   }

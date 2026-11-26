@@ -780,10 +780,10 @@ export function reviewNudge(tasks: { title: string }[]): string {
   return `${REVIEW_NUDGE} ${tasks.map((task) => JSON.stringify(task.title)).join(', ')}. Check the result against doneWhen. If the user needs to decide or do something, put it to them now with options and a recommendation. Offer to get it ready or do it for them where your charter allows. If the work needs their sign-off, leave it ready to close. If it should stay in review, call end_turn again. This note comes once per helper run.`;
 }
 
-const NOT_NOW = /^(?:not now|not yet|not today|decide later|hold off|postpone|defer|snooze|remind me|ask me (?:again|tomorrow|later)|park it for now|later|wait)[.!]?$/i;
+// Only the card's defer control is reserved. "Wait" and "Not yet" can
+// be answers to the project's decision.
 export function putsOff(answer: string): boolean {
-  const clean = answer.trim().replace(/\s+/g, ' ');
-  return NOT_NOW.test(clean) || /^(?:not now|remind me|ask me again|postpone)\b/i.test(clean);
+  return /^not now[.!?]?$/i.test(answer.trim().replace(/\s+/g, ' '));
 }
 
 // Whether this turn has had the note (connectors.ts, nudgedThisTurn, is the same).

@@ -4982,12 +4982,15 @@ export class Runner {
     if (st.rt.deleted) throw new Error('The thread was deleted.');
     this.flushDeltas(st);
     const log = this.store.log(st.rec.id);
-    if (body.type === 'turn.completed' && body.outcome === 'completed' && body.needs === 'you' && body.asks?.length && this.coordinators) {
-      const asks = this.coordinators.bindAsks(st.rec.id, body.asks, log.lastSeq + 1);
-      if (asks.length) body.asks = asks;
-      else {
-        delete body.asks;
-        body.needs = 'nothing';
+    if (body.type === 'turn.completed' && body.outcome === 'completed' && this.coordinators) {
+      const pending = body.needs === 'you' ? body.asks ?? [] : [];
+      const asks = this.coordinators.bindAsks(st.rec.id, pending, log.lastSeq + 1);
+      if (pending.length) {
+        if (asks.length) body.asks = asks;
+        else {
+          delete body.asks;
+          body.needs = 'nothing';
+        }
       }
     }
     const event = { seq: log.lastSeq + 1, ts: this.isoNow(), threadId: st.rec.id, ...(turnId ? { turnId } : {}), ...body } as PersistedEvent;

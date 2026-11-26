@@ -1694,43 +1694,28 @@ test('durable open loops track user questions and coordinator asks across overla
   assert.equal(c.get(project.id).loops.length, 1);
   assert.equal(c.get(project.id).loops[0]!.state, 'answered');
 
-  // Auto-captures waiting_on_user asks from turn.completed without overwriting earlier loops.
-  h.runner.publish({
-    method: 'thread.event',
-    params: {
-      threadId: coordinator.threadId,
-      seq: 12,
-      event: {
-        type: 'turn.completed',
-        seq: 12,
-        turnId: 'turn-1',
-        outcome: 'completed',
-        needs: 'you',
-        asks: [{ action: 'Build iOS movement auto-resume?', why: 'Bypasses 2h 100% battery flatline.', options: ['Build it', 'Not yet'] }],
-      },
-    },
-  } as never);
-  h.runner.publish({
-    method: 'thread.event',
-    params: {
-      threadId: coordinator.threadId,
-      seq: 18,
-      event: {
-        type: 'turn.completed',
-        seq: 18,
-        turnId: 'turn-2',
-        outcome: 'completed',
-        needs: 'you',
-        asks: [{ action: 'Which voice-triage fixes should I ship?', options: ['Dedupe + queue floor', '+ LLM TV filter'] }],
-      },
-    },
-  } as never);
+  // A new card can replace the earlier one while both tasks stay on the board.
+  const ask = async (action: string, options: string[]) => {
+    const current = claude.sessions.at(-1)!;
+    current.out({ kind: 'event', event: { type: 'tool.call', itemId: 'card-' + action, name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn',
+      input: { needs: 'you', asks: [{ action, why: 'Ready to choose', options, suggested: 0 }] },
+    } });
+    current.result('completed');
+    await tick();
+    return h.runner.get(coordinator.threadId).asksSeq;
+  };
+  h.runner.send(coordinator.threadId, 'What else is open?');
+  await tick();
+  const sourceSeq = await ask('Build iOS movement auto-resume?', ['Build it', 'Not yet']);
+  h.runner.send(coordinator.threadId, 'What about voice triage?');
+  await tick();
+  await ask('Which voice-triage fixes should I ship?', ['Dedupe + queue floor', '+ LLM TV filter']);
   assert.equal(c.get(project.id).loops.length, 3);
   const ask1 = c.get(project.id).loops[1]!;
   const ask2 = c.get(project.id).loops[2]!;
   assert.equal(ask1.kind, 'waiting_on_user');
   assert.deepEqual(ask1.options, ['Build it', 'Not yet']);
-  assert.equal(ask1.sourceSeq, 12);
+  assert.equal(ask1.sourceSeq, sourceSeq);
   assert.equal(ask2.title, 'Which voice-triage fixes should I ship?');
 
   // Open loops are included in the coordinator's desk context.
@@ -1757,20 +1742,11 @@ test('durable open loops track user questions and coordinator asks across overla
   assert.equal(c.get(project.id).loops[1]!.state, 'closed');
   assert.ok(session.sent.some((m) => m.text.includes('Build iOS movement auto-resume?') && m.text.includes('Build it')));
 
-  // Answering an ask on the composer card (user.message answers) auto-closes the matching loop.
-  h.runner.publish({
-    method: 'thread.event',
-    params: {
-      threadId: coordinator.threadId,
-      seq: 22,
-      event: {
-        type: 'user.message',
-        seq: 22,
-        text: 'Dedupe + queue floor',
-        answers: [{ action: 'Which voice-triage fixes should I ship?', answer: 'Dedupe + queue floor' }],
-      },
-    },
-  } as never);
+  // A legacy structured answer resolves exactly the current card's task.
+  h.runner.send(coordinator.threadId, 'Dedupe + queue floor', [], {
+    answers: [{ action: 'Which voice-triage fixes should I ship?', answer: 'Dedupe + queue floor' }],
+  });
+  await tick();
   assert.equal(c.get(project.id).loops[2]!.state, 'closed');
 
   // Paused coordinator refuses replyLoop, while closeLoop still works.
@@ -2501,6 +2477,11 @@ test('the scoped coordinator tool organizes work, decisions and one level of sub
   assert.equal(board.tasks[0]!.due?.type, 'at');
   assert.equal(board.tasks[1]!.workItemId, workItemId);
   assert.equal(board.tasks[1]!.decision?.recommendation, 'Blue room');
+  const child = board.tasks[1]!;
+  const edit = await call({ action: 'updateWorkTask', taskId: child.id, ...child, now: 'Both rooms are available' });
+  assert.ok(!edit.isError, JSON.stringify(edit));
+  assert.equal(c.get(project.id).taskBoard.tasks[1]!.now, 'Both rooms are available');
+  assert.equal(c.forThread(coordinator.threadId)!.tasks[1]!.work?.workItemId, undefined);
   assert.match(c.context(coordinator.threadId)!, /The venue.*\n.*Inspect the venues.*working.*Lee called.*\n.*Which room\?/);
 });
 
@@ -2646,6 +2627,8 @@ test('Tasks RPCs confirm an agent answer, undo it and mark an offline user actio
   rpc['coordinators.reopenTask']({ projectId, taskId: question });
   assert.equal(task(question).state, 'ready_to_close');
   assert.equal(task(question).canReopen, undefined);
+  const confirmations = c.forThread(coordinator.threadId)!.events.map((event) => JSON.parse(event.text)).filter((event) => event.taskId === question);
+  assert.deepEqual(confirmations.map((event) => event.source), ['The user confirmed the task is closed', 'The user reopened the task']);
   assert.throws(() => rpc['coordinators.markTaskDone']({ projectId, taskId: decision }), /owned by the user/);
   rpc['coordinators.postponeTask']({ projectId, taskId: decision, due: { type: 'after_task', taskId: offline } });
   assert.equal(task(decision).state, 'postponed');
@@ -2688,6 +2671,9 @@ test('end_turn nudges about a finished helper once per run and requires a real d
   const unpublished = await call({ needs: 'nothing', summary: ['Room prices are in'] });
   assert.equal(unpublished.isError, true);
   assert.match(message(unpublished), /Put "Which room\?" to the user/);
+  const stillUnpublished = await call({ needs: 'nothing', summary: ['Room prices are in'] });
+  assert.equal(stillUnpublished.isError, true);
+  assert.match(message(stillUnpublished), /Put "Which room\?" to the user/);
   const correct = await call({ needs: 'you', asks: [{ action: 'Which room?', why: 'Both are available' }] });
   assert.ok(!correct.isError, JSON.stringify(correct));
   h.runner.flush();
@@ -2734,4 +2720,119 @@ test('a linked design review can be postponed and answered from its decision tas
   assert.equal(task().state, 'done');
   assert.equal(h.runner.getReview(threadId, review.id).review.response?.pickedId, 'R');
   assert.equal(c.forThread(threadId)!.events.filter((event) => event.text.includes('answered a decision')).length, 0);
+});
+
+test('replacing a decision card clears its omitted ask and a stale legacy answer cannot resolve it', async (t) => {
+  const { c, h, project, claude } = setup();
+  t.after(() => c.stop());
+  const { thread } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  const emit = async (input: Record<string, unknown>) => {
+    const session = claude.sessions.at(-1)!;
+    session.out({ kind: 'event', event: { type: 'tool.call', itemId: crypto.randomUUID(), name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input } });
+    session.result('completed');
+    await tick();
+  };
+  const oldAsk = { action: 'Choose the venue', options: ['Town hall', 'Library'], suggested: 0 };
+  const newAsk = { action: 'Choose the time', options: ['Ten', 'Eleven'], suggested: 0 };
+  await emit({ needs: 'you', asks: [oldAsk] });
+  const task = (title: string) => c.get(project.id).taskBoard.tasks.find((row) => row.title === title)!;
+  const old = task(oldAsk.action);
+  assert.equal(old.needsYou, true);
+  assert.match(c.askProblems(thread.id, [newAsk]).join(' '), /Choose the venue/);
+
+  h.runner.send(thread.id, 'Any other updates?');
+  await tick();
+  await emit({ needs: 'you', asks: [newAsk] });
+  assert.equal(task(oldAsk.action).needsYou, undefined);
+  assert.equal(task(newAsk.action).needsYou, true);
+  h.runner.send(thread.id, 'Town hall and Ten', [], { origin: 'phone', answers: [
+    { action: oldAsk.action, answer: 'Town hall' },
+    { action: newAsk.action, answer: 'Ten' },
+  ] });
+  await tick();
+  assert.equal(task(oldAsk.action).state, 'todo');
+  assert.equal(task(newAsk.action).decision?.answer, 'Ten');
+  await emit({ needs: 'you', asks: [{ ...oldAsk, taskId: old.id }] });
+  assert.equal(task(oldAsk.action).needsYou, true);
+  h.runner.send(thread.id, 'A separate update');
+  await tick();
+  await emit({ needs: 'nothing' });
+  assert.equal(task(oldAsk.action).needsYou, undefined);
+  assert.equal(task(oldAsk.action).state, 'todo');
+});
+
+test('a re-asked comparison keeps one decision and an unrelated message leaves the review open', async (t) => {
+  const { c, h, project, claude, home } = setup();
+  t.after(() => c.stop());
+  const { thread } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  const source = path.join(home, 'layout.png');
+  fs.writeFileSync(source, makePng(40, 40));
+  const { review } = h.runner.createReview(thread.id, { title: 'Layout', recommended: 'L', options: [
+    { id: 'L', title: 'Long tables', path: source },
+    { id: 'R', title: 'Round tables', path: source },
+  ] });
+  const question = 'Which layout?';
+  const ask = async (fields: Record<string, unknown>) => {
+    const session = claude.sessions.at(-1)!;
+    session.out({ kind: 'event', event: { type: 'tool.call', itemId: crypto.randomUUID(), name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn',
+      input: { needs: 'you', asks: [{ question, ...fields }] },
+    } });
+    session.result('completed');
+    await tick();
+  };
+  const link = { title: 'Compare layouts', url: `review:${review.id}` };
+  await ask({ links: [link] });
+  const task = () => c.get(project.id).taskBoard.tasks[0]!;
+  c.postponeTask(project.id, task().id, { type: 'at', at: new Date(h.clock.now() + 1000).toISOString() });
+  assert.equal(h.runner.get(thread.id).pendingReviews, undefined);
+  h.clock.advance(1000);
+  await tick();
+  await ask({ taskId: task().id, options: [{ label: 'Use benches' }], suggested: 0 });
+  assert.equal(c.get(project.id).taskBoard.tasks.length, 1);
+  assert.deepEqual(task().decision?.options?.map(({ label }) => label), ['Long tables', 'Round tables']);
+  assert.equal(h.runner.get(thread.id).asks?.[0]?.links?.[0]?.url, link.url);
+  assert.deepEqual(h.runner.get(thread.id).asks?.[0]?.options, ['Not now']);
+  h.runner.send(thread.id, 'What is the budget?');
+  await tick();
+  assert.equal(h.runner.getReview(thread.id, review.id).review.status, 'pending');
+  assert.equal(task().state, 'todo');
+  const registry = path.join(home, 'coordinators.json');
+  const beforeAnswer = fs.readFileSync(registry, 'utf8');
+  h.runner.send(thread.id, 'Round tables.', [], { origin: 'phone' });
+  await tick();
+  assert.equal(h.runner.getReview(thread.id, review.id).review.response?.pickedId, 'R');
+  assert.equal(task().decision?.answer, 'Round tables.');
+  assert.equal(task().state, 'done');
+
+  // A stop after the review write can leave the desk's earlier snapshot.
+  h.runner.flush();
+  c.stop();
+  fs.writeFileSync(registry, beforeAnswer);
+  const recovered = recoverFresh(h, home);
+  t.after(() => recovered.c.stop());
+  assert.equal(recovered.c.get(project.id).taskBoard.tasks[0]?.decision?.answer, 'Round tables');
+  assert.equal(recovered.c.get(project.id).taskBoard.tasks[0]?.state, 'done');
+});
+
+test('Not yet, Wait and Postpone the launch remain decision options', async (t) => {
+  const { c, h, project, claude } = setup();
+  t.after(() => c.stop());
+  const { thread } = c.create({ projectId: project.id, accountId: 'claude-3' });
+  await tick();
+  const session = claude.sessions.at(-1)!;
+  const choices = ['Launch now', 'Not yet', 'Wait', 'Postpone the launch'];
+  session.out({ kind: 'event', event: { type: 'tool.call', itemId: 'launch', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn',
+    input: { needs: 'you', asks: [{ action: 'Launch it?', options: choices, suggested: 1 }] },
+  } });
+  session.result('completed');
+  await tick();
+  assert.deepEqual(h.runner.get(thread.id).asks?.[0]?.options, [...choices, 'Not now']);
+  h.runner.send(thread.id, 'Not yet', [], { origin: 'phone' });
+  await tick();
+  const task = c.get(project.id).taskBoard.tasks[0]!;
+  assert.equal(task.decision?.answer, 'Not yet');
+  assert.equal(task.state, 'done');
+  assert.equal(task.due, undefined);
 });

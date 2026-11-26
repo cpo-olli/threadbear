@@ -437,20 +437,13 @@ export function buildThreadbearTools(
     return projectStepNudge(live, unansweredItems(await recentEvents(), next ?? []));
   };
 
-  const coordinatorNote = async (needs: string, asks: Ask[], events: PersistedEvent[]): Promise<string | undefined> => {
+  const coordinatorNote = async (needs: string, asks: Ask[]): Promise<string | undefined> => {
     const desk = opts.coordinators?.();
     if (!desk?.forThread(selfId)) return undefined;
     const reviews = needs === 'nothing' ? desk.reviewsToNote(selfId) : [];
-    const gaps = needs === 'you'
-      ? desk.askProblems(selfId, asks)
-      : desk.unpublishedDecisions(selfId).map(({ title }) => `Put ${JSON.stringify(title)} to the user with end_turn, or postpone it if they asked to wait.`);
+    const gaps = desk.askProblems(selfId, needs === 'you' ? asks : [], needs === 'you');
     if ((!reviews.length && !gaps.length) || (!codex && !(await replied()).landed)) return undefined;
-    const prefix = 'Not ended: coordinator decisions belong on the Needs you card.';
-    if (needs === 'you' && gaps.length) return `${prefix} ${gaps.join(' ')}`;
-    if (gaps.length && !alreadyNoted('coordinatorDecision', events, events.some((event) => event.type === 'tool.result' && event.text.includes(prefix)))) {
-      markNoted('coordinatorDecision', events);
-      return `${prefix} ${gaps.join(' ')}`;
-    }
+    if (gaps.length) return `Not ended: coordinator decisions belong on the Needs you card. ${gaps.join(' ')}`;
     if (!reviews.length) return undefined;
     desk.markReviewsNoted(selfId, reviews);
     return reviewNudge(reviews);
@@ -1948,7 +1941,7 @@ export function buildThreadbearTools(
           throw new Error(plainCardNudge());
         }
         await checkJobs(input, needs, events);
-        const projectNote = (await coordinatorNote(needs, asks, events)) ?? (await projectStepNote(input, needs, parsed?.next, events));
+        const projectNote = (await coordinatorNote(needs, asks)) ?? (await projectStepNote(input, needs, parsed?.next, events));
         if (projectNote) throw new Error(projectNote);
         let restart = '';
         if (needs === 'you' && appRestarts && asksForAppRestart(asks)) {
@@ -2095,7 +2088,7 @@ export function buildThreadbearTools(
           throw new Error(plainCardNudge());
         }
         await checkJobs(args, needs, events);
-        const projectNote = (await coordinatorNote(needs, asks ?? [], events)) ?? (await projectStepNote(args, needs, parsed?.next, events));
+        const projectNote = (await coordinatorNote(needs, asks ?? [])) ?? (await projectStepNote(args, needs, parsed?.next, events));
         if (projectNote) throw new Error(projectNote);
         // Asking Mike to Restart to Update means wanting to know when he
         // has, to check the change in the running app: the same as

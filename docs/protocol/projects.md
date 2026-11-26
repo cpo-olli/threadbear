@@ -790,7 +790,8 @@ and `recommendation` (the recommended option's label). Omitted edit fields
 keep their values. Pass null to clear `now`, `due`, decision options or the
 recommendation, or to move a task out of a group or parent. Setting
 `state: "postponed"` takes a trigger in `due`. Moving a task under a
-parent inherits its group. Removing a work item moves its tasks out of
+parent inherits its group, including when an edit sends back the inherited
+`workItemId` shown on the board. Removing a work item moves its tasks out of
 the group. Update a work item with `beforeWorkItemId` to reorder it. Null
 moves it to the end.
 
@@ -822,12 +823,17 @@ current ask. When the trigger is due, the runner wakes the coordinator to
 reconsider and ask again with the same ID. Legacy replies keep the
 `answers: [{ action, answer }]` shape. An ordinary reply can answer a decision
 when it matches a choice on one active ask. Convex continues to mirror the
-legacy card fields.
+legacy card fields. Only a reply to the current card can resolve a task through
+the legacy card route. Include every open decision that is ready to ask when
+ending the turn. The explicit Not now option postpones until 9 a.m. tomorrow.
+A linked comparison stays available through a re-ask on the same task.
+An unrelated message leaves that comparison open.
 
 `markTaskDone` marks a user-owned action done. `closeTask` confirms an
 agent-owned action that is ready to close, including a substantive question
 the coordinator has answered. `reopenTask` undoes that confirmation and
-returns the task to ready to close. `addToCoordinator` takes a free-text
+returns the task to ready to close. Both actions wake the coordinator.
+`addToCoordinator` takes a free-text
 request and hands it to the coordinator to organize into work.
 
 Coordinator responses and `coordinators.updated` can include `taskBoard`.
