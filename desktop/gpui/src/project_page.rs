@@ -1233,6 +1233,7 @@ impl Threadbear {
                         .font_semibold()
                         .child(project.title.clone()),
                 )
+                .children(self.render_coordinator_bar_status(&project.id, cx))
                 .when(project.archived, |s| {
                     s.child(div().flex_none().text_color(faint).child("·  Archived"))
                 })

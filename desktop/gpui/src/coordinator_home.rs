@@ -32,60 +32,12 @@ impl Threadbear {
             self.open(coordinator.thread_id.clone(), window, cx);
             self.projects.open = Some(project.id.clone());
         }
-        let working = coordinator.working();
-        let status = if coordinator.state == State::Paused {
-            "Coordinator paused".to_owned()
-        } else if working == 0 {
-            "Coordinator on".to_owned()
-        } else {
-            format!(
-                "Coordinator on · {working} helper{} working",
-                if working == 1 { "" } else { "s" }
-            )
-        };
-        let busy = self
-            .coordinators
-            .busy
-            .contains(&format!("pause:{}", project.id));
-        let pause = coordinator.clone();
-        let header = h_flex()
-            .w_full()
-            .gap(px(13.))
-            .items_center()
-            .px(px(28.))
-            .py(px(22.))
-            .child(project_icon(Some(project), &project.title, 40., cx))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(px(5.))
-                    .child(
-                        div()
-                            .text_size(px(24.))
-                            .font_weight(FontWeight::BOLD)
-                            .child(project.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(style::secondary_text(cx))
-                            .child(status),
-                    ),
-            )
-            .child(control(
-                "coordinator-pause",
-                if coordinator.state == State::Paused {
-                    "Resume"
-                } else {
-                    "Pause"
-                },
-                "Pause or resume the coordinator and its helpers",
-                busy,
-                cx,
-                cx.listener(move |this, _: &ClickEvent, _, cx| this.pause_coordinator(&pause, cx)),
-            ));
-        let tabs = self.coordinator_tabs(coordinator, cx);
+        // The tabs sit in the bar beside Pause and the arrows (`render_coordinator_bar`)
+        // and drop to a row of their own here only when the panel's too narrow
+        // for them beside the title (Mike, 26 Nov: the old header, title again,
+        // status and tabs, took about 176px over the conversation).
+        let tabs =
+            (!self.coordinator_tabs_in_bar()).then(|| self.coordinator_tabs(coordinator, cx));
         let body = match self.coordinators.tab {
             Tab::Conversation => self.pane.as_ref().map_or_else(
                 || {
@@ -117,17 +69,187 @@ impl Threadbear {
                     .into_any_element()
             }
         };
+        let width = self.coordinators.home_width.clone();
         v_flex()
             .size_full()
-            .child(header)
-            .child(tabs)
+            .relative()
+            .child(
+                canvas(
+                    move |bounds, window, _| {
+                        let w = f32::from(bounds.size.width);
+                        if (width.get() - w).abs() > 0.5 {
+                            width.set(w);
+                            window.refresh();
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .children(tabs)
             .child(div().flex_1().min_h_0().child(body))
             .into_any_element()
+    }
+
+    /// Whether the open coordinator's tabs fit in the panel's bar beside the
+    /// title, or drop to a row of their own under it.
+    pub(crate) fn coordinator_tabs_in_bar(&self) -> bool {
+        let w = self.coordinators.home_width.get();
+        w == 0. || w >= TABS_IN_BAR_WIDTH
+    }
+
+    /// The coordinator's state after its project's title in the bar: a dot
+    /// and "2 helpers working", "Coordinator on" or "Paused".
+    pub(crate) fn render_coordinator_bar_status(
+        &self,
+        project_id: &str,
+        cx: &App,
+    ) -> Option<AnyElement> {
+        let coordinator = self.coordinator_for_project(project_id)?;
+        let working = coordinator.working();
+        let (text, dot) = if coordinator.state == State::Paused {
+            ("Paused".to_owned(), style::faint_text(cx))
+        } else if working == 0 {
+            ("Coordinator on".to_owned(), style::added_text(cx))
+        } else {
+            (
+                format!(
+                    "{working} helper{} working",
+                    if working == 1 { "" } else { "s" }
+                ),
+                style::status_progress(cx),
+            )
+        };
+        Some(
+            h_flex()
+                .flex_none()
+                .ml(px(6.))
+                .gap(px(6.))
+                .items_center()
+                .text_size(px(12.))
+                .font_weight(FontWeight::NORMAL)
+                .text_color(style::secondary_text(cx))
+                .child(status_dot(dot))
+                .child(text)
+                .into_any_element(),
+        )
+    }
+
+    /// The bar's controls over a coordinator's home, before its arrows: the
+    /// tabs as a segmented control (when they fit) and Pause or Resume.
+    pub(crate) fn render_coordinator_bar(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let project = self.open_project()?.clone();
+        let coordinator = self.coordinator_for_project(&project.id)?.clone();
+        let busy = self
+            .coordinators
+            .busy
+            .contains(&format!("pause:{}", project.id));
+        let paused = coordinator.state == State::Paused;
+        let pause = coordinator.clone();
+        let tabs = self
+            .coordinator_tabs_in_bar()
+            .then(|| self.coordinator_segments(&coordinator, cx));
+        Some(
+            h_flex()
+                .flex_none()
+                .gap(px(10.))
+                .mr(px(6.))
+                .items_center()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .children(tabs)
+                .child(control(
+                    "coordinator-pause",
+                    if paused { "Resume" } else { "Pause" },
+                    "Pause or resume the coordinator and its helpers",
+                    busy,
+                    cx,
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.pause_coordinator(&pause, cx)
+                    }),
+                ))
+                .into_any_element(),
+        )
+    }
+
+    /// The tabs in the bar, as a small segmented control (usage.rs's range).
+    fn coordinator_segments(
+        &self,
+        coordinator: &Coordinator,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let count = self.conversation_count(coordinator);
+        let fg = cx.theme().foreground;
+        let secondary = style::secondary_text(cx);
+        let selected = style::primary_opacity(cx, 0.19);
+        let mut segments = h_flex()
+            .id("coordinator-tabs")
+            .flex_none()
+            .h(px(26.))
+            .p(px(2.))
+            .gap(px(2.))
+            .rounded(px(7.))
+            .bg(style::primary_opacity(cx, 0.075))
+            .role(Role::TabList);
+        for tab in Tab::ALL {
+            let active = self.coordinators.tab == tab;
+            let mut label = h_flex().gap(px(6.)).items_center().child(tab.title());
+            if tab == Tab::Conversation && count > 0 {
+                label = label.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(style::needs_you_text(cx))
+                        .child(count.to_string()),
+                );
+            }
+            segments = segments.child(
+                crate::highlights::tipped(
+                    div()
+                        .id(SharedString::from(format!(
+                            "coordinator-tab-{}",
+                            tab.title()
+                        )))
+                        .role(Role::Tab)
+                        .h_full()
+                        .px(px(10.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(5.))
+                        .cursor_pointer()
+                        .text_size(px(12.))
+                        .text_color(if active { fg } else { secondary })
+                        .when(active, |s| s.bg(selected))
+                        .when(!active, |s| s.hover(move |s| s.text_color(fg))),
+                    format!("Show the project's {}", tab.title().to_lowercase()),
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.coordinators.tab = tab;
+                    this.close_subagent(cx);
+                    cx.notify();
+                }))
+                .child(label),
+            );
+        }
+        segments.into_any_element()
+    }
+
+    /// The number beside Conversation: open loops to act on, else the
+    /// decisions on its card.
+    fn conversation_count(&self, coordinator: &Coordinator) -> usize {
+        let actionable = coordinator.actionable_loops();
+        if actionable > 0 {
+            return actionable;
+        }
+        self.threads
+            .get(&coordinator.thread_id)
+            .and_then(|t| t.asks.as_ref())
+            .map_or(0, Vec::len)
     }
 
     fn coordinator_tabs(&self, coordinator: &Coordinator, cx: &mut Context<Self>) -> AnyElement {
         let mut tabs = h_flex()
             .w_full()
+            .pt(px(10.))
             .px(px(28.))
             .gap(px(23.))
             .border_b_1()
@@ -141,15 +263,7 @@ impl Threadbear {
             };
             let mut label = h_flex().gap(px(6.)).child(tab.title());
             if tab == Tab::Conversation {
-                let actionable = coordinator.actionable_loops();
-                let count = if actionable > 0 {
-                    actionable
-                } else {
-                    self.threads
-                        .get(&coordinator.thread_id)
-                        .and_then(|t| t.asks.as_ref())
-                        .map_or(0, Vec::len)
-                };
+                let count = self.conversation_count(coordinator);
                 if count > 0 {
                     label = label.child(
                         div()
@@ -1927,6 +2041,10 @@ fn amber_card_border(cx: &App) -> Hsla {
         rgba_hsla(0.78, 0.42, 0.04, 0.26)
     }
 }
+
+/// The panel width the bar needs for the tabs beside the title, the status,
+/// Pause and the arrows; narrower, they drop to a row under it.
+const TABS_IN_BAR_WIDTH: f32 = 820.;
 
 pub(crate) fn control(
     id: impl Into<ElementId>,

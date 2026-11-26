@@ -546,6 +546,12 @@ impl Threadbear {
             .open_thread()
             .cloned()
             .filter(|_| self.home_page().is_none() && self.projects.open.is_none());
+        let coordinator = self
+            .projects
+            .open
+            .is_some()
+            .then(|| self.render_coordinator_bar(cx))
+            .flatten();
         let back = self.render_history_button(true, cx);
         let forward = self.render_history_button(false, cx);
         let share = thread
@@ -559,6 +565,7 @@ impl Threadbear {
         h_flex()
             .flex_none()
             .items_center()
+            .children(coordinator)
             .child(back)
             .child(forward)
             .children(share)

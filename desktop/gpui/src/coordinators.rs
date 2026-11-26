@@ -73,6 +73,9 @@ pub(crate) struct CoordinatorsState {
     pub(crate) document_scroll: ScrollHandle,
     pub(crate) memory_scroll: ScrollHandle,
     pub(crate) work_scroll: ScrollHandle,
+    /// The open home's width, measured as it's drawn, for whether its tabs
+    /// fit in the bar (coordinator_home.rs).
+    pub(crate) home_width: std::rc::Rc<std::cell::Cell<f32>>,
 }
 
 impl Threadbear {

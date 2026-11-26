@@ -1251,7 +1251,7 @@ with a charter, starting to-dos and a note on where things stand (a thread that
 asks before edits puts up a card first). It runs on this Mac; its
 conversation stays in a Coordinators section below Starred by default, while routine helpers
 run as hidden sessions out of the inbox and appear on the Activity tab.
-The project home has Conversation, Activity, To-dos and Threads tabs. To-dos
+The project home has Conversation, Activity, To-dos and Threads tabs, up in the bar beside the project's name, how many helpers are working and Pause (on a narrow window the tabs drop to a row under it). To-dos
 lists everything still open on the project, not just helpers' jobs: steps only
 you can take and decisions you still have to make are on it too. The
 Highlights pane beside the chat has three parts: sticky **Open loops** at
