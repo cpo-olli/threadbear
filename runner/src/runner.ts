@@ -4791,6 +4791,11 @@ export class Runner {
   // one started. One that can't be written (disk full) stays at the front.
   kickQueue(st: ThreadState): boolean {
     if (this.stopping || st.rt.editing || st.rt.moving || st.rt.holds?.size) return false;
+    // A paused, stopping or turned-off coordinator (or its helper) keeps
+    // its queue: popping a message only to fail it at dispatch lost helper
+    // reports on a pause or handover (Gemini's review, 26 Nov 2026). Resume
+    // and turning coordinators back on kick it again.
+    if (this.coordinators?.dispatchRefusal(st.rec.id)) return false;
     try {
       this.prepareQueue(st);
     } catch (e) {
