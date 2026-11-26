@@ -180,9 +180,16 @@ older runner's `openRouterKey`, `dailyBudgetUsd`, `spentTodayUsd` and
   as the thread itself does.
 - **The pool.** `models.pool` in `runner.json` is a pool id, `"claude"`
   when it isn't set, or `null` for none, which turns titles and the
-  librarian off. Only its Claude logins are used. A call runs on the one
-  it ran on last while that's OK to run on (see Pools), else the one with
-  the most room. The CLI runs as `claude -p` at low effort in an empty
+  librarian off. Claude logins in that pool are tried first (on the one
+  it ran on last while that's OK to run on, see Pools, else the one whose
+  weekly window resets soonest / has the most room). When every Claude
+  login in the pool is out of room or fails, small jobs spill over in
+  pool order to any other `smallJobs`-capable logins in that same pool
+  (such as Grok or OpenCode, where every tool is denied), and return to
+  Claude as soon as a Claude login has room again. Spillover never leaves
+  the chosen pool, so separate pools (such as a work pool) stay isolated,
+  and providers without `smallJobs` (Codex, Cursor, Gemini) are never
+  used. On Claude, the CLI runs as `claude -p` at low effort in an empty
   folder (`models/cli` in the data dir), with no tools, MCP servers,
   settings, hooks, CLAUDE.md, skills or saved session (`--tools ""
   --strict-mcp-config --setting-sources "" --disable-slash-commands
@@ -347,13 +354,19 @@ model call.
 ## Hibernate in words
 
 Besides the presets and a picked time, Mike can say when a thread should
-come back in his own words: "at the weekend", "in a few weeks", "next
-time I talk about woodworking". `threads.hibernateWhen` hibernates it
-straight away (`snoozedUntil` 9999-12-31, `wakeWhen: { said, pending:
-true }`), then asks Opus (job `decide`: Opus on the pool; feature
-`wake-when`) with the local time and time zone, the
-thread's title, first message and brief, and his words. It answers with a
-time, a topic, or both:
+come back in his own words: "tomorrow morning", "Friday 9am", "at the
+weekend", "in a few weeks", "next time I talk about woodworking". Plain
+time expressions (relative durations like "2h" or "in 2 weeks", times of
+day, "tomorrow", "tonight", "at the weekend", weekdays, calendar dates
+and ISO timestamps) are worked out locally right away (`parseWakeTime` in
+`wake-when.ts`), with no model call, so they still work when every login
+is out of room or models are off. Topics, events and fuzzy phrases
+hibernate the thread straight away (`snoozedUntil` 9999-12-31,
+`wakeWhen: { said, pending: true }`), then ask the pool's strong model
+(job `decide`: Opus on Claude first, spilling over to other small-job
+providers in the pool if Claude is out of room; feature `wake-when`) with
+the local time and time zone, the thread's title, first message and
+brief, and his words. It answers with a time, a topic, or both:
 
 - **A time** becomes `snoozedUntil`, and the thread wakes as any snooze
   does.

@@ -17,10 +17,11 @@ import { askCli, cliArgs, readReply } from '../../src/models/claude-pool.ts';
 import type { CliRequest, CliResponse } from '../../src/models/claude-pool.ts';
 import { ledgerPath } from '../../src/models/ledger.ts';
 import { SettingsService, settingsMethods } from '../../src/settings.ts';
-import type { Account, Pool } from '../../src/protocol.ts';
+import type { Account, Pool, Provider } from '../../src/protocol.ts';
+import type { Asker } from '../../src/models/acp-oneshot.ts';
 import { skipOnWindows } from '../helpers/platform.ts';
 
-function acct(id: string, opts: { provider?: 'claude' | 'codex'; room?: number; blocked?: boolean } = {}): Account {
+function acct(id: string, opts: { provider?: Provider; room?: number; blocked?: boolean } = {}): Account {
   const a: Account = { id, provider: opts.provider ?? 'claude', title: id, configDir: `/tmp/no-such/${id}` };
   if (opts.room !== undefined || opts.blocked) {
     a.usage = {
@@ -35,7 +36,7 @@ function acct(id: string, opts: { provider?: 'claude' | 'codex'; room?: number; 
 
 type Reply = CliResponse | ((req: CliRequest) => CliResponse | Promise<CliResponse>);
 
-function setup(o: { accounts?: Account[]; pools?: Pool[]; pool?: string | null; replies?: Reply[] } = {}) {
+function setup(o: { accounts?: Account[]; pools?: Pool[]; pool?: string | null; replies?: Reply[]; askers?: Partial<Record<Provider, Asker>> } = {}) {
   const home = tmpDir();
   ensureHome(home);
   let accounts = o.accounts ?? [acct('claude-main', { room: 50 }), acct('claude-1', { room: 80 }), acct('claude-2', { room: 90 }), acct('codex-main', { provider: 'codex', room: 90 })];
@@ -54,6 +55,7 @@ function setup(o: { accounts?: Account[]; pools?: Pool[]; pool?: string | null; 
     log: nullLogger,
     settings: () => settings,
     claudePath: '/fake/claude',
+    askers: o.askers,
     poolHost: {
       pool: (id) => {
         const pool = pools.find((p) => p.id === id);
@@ -160,6 +162,123 @@ test('pool: only the pool\'s Claude logins are used, never a noted login outside
   const work = setup({ pool: 'work' });
   await work.models.generate({ feature: 'titles', prompt: 'a' });
   assert.deepEqual(work.cli.map((c) => c.account.id), ['claude-2'], 'only when Alex picks that pool');
+});
+
+test('pool: when Claude logins in a mixed pool are out of room, small jobs spill over in pool order and return to Claude once it has room', async () => {
+  const grokSeen: string[] = [];
+  const ocSeen: string[] = [];
+  let grokReply: CliResponse = { ok: true, text: 'From Grok' };
+  const s = setup({
+    pool: 'main',
+    pools: [
+      { id: 'main', title: 'Main', accountIds: ['claude-1', 'claude-3', 'antigravity-main', 'grok-main', 'codex-main', 'opencode-main'] },
+      // Separate pool (e.g. Work): must never be touched even when Main is dry.
+      { id: 'work', title: 'Work', accountIds: ['claude-2'] },
+    ],
+    accounts: [
+      acct('claude-1', { blocked: true }),
+      acct('claude-3', { room: 0.4 }),
+      acct('antigravity-main', { provider: 'antigravity', room: 50 }),
+      acct('grok-main', { provider: 'grok', room: 100 }),
+      acct('codex-main', { provider: 'codex', room: 80 }),
+      acct('opencode-main', { provider: 'opencode' }),
+      acct('claude-2', { room: 90 }),
+    ],
+    askers: {
+      grok: async (req) => {
+        grokSeen.push(req.account.id);
+        return grokReply;
+      },
+      opencode: async (req) => {
+        ocSeen.push(req.account.id);
+        return { ok: true, text: 'From OpenCode' };
+      },
+      // Defense in depth: an asker for a smallJobs: false provider is never called.
+      antigravity: async () => {
+        throw new Error('antigravity must never take small jobs');
+      },
+    },
+  });
+
+  // 1. Both Claude logins are out of room -> spills to Grok (first small-job provider in Main after Claude).
+  const r1 = await s.models.generate({ feature: 'wake-when', prompt: 'after Christmas', strong: true });
+  assert.ok(r1.ok);
+  assert.equal(r1.value, 'From Grok');
+  assert.equal(r1.model, 'grok default on grok-main', 'non-Claude answer never claims OPUS');
+  assert.equal(s.cli.length, 0);
+  assert.deepEqual(grokSeen, ['grok-main']);
+  assert.deepEqual(ocSeen, []);
+  assert.equal(s.ledger().at(-1).model, 'grok default');
+
+  // 2. Grok hits its limit -> marked ranDry and spills on to OpenCode in Main.
+  grokReply = { ok: false, timedOut: false, limit: true, message: 'grok-main is out of Grok usage (402)' };
+  const r2 = await s.models.generate({ feature: 'titles', prompt: 'hello' });
+  assert.ok(r2.ok);
+  assert.equal(r2.value, 'From OpenCode');
+  assert.equal(r2.model, 'opencode default on opencode-main');
+  assert.deepEqual(s.ranDry, ['grok-main']);
+  assert.deepEqual(ocSeen, ['opencode-main']);
+  assert.equal(s.ledger().at(-1).model, 'opencode default');
+
+  // 3. Once a Claude login in Main has room again, small jobs return to Claude first.
+  s.setAccounts([
+    acct('claude-1', { room: 60 }),
+    acct('claude-3', { room: 0.4 }),
+    acct('grok-main', { provider: 'grok', room: 100 }),
+    acct('opencode-main', { provider: 'opencode' }),
+    acct('claude-2', { room: 90 }),
+  ]);
+  const r3 = await s.models.generate({ feature: 'titles', prompt: 'back on claude' });
+  assert.ok(r3.ok);
+  assert.equal(r3.model, 'claude-haiku-5-5 on claude-1');
+  assert.deepEqual(s.cli.map((c) => c.account.id), ['claude-1']);
+});
+
+test('pool: a non-limit error on one provider spills to the next small-job provider in the pool, never into another pool', async () => {
+  const ocSeen: string[] = [];
+  const s = setup({
+    pool: 'main',
+    pools: [
+      { id: 'main', title: 'Main', accountIds: ['claude-1', 'claude-3', 'grok-main', 'opencode-main'] },
+      { id: 'work', title: 'Work', accountIds: ['claude-2'] },
+    ],
+    accounts: [
+      acct('claude-1', { blocked: true }),
+      acct('claude-3', { blocked: true }),
+      acct('grok-main', { provider: 'grok', room: 100 }),
+      acct('opencode-main', { provider: 'opencode' }),
+      acct('claude-2', { room: 90 }),
+    ],
+    askers: {
+      grok: async () => ({ ok: false, timedOut: false, limit: false, message: 'Grok needs a sign-in: grok login.' }),
+      opencode: async (req) => {
+        ocSeen.push(req.account.id);
+        return { ok: true, text: 'Recovered on OpenCode' };
+      },
+    },
+  });
+
+  const r = await s.models.generate({ feature: 'titles', prompt: 'a' });
+  assert.ok(r.ok);
+  assert.equal(r.value, 'Recovered on OpenCode');
+  assert.equal(r.model, 'opencode default on opencode-main');
+  assert.deepEqual(s.ranDry, [], 'non-limit error does not mark login ranDry');
+  assert.deepEqual(ocSeen, ['opencode-main']);
+  assert.deepEqual(s.cli, [], 'work pool claude-2 was never touched');
+
+  // If every small-job login in Main is out of room, it fails with no-room rather than touching Work.
+  const dry = setup({
+    pool: 'main',
+    pools: [
+      { id: 'main', title: 'Main', accountIds: ['claude-1', 'codex-main'] },
+      { id: 'work', title: 'Work', accountIds: ['claude-2'] },
+    ],
+    accounts: [acct('claude-1', { blocked: true }), acct('codex-main', { provider: 'codex', room: 90 }), acct('claude-2', { room: 95 })],
+  });
+  const rDry = await dry.models.generate({ feature: 'titles', prompt: 'a' });
+  assert.equal(rDry.ok ? 'sent' : rDry.reason, 'no-room');
+  assert.match(rDry.ok ? '' : rDry.message, /Every login in Main is out of room/);
+  assert.deepEqual(dry.cli, []);
 });
 
 test('pool: classify and extract ask for structured output and read it', async () => {

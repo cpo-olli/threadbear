@@ -6,7 +6,7 @@ import type { Runner } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
 import type { PermissionMode, ReviewFinding, ThreadSummary } from '../protocol.ts';
 import { ErrorCode, RpcError } from '../protocol.ts';
-import { LATE_CHECKS_MAX, LATE_CHECK_LOST, SAID_MAX, WAKE_SYSTEM, awayFor, hibernateNote, lateCheckPrompt, lateChecksOf, lateNews, lateSleepMs, lateWait, lateWhy, localWhen, readWakeAnswer, topicCheckNews, wakePrompt, type LateWait } from '../wake-when.ts';
+import { LATE_CHECKS_MAX, LATE_CHECK_LOST, SAID_MAX, WAKE_SYSTEM, awayFor, hibernateNote, lateCheckPrompt, lateChecksOf, lateNews, lateSleepMs, lateWait, lateWhy, localWhen, parseWakeTime, readWakeAnswer, topicCheckNews, wakePrompt, type LateWait } from '../wake-when.ts';
 import type { ThreadState } from '../runner.ts';
 import { NO_WAKE_TIME } from './timings.ts';
 import { parseWhen } from '../when.ts';
@@ -49,11 +49,29 @@ export const hibernationPart = {
     const said = params.said.trim();
     if (!said) throw new RpcError(ErrorCode.badParams, 'Say when it should wake.');
     if (said.length > SAID_MAX) throw new RpcError(ErrorCode.badParams, `That's more than ${SAID_MAX} characters.`);
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const by = params.by === 'agent' ? ('agent' as const) : undefined;
+    // Plain time expressions ("tomorrow", "2h", "in 2 hours", "tonight",
+    // "Friday 9am", "at the weekend", …) are worked out locally right away,
+    // so they cost no tokens and still work when every login is out of room
+    // or small-model calls are off. Only topics and fuzzy phrases go to the
+    // model.
+    const local = parseWakeTime(said, this.clock.now());
+    if (local) {
+      if ('error' in local) throw new RpcError(ErrorCode.other, `Couldn't work out when to wake it: ${local.error}`);
+      this.update({ threadId: st.rec.id, snoozedUntil: local.until, noted: true });
+      this.park(st, { kind: 'wordsAsked', said, ...(by ? { by } : {}) });
+      this.park(st, { kind: 'wordsAnswered', said, until: local.until, ...(by ? { by } : {}) });
+      this.markDirty(st);
+      this.emit(st, { type: 'system.note', text: hibernateNote(local, said, timeZone, by) });
+      this.armSnoozeTimer();
+      if (by) this.recheckStarter(st);
+      this.log.info('hibernated in words (local)', { threadId: st.rec.id, until: local.until });
+      return { thread: this.summary(st), ...local };
+    }
     const models = this.models;
     if (!models) throw new RpcError(ErrorCode.other, 'Model calls are off in this runner.');
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const gist = this.threadGist(st.rec.id, { recent: 0 });
-    const by = params.by === 'agent' ? ('agent' as const) : undefined;
     // Its agent's own words wake it later (wakeForTopic): kept to the access
     // it had as it wrote them (runner/ceiling.ts).
     if (by) {

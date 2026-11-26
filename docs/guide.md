@@ -831,13 +831,15 @@ the foot of the list, soonest to wake first. Hibernate the thread you have
 open and its page sinks into the moon on that heading as the next thread
 comes in.
 
-Or pick Wake when… and say it in your own words: "at the weekend", "in a
-few weeks", "next time I talk about woodworking". Opus works out what you
-meant (the row says Thinking… for a few seconds) and the thread says what
-it settled on. A topic waits for you to bring it up: when the librarian
-sees you talking about it in another thread, it wakes this one and says
-where. Give it a limit as well ("or Saturday at the latest") and, if you
-haven't brought it up by then, it comes back saying so.
+Or pick Wake when… and say it in your own words: "tomorrow morning",
+"Friday 9am", "at the weekend", "in a few weeks", "next time I talk about
+woodworking". Plain times are worked out locally right away, even with no
+model room left; topics and fuzzy phrases go to the model (the row says
+Thinking… for a few seconds) and the thread says what it settled on. A
+topic waits for you to bring it up: when the librarian sees you talking
+about it in another thread, it wakes this one and says where. Give it a
+limit as well ("or Saturday at the latest") and, if you haven't brought it
+up by then, it comes back saying so.
 
 Whenever a thread is hibernated, woken, archived or brought back, a grey
 line in it says who did it (you, an agent or Threadbear), when, and why
@@ -1669,9 +1671,10 @@ could act before anything asks you, so there (and in your home folder, which
 Grok always trusts) Grok threads need Full access;
 take the folder out of Grok's trusted folders (`/hooks-untrust`) to use Ask
 or Auto. Denying a card ends Grok's turn, as it does in Grok's own app. Grok's models each list their effort levels (low to extra
-high), and the effort you pick is the one it runs at. Small jobs (titles
-and summaries) stay on Claude unless you pick a pool of only OpenCode or
-Grok logins for them in Settings. Grok logins show their plan's room in
+high), and the effort you pick is the one it runs at. Small jobs (titles,
+summaries, the librarian and fuzzy Wake when…) prefer Claude logins in
+the pool you pick in Settings, and spill over to Grok or OpenCode logins
+in that same pool when Claude is out of room. Grok logins show their plan's room in
 Usage, read from Grok itself (its weekly share and when it resets, a minute
 after the runner starts and after Grok turns). When a Grok login runs out
 of balance, the thread says so in plain words ("grok-main is out of Grok
