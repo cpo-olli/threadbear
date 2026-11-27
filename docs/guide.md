@@ -190,7 +190,7 @@ and it can't open anything, so only its own styles, SVG and `data:`
 pictures appear. Your phone draws them the same way, with the arrows
 opening it full screen. The new desktop app draws
 them with Chromium, which it downloads the first time one needs it: the box
-asks "Show this diagram? It needs the web runtime, a 135 MB download, once."
+asks "Show this diagram? It needs the web runtime, a 141 MB download, once."
 with Install web runtime and Not now, and shows the code until then (or
 after Not now, until the app restarts). Settings > General > Web runtime
 says where it's got to and installs it too. If Chromium doesn't start, a

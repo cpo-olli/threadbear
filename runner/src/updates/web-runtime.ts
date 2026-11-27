@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import type { Clock, TimerHandle } from '../clock.ts';
 import { atomicWriteFileSync, readJsonSync } from '../fsutil.ts';
 
-export const PIN = '156.0.31+ge603d97+chromium-156.0.8078.100';
+export const PIN = '158.0.6+g23f1736+chromium-158.0.8127.89';
 export const DAY_MS = 24 * 60 * 60_000;
 const INDEX = 'https://cef-builds.spotifycdn.com/index.json';
 // crates.io's sparse index entry for the `cef` crate (tauri-apps/cef-rs): a

@@ -524,15 +524,14 @@ for real browsing. I'd skip it: two engines means two sandboxes to prove.
 
 ### Keeping Chromium current
 
-Checked on 24 Nov 2026 against [Spotify's CEF index](https://cef-builds.spotifycdn.com/index.json),
+Checked on 27 Nov 2026 against [Spotify's CEF index](https://cef-builds.spotifycdn.com/index.json),
 [cef-rs releases](https://crates.io/crates/cef) and
 [Chrome's security releases](https://chromereleases.googleblog.com/search/label/Stable%20updates):
-CEF stable is 158.0.3, Chromium 158.0.8127.18 (20 Nov). The newest
-published Rust bindings are cef/cef-dll-sys 156.7.0+156.0.31 (19 Nov), so
-Threadbear uses that exact CEF build, 156.0.31 with Chromium
-156.0.8078.100 (18 Nov), up from 156.0.26 (Chromium 156.0.8078.88). The
-bindings' C API didn't change (the generated loader came out the same).
-No cef-rs bindings for CEF 157 or 158 were published at this check.
+CEF stable is 158.0.6, Chromium 158.0.8127.89 (25 Nov). cef-rs published
+bindings for it, cef/cef-dll-sys 158.0.0+158.0.6, on 27 Nov, so Threadbear
+uses that exact build, up from 156.0.31 (Chromium 156.0.8078.100). The
+generated loader came out the same: CEF 158 exports the same C functions.
+The minimal Mac archive grew from 135 MB to 141 MB.
 
 The installed Mac runner checks the CDN index once a day while a web runtime
 is installed, starting a minute after launch. CEF-only patches count too;
@@ -568,7 +567,7 @@ specs; Rust builds stay on check hosts. Update this checked-date note.
 
 - **Where it comes from.** Threadbear has no place of its own to publish the
   runtime yet, so the app downloads CEF's official minimal build from
-  Spotify's CDN (cef-builds.spotifycdn.com), pinned to 156.0.31, the build
+  Spotify's CDN (cef-builds.spotifycdn.com), pinned to 158.0.6, the build
   the `cef` crate's bindings were made from. It's held to the size and the
   SHA-1 Spotify publishes for it and a SHA-256 worked out from that same
   file, all before anything is unpacked (`desktop/core/src/web_runtime.rs`).

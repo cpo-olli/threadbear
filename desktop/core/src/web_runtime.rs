@@ -15,9 +15,9 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The CEF build this Threadbear runs. It has to be the one desktop/web's
-/// `cef` crate was generated from (cef 156.7.0+156.0.31), or the two sides of
+/// `cef` crate was generated from (cef 158.0.0+158.0.6), or the two sides of
 /// the C API disagree, so moving it means moving that pin too.
-pub const CEF_VERSION: &str = "156.0.31+ge603d97+chromium-156.0.8078.100";
+pub const CEF_VERSION: &str = "158.0.6+g23f1736+chromium-158.0.8127.89";
 
 /// Where the builds come from while Threadbear has no place of its own to
 /// publish one: Spotify's CDN, which builds and hosts CEF's official binaries
@@ -27,7 +27,7 @@ pub const CDN: &str = "https://cef-builds.spotifycdn.com";
 
 /// One system's build, pinned. `sha1` is what Spotify's index.json (and the
 /// `.sha1` file beside the archive) says; `sha256` was worked out from the
-/// file that matched it, on 24 Nov 2026, so a download is checked against a
+/// file that matched it, on 27 Nov 2026, so a download is checked against a
 /// hash that isn't SHA-1 alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Archive {
@@ -44,17 +44,17 @@ pub struct Archive {
 pub const ARCHIVES: &[Archive] = &[
     Archive {
         platform: "macosarm64",
-        file: "cef_binary_156.0.31+ge603d97+chromium-156.0.8078.100_macosarm64_minimal.tar.bz2",
-        bytes: 134_916_866,
-        sha1: "7d1d513c779db3829f69a35567f3fd8e641ed5a9",
-        sha256: "1bd39ff38db20baa5b52768919d6599aafb4aacbc7fd192458496749a0630ee8",
+        file: "cef_binary_158.0.6+g23f1736+chromium-158.0.8127.89_macosarm64_minimal.tar.bz2",
+        bytes: 140_851_604,
+        sha1: "63faae7ccd6a497430c06d26b17c4cac20dca387",
+        sha256: "53f687e1a662820c352ceb884e342ddcf5ff1610bc166c4ae09f1e0cbb278d9d",
     },
     Archive {
         platform: "macosx64",
-        file: "cef_binary_156.0.31+ge603d97+chromium-156.0.8078.100_macosx64_minimal.tar.bz2",
-        bytes: 141_698_452,
-        sha1: "e52c87e35b44b526268f79f5fe63e2519c0ec6a8",
-        sha256: "58ffeec9beff9f0f57cca19fa950674f9756c1b28ba595129ba613806633b6fa",
+        file: "cef_binary_158.0.6+g23f1736+chromium-158.0.8127.89_macosx64_minimal.tar.bz2",
+        bytes: 149_303_893,
+        sha1: "49f270a76788af4ff8d5d6de05b1adf22377108c",
+        sha256: "8452a95fd8d90fdcd70450efc10ad46a6dc34b19bbebd6f294d6a7d8c475edf6",
     },
 ];
 
@@ -581,7 +581,7 @@ fn framework_path(entry: &Path, top: &str) -> Result<Option<PathBuf>, InstallErr
 /// The framework out of a checked archive (`file`, at its start) into
 /// `dest`: its files, with their executable bit but no set-id bits or
 /// owners, and its folders. Nothing else. CEF's framework has no links
-/// (156.0.31's two archives have none, of either kind), and a link is how an
+/// (158.0.6's two archives have none, of either kind), and a link is how an
 /// archive gets a later entry written somewhere else: checks of where links
 /// point were got round twice in review (Codex, 11 Nov: `a -> .`, then
 /// `escape -> a/..`, then a file written to `escape/planted-file`; then two
@@ -1345,18 +1345,18 @@ mod tests {
         assert_eq!(State::Missing.words(), "Not installed");
         let s = State::Downloading {
             received: 45_200_000,
-            total: 134_916_866,
+            total: 140_851_604,
         };
-        assert_eq!(s.words(), "Downloading, 45 of 135 MB");
-        assert_eq!(s.percent(), Some(33));
+        assert_eq!(s.words(), "Downloading, 45 of 141 MB");
+        assert_eq!(s.percent(), Some(32));
         assert!(s.busy());
         assert_eq!(
             State::Failed("no network".into()).words(),
             "Couldn't install it: no network"
         );
-        assert_eq!(ARCHIVES[0].megabytes(), 135);
+        assert_eq!(ARCHIVES[0].megabytes(), 141);
         assert!(ARCHIVES[0].url().ends_with(
-            "cef_binary_156.0.31%2Bge603d97%2Bchromium-156.0.8078.100_macosarm64_minimal.tar.bz2"
+            "cef_binary_158.0.6%2Bg23f1736%2Bchromium-158.0.8127.89_macosarm64_minimal.tar.bz2"
         ));
         for archive in ARCHIVES {
             assert!(

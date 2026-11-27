@@ -10,10 +10,14 @@ const at = Date.parse('2026-11-13T00:00:00Z');
 const version = (v: string, date: string, channel = 'stable') => ({ cef_version: v, channel, files: [{ type: 'minimal', last_modified: date }] });
 const index = (...versions: unknown[]) => ({ macosarm64: { versions } });
 const old = version(PIN, '2026-11-07T00:00:00Z');
-const newer = '156.0.33+g57389f0+chromium-156.0.8078.105';
+// Builds after the pin, so these tests keep their meaning when it moves.
+const [major, minor, patch] = PIN.split('+')[0].split('.').map(Number);
+const later = (n: number) => `${major}.${minor}.${patch + n}+gabc+chromium-${major}.0.9999.${n}`;
+const newer = later(2);
+const newerCef = newer.split('+')[0];
 
 test('reports the earliest newer stable, ignoring beta and order', () => {
-  const got = inspectIndex(index(version('158.0.1+gabc+chromium-158.0.8127.18', '2026-10-01', 'beta'), version(newer, '2026-11-11'), old, version('156.0.32+gabc+chromium-156.0.8078.100', '2026-11-10')), 'macosarm64', at);
+  const got = inspectIndex(index(version(`${major + 2}.0.1+gabc+chromium-${major + 2}.0.9999.1`, '2026-10-01', 'beta'), version(newer, '2026-11-11'), old, version(later(1), '2026-11-10')), 'macosarm64', at);
   assert.equal(got.latest, newer);
   assert.equal(got.behindSince, Date.parse('2026-11-10'));
   assert.equal(inspectIndex(index(old), 'macosarm64', at).behindSince, undefined);
@@ -39,11 +43,11 @@ test('warns after two weeks, retains warning offline and across restart, clears 
     await check.check();
     assert.equal(check.problem(), undefined);
     clock.advance(14 * DAY_MS);
-    assert.match(check.problem()!, /156.0.33/);
+    assert.ok(check.problem()!.includes(newerCef));
     offline = true;
     await check.check();
     check = new WebRuntimeUpdates(deps);
-    assert.match(check.problem()!, /156.0.33/);
+    assert.ok(check.problem()!.includes(newerCef));
     offline = false; current = true;
     await check.check();
     assert.equal(check.problem(), undefined);
@@ -139,8 +143,9 @@ test('reads the newest CEF cef-rs binds, skipping yanked and prerelease crates',
 test('only notes waiting on cef-rs when no bindings are newer than the pin, and flags an update when some are', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-cef-'));
   const clock = new FakeClock(at);
-  const stable = '158.0.3+g8c29be2+chromium-158.0.8127.18';
-  let crates = [crate(`156.7.0+${PIN.split('+')[0]}`)];
+  const next = `${major + 1}.0.3`;
+  const stable = `${next}+g8c29be2+chromium-${major + 1}.0.9999.18`;
+  let crates = [crate(`${major}.7.0+${PIN.split('+')[0]}`)];
   let failing = false;
   const check = new WebRuntimeUpdates({ home, clock, platform: 'macosarm64', changed() {},
     fetchIndex: async () => index(old, version(stable, '2026-11-12')),
@@ -150,13 +155,13 @@ test('only notes waiting on cef-rs when no bindings are newer than the pin, and 
     clock.advance(14 * DAY_MS);
     // Nothing anyone can do: a quiet note, not a flagged problem.
     assert.equal(check.problem(), undefined);
-    assert.equal(check.note(), `Web runtime: CEF ${PIN.split('+')[0]} is over two weeks behind stable 158.0.3. Waiting on cef-rs to support 158.0.3. Chromium's sandbox is off.`);
-    crates = [...crates, crate('158.0.0+158.0.3')];
+    assert.equal(check.note(), `Web runtime: CEF ${PIN.split('+')[0]} is over two weeks behind stable ${next}. Waiting on cef-rs to support ${next}. Chromium's sandbox is off.`);
+    crates = [...crates, crate(`${major + 1}.0.0+${next}`)];
     await check.check();
-    assert.match(check.problem()!, /Ask your agent to update it to 158\.0\.3, the newest cef-rs supports\./);
+    assert.ok(check.problem()!.includes(`Ask your agent to update it to ${next}, the newest cef-rs supports.`));
     assert.equal(check.note(), undefined);
     failing = true;
     await check.check();
-    assert.match(check.problem()!, /update it to 158\.0\.3/, 'a failed crates check keeps the last answer');
+    assert.ok(check.problem()!.includes(`update it to ${next}`), 'a failed crates check keeps the last answer');
   } finally { check.stop(); fs.rmSync(home, { recursive: true, force: true }); }
 });
