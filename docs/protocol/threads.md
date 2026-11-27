@@ -592,8 +592,13 @@ archived. Clients show an unknown `kind` as its `text`.
 
 The Mac app lists them under "Still open" (a `thread` one links
 `thread:<id>`); `scheduled` ones alone go under "Coming back". With none
-left it shows just Done (a "Nothing left open" label beside it was cut on
-9 Nov). The phone and the website show them the same way on their done
+left it showed just Done (a "Nothing left open" label beside it was cut on
+9 Nov), but then a clear check looked the same as no check. So since
+27 Nov the GPUI app tells `ends: []` from an absent field. A clear check
+puts "Nothing left to follow up. You can archive this thread." under
+Done and fills Archive in, and a check with only `scheduled` ones does the
+same. With open ones it says how many and the button reads Archive anyway.
+An absent field leaves just Done (`archive_advice` in composer_card.rs). The phone and the website show them the same way on their done
 cards, from the thread row's `looseEnds` (backend API 73: the summary's
 `ends`, sent only while its card stands, so idle, `needs: "nothing"` and
 not archived; an older backend's row goes without it). Another runner's

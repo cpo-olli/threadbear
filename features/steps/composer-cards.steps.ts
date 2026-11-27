@@ -229,6 +229,12 @@ Then('the done card lists nothing as still open', async function (this: Threadbe
   await this.until('nothing still open on the done card', (d) => doneRow(d).includes('loose ends: none'));
 });
 
+// The line under Done saying whether the thread can be archived, the
+// card's second line in the dump.
+Then('the done card says {string}', async function (this: ThreadbearWorld, words: string) {
+  await this.until(`"${words}" on the done card`, (d) => cardLines(d)[0] === 'Done' && cardLines(d)[1] === words);
+});
+
 // The done card's Archive menu (the inboxGuess experiment): "Didn't need
 // this", "Glad I saw this" or "Not sure", each of which archives with that answer.
 Then('the Archive menu offers {string}', async function (this: ThreadbearWorld, list: string) {
@@ -260,7 +266,7 @@ Then('the runner was told I archived {string} as {string}', async function (this
 // out of Archived on a thread that's already there.
 Then("the done card's button is {string}", async function (this: ThreadbearWorld, label: string) {
   await this.until('the Done card', (d) => d.composer.card?.[0] === 'Done');
-  const others = ['Archive this thread', 'Unarchive this thread'].filter((l) => l !== label);
+  const others = ['Archive this thread', 'Archive this thread with something still open', 'Unarchive this thread'].filter((l) => l !== label);
   let seen: string[] = [];
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {

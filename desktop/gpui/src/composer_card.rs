@@ -807,7 +807,26 @@ impl Composer {
             && self.done_heading_dropped(cx)
     }
 
-    fn render_done_archive(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// What the card says about archiving (`archive_advice`), for a thread
+    /// in the Inbox that's finished: not one already archived, a
+    /// coordinator, or one put away to wait on its own work.
+    fn done_advice(&self, card: &AsksCard, cx: &App) -> Option<ArchiveAdvice> {
+        let pane = self.pane.upgrade()?;
+        let summary = &pane.read(cx).summary;
+        if summary.is_coordinator() || summary.is_archived() || self.waiting_on_work(cx).is_some() {
+            return None;
+        }
+        Some(archive_advice(
+            card.loose_ends.as_deref(),
+            !card.next.is_empty(),
+        ))
+    }
+
+    fn render_done_archive(
+        &self,
+        advice: Option<&ArchiveAdvice>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let pane = self.pane.upgrade()?;
         let summary = &pane.read(cx).summary;
         if summary.is_coordinator() {
@@ -815,10 +834,17 @@ impl Composer {
         }
         // Already archived, it offers the way back instead (26 Nov: an
         // archived thread's card still said Archive).
-        let (label, tip) = done_archive_words(summary.is_archived());
+        let (label, tip, look) = match advice {
+            Some(advice) if advice.suggested => (advice.label, advice.tip, ButtonLook::Picked),
+            Some(advice) => (advice.label, advice.tip, ButtonLook::Plain),
+            None => {
+                let (label, tip) = done_archive_words(summary.is_archived());
+                (label, tip, ButtonLook::Plain)
+            }
+        };
         let this = cx.entity().downgrade();
         Some(
-            card_button(("done-archive", 0usize), label, ButtonLook::Plain, tip, cx)
+            card_button(("done-archive", 0usize), label, look, tip, cx)
                 .test_support()
                 .role(Role::Button)
                 .aria_label(tip)
@@ -863,6 +889,7 @@ impl Composer {
         // Done and was archived with nothing landed).
         if !self.done_heading_dropped(cx) {
             let heading = self.done_heading(tick, cx);
+            let advice = self.done_advice(card, cx);
             column = column.child(
                 h_flex()
                     .w_full()
@@ -870,10 +897,26 @@ impl Composer {
                     .justify_between()
                     .gap(px(8.))
                     .child(heading)
-                    .when_some(self.render_done_archive(cx), |row, button| {
-                        row.child(button)
-                    }),
+                    .when_some(
+                        self.render_done_archive(advice.as_ref(), cx),
+                        |row, button| row.child(button),
+                    ),
             );
+            // Whether it's safe to archive, in a line under Done, lined up
+            // with the word rather than the tick (16 for the tick, 2.5 gap).
+            if let Some(note) = advice.and_then(|advice| advice.note) {
+                column = column.child(
+                    div()
+                        .id("done-advice")
+                        .w_full()
+                        .mt(px(-6.))
+                        .pl(px(18.5))
+                        .text_size(px(style::size::CARD_TITLE))
+                        .line_height(px(metrics::WHERE_LINE))
+                        .text_color(style::secondary_label(cx))
+                        .child(note),
+                );
+            }
         }
         // What's still open (doneText): a booked check-in alone goes under
         // "Coming back", as it doesn't stop an archive.
@@ -2485,6 +2528,9 @@ impl Composer {
                         .map(|(words, _)| words)
                         .unwrap_or_else(|| "Done".to_owned()),
                 );
+                if let Some(note) = self.done_advice(&card, cx).and_then(|a| a.note) {
+                    lines.push(note);
+                }
             }
             for (i, next) in card.next.iter().enumerate() {
                 let tick = if self.card.next_picks.contains(&(i as i64)) {
@@ -3146,11 +3192,124 @@ pub(crate) fn done_archive_words(archived: bool) -> (&'static str, &'static str)
     }
 }
 
+/// Whether the done card says the thread can be archived, from the runner's
+/// loose-ends check for it (protocol "Loose ends"). On 27 Nov the user
+/// couldn't tell a plain "Done" with nothing left from one the runner
+/// hadn't checked yet, so a clear check now says so in a line under Done.
+#[derive(Debug, PartialEq)]
+pub(crate) struct ArchiveAdvice {
+    /// The line under Done, or none when there's no check to go on (still
+    /// running, or a backend that doesn't send one).
+    pub(crate) note: Option<String>,
+    pub(crate) label: &'static str,
+    pub(crate) tip: &'static str,
+    /// Archive is the card's suggested button: nothing is left open.
+    pub(crate) suggested: bool,
+}
+
+pub(crate) fn archive_advice(
+    ends: Option<&[threadbear_core::reducer::LooseEnd]>,
+    has_follow_ups: bool,
+) -> ArchiveAdvice {
+    let plain = ArchiveAdvice {
+        note: None,
+        label: "Archive",
+        tip: "Archive this thread",
+        suggested: false,
+    };
+    let Some(ends) = ends else {
+        return plain;
+    };
+    let open = ends.iter().filter(|end| !end.is_booked()).count();
+    if open > 0 {
+        let note = if open == 1 {
+            "1 thing still open, so check it before you archive.".to_owned()
+        } else {
+            format!("{open} things still open, so check them before you archive.")
+        };
+        return ArchiveAdvice {
+            note: Some(note),
+            label: "Archive anyway",
+            tip: "Archive this thread with something still open",
+            suggested: false,
+        };
+    }
+    let first = if ends.is_empty() {
+        "Nothing left to follow up."
+    } else {
+        "Nothing left to follow up, and it comes back for its check-in."
+    };
+    let then = if has_follow_ups {
+        "You can archive, or carry on with an idea below."
+    } else {
+        "You can archive this thread."
+    };
+    ArchiveAdvice {
+        note: Some(format!("{first} {then}")),
+        suggested: true,
+        ..plain
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // By name: the kit's prelude has a `test` of its own.
-    use super::{ask_paragraph, starts_a_block};
-    use threadbear_core::reducer::Ask;
+    use super::{archive_advice, ask_paragraph, starts_a_block};
+    use threadbear_core::reducer::{Ask, LooseEnd};
+
+    #[test]
+    fn a_clear_check_says_the_thread_can_be_archived() {
+        let advice = archive_advice(Some(&[]), false);
+        assert_eq!(
+            advice.note.as_deref(),
+            Some("Nothing left to follow up. You can archive this thread.")
+        );
+        assert_eq!((advice.label, advice.suggested), ("Archive", true));
+        assert_eq!(
+            archive_advice(Some(&[]), true).note.as_deref(),
+            Some("Nothing left to follow up. You can archive, or carry on with an idea below.")
+        );
+    }
+
+    #[test]
+    fn a_booked_check_in_alone_still_leaves_it_safe_to_archive() {
+        let ends = [LooseEnd::new("scheduled", "Review the week")];
+        let advice = archive_advice(Some(&ends), false);
+        assert!(advice.suggested);
+        assert_eq!(
+            advice.note.as_deref(),
+            Some("Nothing left to follow up, and it comes back for its check-in. You can archive this thread.")
+        );
+    }
+
+    #[test]
+    fn something_open_turns_archive_into_archive_anyway() {
+        let one = [
+            LooseEnd::new("unpushed", "2 commits on main aren't pushed"),
+            LooseEnd::new("scheduled", "Review the week"),
+        ];
+        let advice = archive_advice(Some(&one), false);
+        assert_eq!(
+            advice.note.as_deref(),
+            Some("1 thing still open, so check it before you archive.")
+        );
+        assert_eq!((advice.label, advice.suggested), ("Archive anyway", false));
+        let two = [
+            LooseEnd::new("unpushed", "2 commits on main aren't pushed"),
+            LooseEnd::new("running", "Still running: Land the fix on main."),
+        ];
+        assert_eq!(
+            archive_advice(Some(&two), true).note.as_deref(),
+            Some("2 things still open, so check them before you archive.")
+        );
+    }
+
+    #[test]
+    fn with_no_check_it_stays_a_plain_done() {
+        let advice = archive_advice(None, true);
+        assert_eq!(advice.note, None);
+        assert_eq!((advice.label, advice.suggested), ("Archive", false));
+    }
 
     #[test]
     fn an_ask_that_reads_as_markdown_structure_stays_words() {

@@ -136,6 +136,19 @@ Feature: The open card in the composer
     When the runner finds nothing left open on "Tidy the imports in the uploader"
     Then the done card lists nothing as still open
 
+  # 27 Nov: a plain "Done" read the same whether the check had found nothing
+  # or hadn't come back yet, so a clear check now says the thread can go.
+  # The Swift app is frozen, so it stays pending there.
+  @card.done @swift-pending
+  Scenario: A done card says when the thread can be archived
+    When I open the thread "Tidy the imports in the uploader"
+    And the runner finds nothing left open on "Tidy the imports in the uploader"
+    Then the done card says "Nothing left to follow up. You can archive, or carry on with an idea below."
+    And the done card's button is "Archive this thread"
+    When the runner finds "1 commit on thread/tidy isn't on main" still open on "Tidy the imports in the uploader"
+    Then the done card says "1 thing still open, so check it before you archive."
+    And the done card's button is "Archive this thread with something still open"
+
   # The Swift app swaps in the re-read list on reconnecting and resubscribes
   # an open transcript without handing it the summary's new loose ends
   # (AppModel+Connection, 12 Nov); frozen, so it stays pending there.

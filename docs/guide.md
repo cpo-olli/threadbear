@@ -258,8 +258,13 @@ and a background job it's still running (archiving would stop it). The
 agent adds the things only it knows, like a reply it's waiting on from
 someone. They're listed under "Still open": a thread opens from its line,
 and Land is the chip above the message box. A check-in it booked shows
-under "Coming back", as the thread comes back by itself when it runs. If
-nothing is left, the card just says Done, so Archive is safe. It checks
+under "Coming back", as the thread comes back by itself when it runs.
+Once the check is back, a line under Done says where things stand. With
+nothing left it reads "Nothing left to follow up. You can archive this
+thread." and Archive is filled in. With something open it says how many
+things, and the button reads Archive anyway. Before the check is back, the
+card shows Done with no line, so no line means it hasn't checked yet. The
+phone and the website don't show the line yet. It checks
 again when you open the thread, after an action like Land, and when a
 thread it started finishes. The phone's and the website's Done cards
 show the same list, though not for a thread on another Mac.
