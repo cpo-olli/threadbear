@@ -439,8 +439,9 @@ selected jobs back into the original conversation. This uses existing
 tools, not a new RPC or a persisted runner batch type:
 
 - Selection still precedes launch. Each selected job starts once, pinned
-  to the offered account, at max effort, with `nested: false`. Its
-  `startedBy.threadId` and ordinary quiet-inbox archival remain intact.
+  to the offered account, at max effort, with `nested: false`. It keeps
+  its `startedBy.threadId`; being `detached`, quiet inbox leaves it in the
+  inbox when it finishes (threads.md).
 - The parent records a batch keyed by the first job's full UUID: approved
   jobs, titles, full IDs/`thread:<uuid>` links, collected outcomes, and the
   fallback's schedule ID and fixed deadline. A repeated nudge, continuation

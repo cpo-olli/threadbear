@@ -89,7 +89,10 @@ function setup(t: TestContext) {
   return { h, parent, session, sched, call, ok, end, finish, launch, book, wakeMessages };
 }
 
-test('four detached pinned jobs finish out of order, archive, and have full reports readable after one wake', async (t) => {
+// Jobs start with nested: false, so they're detached and quiet inbox leaves
+// them in the inbox when they finish (Mike's release 2026-11-27). Their
+// reports must still read in full once someone archives them.
+test('four detached pinned jobs finish out of order, stay in the inbox, and have full reports readable after one wake, archived or not', async (t) => {
   const r = setup(t);
   const ids = await r.launch();
   const fallback = await r.book(ids);
@@ -99,9 +102,11 @@ test('four detached pinned jobs finish out of order, archive, and have full repo
     r.finish(ids[i]!, 'Synthetic report. '.repeat(200) + `Important limitation ${i}: no runtime verification.`);
     if (i !== 1) assert.ok(r.h.runner.get(r.parent).waitingOn);
   }
-  await patiently(() => ids.every((id) => Boolean(r.h.runner.get(id).archivedAt)));
+  await patiently(() => r.wakeMessages().length > 0);
   assert.equal(r.wakeMessages().length, 1);
   assert.doesNotMatch(r.wakeMessages()[0]!.text, /Important limitation/);
+  for (const id of ids) assert.equal(r.h.runner.get(id).archivedAt, undefined, 'a detached job stays in the inbox');
+  for (const id of ids) r.h.runner.update({ threadId: id, archived: true });
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i]!;
     const before = r.h.runner.get(id).archivedAt;
@@ -164,15 +169,19 @@ test('archives before validation and during registration leave the fallback able
   const r = setup(t);
   const [a, b] = await r.launch(2) as [string, string];
   const fallback = await r.book([a, b]);
+  // Detached jobs aren't archived by quiet inbox, so these archive as a
+  // person would, the moment each finishes.
   r.finish(a, 'First report.');
-  await patiently(() => Boolean(r.h.runner.get(a).archivedAt));
+  await patiently(() => r.h.runner.get(a).status === 'idle');
+  r.h.runner.update({ threadId: a, archived: true });
   const refused = await r.call('end_turn', { needs: 'nothing', waitFor: [a, b], snooze: fallback.deadline });
   assert.equal(refused.error, true);
   assert.match(refused.text, /archived/);
   assert.match(await r.ok('read_thread', { threadId: a }), /First report/);
   await r.ok('end_turn', { needs: 'nothing', waitFor: [b], snooze: fallback.deadline });
   r.finish(b, 'Second report.');
-  await patiently(() => Boolean(r.h.runner.get(b).archivedAt));
+  await patiently(() => r.h.runner.get(b).status === 'idle');
+  r.h.runner.update({ threadId: b, archived: true });
   r.session(r.parent).text('waiting', 'The fallback will collect the reports.');
   r.session(r.parent).result();
   await tick();

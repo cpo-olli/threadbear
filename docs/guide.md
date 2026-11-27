@@ -1854,9 +1854,9 @@ open takes you back to it.
 
 That original thread collects the results too. It links to each independent
 job's full report, waits for the jobs that are still running, then reads
-their reports and gives a dated digest here. Reports remain accessible
-through those links even when Threadbear has archived them; desktop
-Highlights also lists **Threads it started**.
+their reports and gives a dated digest here. The jobs stay in your inbox
+when they finish, and their reports still open from those links after you
+archive them; desktop Highlights also lists **Threads it started**.
 
 Each batch gets at most one fallback check, two hours after launch. If
 everything is accounted for earlier, the agent cancels the check. Otherwise
