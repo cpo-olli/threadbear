@@ -264,7 +264,7 @@ nothing left it reads "Nothing left to follow up. You can archive this
 thread." and Archive is filled in. With something open it says how many
 things, and the button reads Archive anyway. Before the check is back, the
 card shows Done with no line, so no line means it hasn't checked yet. The
-phone and the website don't show the line yet. It checks
+website shows the same line. The phone doesn't yet. It checks
 again when you open the thread, after an action like Land, and when a
 thread it started finishes. The phone's and the website's Done cards
 show the same list, though not for a thread on another Mac.

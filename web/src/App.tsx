@@ -33,6 +33,7 @@ import { folderName, sender } from './format';
 import * as Icon from './icons';
 import { ReviewRow } from './review-row';
 import { reviewSeq, type LabReviewLedger } from './lab-review';
+import { archiveAdvice } from './archive-advice';
 
 type Approval = NonNullable<Row['pendingApproval']>;
 type Ask = NonNullable<Row['asks']>[number];
@@ -470,6 +471,9 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
   // What the runner found still open (docs/protocol/threads.md, "Loose ends"), as
   // on the Mac and the phone: open ones first, then booked check-ins.
   const ends = finished ? [...(t.looseEnds ?? []).filter((e) => e.kind !== 'scheduled'), ...(t.looseEnds ?? []).filter((e) => e.kind === 'scheduled')] : [];
+  // Whether it's safe to archive, said under Done as on the Mac (27 Nov): a
+  // clear check now shows the card even with nothing else on it.
+  const advice = finished ? archiveAdvice(t.looseEnds, next.length > 0) : undefined;
   const follow = ticked.seq === lastSeq ? [...ticked.set].sort().map((i) => next[i]).filter((x): x is string => !!x) : [];
 
   const submit = async () => {
@@ -546,14 +550,15 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
         </Fragment>
       ))}
     </section>
-  ) : next.length || ends.length ? (
+  ) : next.length || ends.length || advice?.note ? (
     <section className="card">
       <h2>
         Done
-        <button className="btn plain" style={{ marginLeft: 'auto' }} disabled={archiving} onClick={onArchive}>
-          Archive
+        <button className={`btn ${advice?.suggested ? 'primary' : 'plain'}`} style={{ marginLeft: 'auto' }} disabled={archiving} onClick={onArchive}>
+          {advice?.label ?? 'Archive'}
         </button>
       </h2>
+      {advice?.note ? <div className="done-advice">{advice.note}</div> : null}
       {ends.length ? (
         <div className="loose-ends">
           <div className="loose-label">{ends.some((e) => e.kind !== 'scheduled') ? 'Still open' : 'Coming back'}</div>

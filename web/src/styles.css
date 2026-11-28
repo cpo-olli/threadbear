@@ -468,6 +468,8 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 .choice .radio.check { border-radius: 4px; }
 /* The done card's loose ends (docs/protocol/threads.md, "Loose ends"), above its follow-ups. */
 .loose-ends { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+/* The done card's line under Done saying whether it can be archived (archive-advice.ts). */
+.done-advice { font-size: 13px; color: var(--muted); margin: 2px 0 10px; }
 .loose-label { font-size: 12px; color: var(--muted); }
 .loose { display: flex; gap: 10px; align-items: baseline; }
 .loose-mark { flex: none; width: 16px; text-align: center; font-weight: 700; }
